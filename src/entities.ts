@@ -26,9 +26,9 @@ function aimDownTo(vx: number, vy: number, vz: number): Quaternion {
 export class Player {
   readonly team: number;
   readonly idx: number;          // 0..4 within the team
-  readonly name: string;
+  name: string;
   readonly attr: Attributes;
-  readonly height: number;       // metres
+  height: number;                // metres
   runSpeed: number;              // m/s, derived from the `speed` rating
   role: string;                  // PG / SG / SF / PF / C
   offPriority: number;           // 0..1 scoring-option weight (go-to scorer = high)
@@ -42,6 +42,10 @@ export class Player {
   // short arms whose hands reach out to hold/dribble/pass/shoot the ball
   private readonly armPivotL: TransformNode;
   private readonly armPivotR: TransformNode;
+
+  // floating name tag, redrawn when the name changes
+  private nameTex!: DynamicTexture;
+  private readonly teamRGB: { r: number; g: number; b: number };
 
   decisionT = 0;                 // cooldown before the next AI decision
   driveTarget = new Vector3();   // where a ball-handler is heading
@@ -92,6 +96,7 @@ export class Player {
     this.playmaking = roleOffense(def.role).playmaking;
 
     const c = TEAM_COLORS[team];
+    this.teamRGB = c;
     const color = new Color3(c.r, c.g, c.b);
 
     this.root = new TransformNode(`p_${team}_${idx}`, scene);
@@ -143,16 +148,8 @@ export class Player {
     namePlane.billboardMode = Mesh.BILLBOARDMODE_ALL;
     const nameTex = new DynamicTexture(`nametex_${team}_${idx}`, { width: 256, height: 64 }, scene, false);
     nameTex.hasAlpha = true;
-    const nctx = nameTex.getContext() as unknown as CanvasRenderingContext2D;
-    nctx.clearRect(0, 0, 256, 64);
-    nctx.fillStyle = "rgba(0,0,0,0.55)";
-    nctx.fillRect(0, 0, 256, 64);
-    nctx.fillStyle = `rgb(${c.r * 255},${c.g * 255},${c.b * 255})`;
-    nctx.font = "bold 34px sans-serif";
-    nctx.textAlign = "center";
-    nctx.textBaseline = "middle";
-    nctx.fillText(`${idx + 1} ${def.name}`, 128, 34);
-    nameTex.update();
+    this.nameTex = nameTex;
+    this.drawNameTag();              // paints the current name
     const nameMat = new StandardMaterial(`namemat_${team}_${idx}`, scene);
     nameMat.diffuseTexture = nameTex;
     nameMat.opacityTexture = nameTex;
@@ -235,13 +232,33 @@ export class Player {
     this.root.position.set(this.pos.x, this.jumpY(), this.pos.z);
   }
 
-  /** Re-read role / priority / derived values from a (possibly edited) roster
-   *  def. `attr` is a live reference to the def, so rating edits already apply. */
+  /** Re-read name / height / role / priority / derived values from a (possibly
+   *  edited) roster def. `attr` is a live reference, so rating edits already apply. */
   applyDef(def: PlayerDef): void {
     this.role = def.role;
     this.runSpeed = 5.4 + rate(def.attr.speed) * 1.9;
     this.offPriority = computeOffPriority(def);
     this.playmaking = roleOffense(def.role).playmaking;
+    if (def.name !== this.name) { this.name = def.name; this.drawNameTag(); }
+    if (def.height !== this.height) {
+      this.height = def.height;
+      this.root.scaling.y = def.height / 1.95;   // rescale the figure to the new height
+    }
+  }
+
+  // Paint the floating "<number> <name>" tag onto its texture.
+  private drawNameTag(): void {
+    const ctx = this.nameTex.getContext() as unknown as CanvasRenderingContext2D;
+    ctx.clearRect(0, 0, 256, 64);
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0, 0, 256, 64);
+    const c = this.teamRGB;
+    ctx.fillStyle = `rgb(${c.r * 255},${c.g * 255},${c.b * 255})`;
+    ctx.font = "bold 34px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${this.idx + 1} ${this.name}`, 128, 34);
+    this.nameTex.update();
   }
 
   /** Zero this player's box score (called at the start of a game). */

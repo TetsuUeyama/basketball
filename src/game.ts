@@ -667,12 +667,16 @@ export class Game {
 
       if (isOnBall) {
         this.defendOnBall(dt, d, man, protect);
-        // contesting can produce a steal or a reach-in foul; aggressive game
-        // plans gamble more (more steals, but more fouls too)
+        // reach in for a steal from the cushion — better thieves and tighter gaps
+        // get more (but a poke knocks it loose rather than a clean strip, and an
+        // aggressive game plan also fouls more)
         const press = this.tactics[defTeam].defense.pressure;
-        if (dist2D(d.pos, man.pos) < 0.8) {
-          if (chance((0.07 + press * 0.10) * dt)) { this.steal(d); return; }
-          if (chance((0.03 + press * 0.05) * dt)) { this.defensiveFoul(man); return; }
+        const gap = dist2D(d.pos, man.pos);
+        if (gap < 1.5) {
+          const close = 1 - gap / 1.5;                 // 1 at point-blank, 0 at 1.5 m
+          const stl = rate(d.attr.steal);
+          if (chance((0.03 + stl * 0.09 + press * 0.05) * close * dt)) { this.steal(d); return; }
+          if (chance((0.02 + press * 0.045) * close * dt)) { this.defensiveFoul(man); return; }
         }
         continue;
       }
@@ -705,8 +709,13 @@ export class Game {
     const len = Math.hypot(dx, dz) || 1;
     const ux = dx / len, uz = dz / len;        // handler -> basket
 
-    // tighter on-ball pressure for aggressive game plans (smaller cushion)
-    const gap = 0.9 - this.tactics[d.team].defense.pressure * 0.4; // 0.9 (loose) .. 0.5 (tight)
+    // Keep an appropriate cushion rather than smothering the ball-handler — but
+    // body up tight on a big posting up / pushing near the rim, to contest the
+    // push. Aggressive game plans close the gap a little.
+    const postUp = this.isBig(man) && dist2D(man.pos, protect) < 5.5;
+    const gap = postUp
+      ? 0.45 - this.tactics[d.team].defense.pressure * 0.1   // ~0.35 (tight) on the post
+      : 1.25 - this.tactics[d.team].defense.pressure * 0.35; // ~0.9 .. 1.25 cushion otherwise
 
     let tx: number, tz: number;
     if (man.beatenT > 0) {
@@ -741,10 +750,13 @@ export class Game {
           const overlap = MIN - d;
           const nx = dx / d, nz = dz / d;
           const wa = this.holdWeight(a), wb = this.holdWeight(b);
-          const total = wa + wb;
-          // each yields in proportion to the OTHER's hold strength
-          a.pos.x -= nx * overlap * (wb / total); a.pos.z -= nz * overlap * (wb / total);
-          b.pos.x += nx * overlap * (wa / total); b.pos.z += nz * overlap * (wa / total);
+          // square the hold weights so a real strength gap shows: the stronger
+          // man barely gives ground while the weaker one is shoved back (and a
+          // strong post player bulls a weak defender backwards)
+          const wa2 = wa * wa, wb2 = wb * wb;
+          const total = wa2 + wb2;
+          a.pos.x -= nx * overlap * (wb2 / total); a.pos.z -= nz * overlap * (wb2 / total);
+          b.pos.x += nx * overlap * (wa2 / total); b.pos.z += nz * overlap * (wa2 / total);
 
           // mid-air collision: the stronger player knocks the other away
           if (a.airborne && b.airborne) {
@@ -765,7 +777,7 @@ export class Game {
   // Strength wins the body battle: a strong post player backs his man down and
   // is pushed around less; a weak one yields ground.
   private holdWeight(p: Player): number {
-    let w = 0.6 + rate(p.attr.strength);                      // 0.7 (weak) .. 1.59 (strong)
+    let w = 0.5 + rate(p.attr.strength) * 1.5;                // ~0.65 (weak) .. ~2.0 (strong)
     if (p === this.handler) w += 0.5;                         // protects the ball / posts up
     else if (p.screening) w += 0.6;                           // a set screen holds firm
     else if (p.team === 1 - this.possession) w += 0.25;       // defenders hold position
