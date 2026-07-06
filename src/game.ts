@@ -946,6 +946,7 @@ export class Game {
     let bestPrio = h.offPriority + 0.1;          // must be a meaningfully better option
     for (const p of this.teamPlayers(h.team)) {
       if (p === h || p.offPriority <= bestPrio) continue;
+      if (p === this.assistFrom && this.assistTo === h && !p.cutting) continue; // no ping-pong
       if (dist2D(h.pos, p.pos) > MAX_PASS) continue;            // out of range
       if (this.frontT && this.attackSign(h.team) * p.pos.z < 0.4) continue; // backcourt
       if (this.nearestDefenderDist(p) < 2.0) continue;          // not actually open
@@ -1257,6 +1258,12 @@ export class Game {
       if (atRimCutter) value += 1.5;          // ...especially one open at the rim
       // スルーパス: lives for the killer feed to a cutter
       if (h.has("throughPass") && p.cutting) value += 1.5;
+      // don't just toss it straight back to the man who fed you — unless he's
+      // genuinely cutting to the rim (the real give-and-go)
+      if (p === this.assistFrom && this.assistTo === h
+          && !(p.cutting && dist2D(p.pos, rimFloor) < 6.5)) {
+        value -= 3.0;
+      }
       if (backcourt) value += p.playmaking * 2.5;                  // outlet to the playmaker
       else value += p.offPriority * 1.6 * clamp(open / 2, 0, 1);   // feed an open scorer
       // expected value: discount by the chance the pass is picked off
@@ -1382,11 +1389,19 @@ export class Game {
     this.handler = null;
     // follow-through: the passer is rooted briefly and can't immediately re-engage
     h.coolT = rand(0.5, 0.9);
-    // give-and-go: once recovered, the passer cuts to the basket
-    const rim = this.attackFloor(h.team);
-    h.cutting = true;
-    h.offTimer = rand(1.5, 3.0);
-    h.offTarget.set(rim.x + rand(-0.6, 0.6), 0, rim.z - Math.sign(rim.z) * 0.4);
+    // give-and-go SOMETIMES: always cutting after a pass made the return feed
+    // to the "cutter" the best read every time — an A→B→A ping-pong. Now the
+    // passer usually just relocates, and only sometimes cuts for the give-and-go.
+    if (chance(0.35)) {
+      const rim = this.attackFloor(h.team);
+      h.cutting = true;
+      h.offTimer = rand(1.5, 3.0);
+      h.offTarget.set(rim.x + rand(-0.6, 0.6), 0, rim.z - Math.sign(rim.z) * 0.4);
+    } else {
+      h.cutting = false;
+      h.offTimer = rand(0.6, 1.4);
+      h.spotIdx = this.bestOpenSpot(h.team, this.formationSpots(h.team), h);
+    }
     return true;
   }
 

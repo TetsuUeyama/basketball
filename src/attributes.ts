@@ -1,4 +1,5 @@
 import { clamp } from "./util";
+import { PLAYER_DB, DbPlayer } from "./playerdb";
 
 // ---------------------------------------------------------------------------
 // Player attributes. All ratings are 0..100. The 25-item schema follows the
@@ -129,6 +130,8 @@ export interface PlayerDef {
   attr: Attributes;
   abilities?: AbilityKey[]; // 特殊能力 — 持っているものだけ列挙
   priority?: number;  // explicit offensive priority 0..1 (overrides the role/skill default)
+  // reserved (not wired into the sim yet): 安定度 / 逆手精度 / 逆手頻度 from the DB
+  future?: { stability: number; offhandAcc: number; offhandFreq: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +212,42 @@ const A = (
 
 const MIN = A(10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10);
 const MAX = A(99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99);
+
+// ---------------------------------------------------------------------------
+// Random matchup from the imported WE2010 player database: every game draws a
+// fresh 13-man roster per team (no player appears twice in the same game).
+// The existing PlayerDef objects are mutated in place — Player.attr holds a
+// live reference to def.attr, so per-field assignment updates entities too.
+// ---------------------------------------------------------------------------
+export function randomizeRosters(): void {
+  const pools: Record<string, DbPlayer[]> = { PG: [], SG: [], SF: [], PF: [], C: [] };
+  for (const p of PLAYER_DB) pools[p[1]]?.push(p);
+  const used = new Set<DbPlayer>();
+  const draw = (role: string): DbPlayer => {
+    const pool = pools[role] ?? PLAYER_DB;
+    for (let tries = 0; tries < 60; tries++) {
+      const cand = pool[Math.floor(Math.random() * pool.length)];
+      if (!used.has(cand)) { used.add(cand); return cand; }
+    }
+    const fallback = pool.find((c) => !used.has(c)) ?? pool[0];
+    used.add(fallback);
+    return fallback;
+  };
+  const roles = ["PG", "SG", "SF", "PF", "C", ...BENCH_ROLES];
+  for (let t = 0; t < 2; t++) {
+    for (let i = 0; i < ROSTER_SIZE; i++) {
+      const [name, , hcm, ratings, mask, extras] = draw(roles[i]);
+      const def = ROSTER[t][i];
+      def.name = name;
+      def.role = roles[i];
+      def.height = hcm / 100;
+      def.priority = undefined;
+      ATTR_META.forEach((m, k) => { def.attr[m.key] = clamp(ratings[k] ?? 50, 0, 100); });
+      def.abilities = ABILITY_META.filter((_, b) => mask & (1 << b)).map((m) => m.key);
+      def.future = { stability: extras[0] ?? 0, offhandAcc: extras[1] ?? 0, offhandFreq: extras[2] ?? 0 };
+    }
+  }
+}
 
 // NBA-style 13-man roster indexed [team][idx]: idx 0..4 = starters
 // (PG, SG, SF, PF, C), idx 5..12 = the 8-man bench (a full second unit

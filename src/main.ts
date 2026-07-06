@@ -32,8 +32,10 @@ shadow.useBlurExponentialShadowMap = true;
 shadow.blurScale = 2;
 
 const game = new Game(scene);
-for (const p of game.players) {
-  for (const m of p.meshes) shadow.addShadowCaster(m);
+for (let t = 0; t < 2; t++) {
+  for (const p of game.allPlayers(t)) {
+    for (const m of p.meshes) shadow.addShadowCaster(m);
+  }
 }
 shadow.addShadowCaster(game.ball.mesh);
 

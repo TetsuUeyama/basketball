@@ -30,7 +30,7 @@ export class Player {
   slot = 0;                      // court slot 0..4 while on the floor (man-matching key)
   stintT = 0;                    // game-seconds since this player last checked in
   name: string;
-  readonly attr: Attributes;
+  attr: Attributes;              // live reference to the def's ratings
   height: number;                // metres
   runSpeed: number;              // m/s, derived from the `speed` rating
   role: string;                  // PG / SG / SF / PF / C
@@ -426,6 +426,7 @@ export class Player {
    *  edited) roster def. `attr` is a live reference, so rating edits already apply. */
   applyDef(def: PlayerDef): void {
     this.role = def.role;
+    this.attr = def.attr;   // re-bind: pre-game swaps can replace the def object
     this.abilities = new Set(def.abilities ?? []);
     this.runSpeed = 5.4 + rate(def.attr.speed) * 1.9;
     this.offPriority = computeOffPriority(def);
@@ -443,11 +444,13 @@ export class Player {
   private drawNameTag(): void {
     const ctx = this.nameTex.getContext() as unknown as CanvasRenderingContext2D;
     ctx.clearRect(0, 0, 256, 64);
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(0, 0, 256, 64);
-    const c = this.teamRGB;
-    ctx.fillStyle = `rgb(${c.r * 255},${c.g * 255},${c.b * 255})`;
-    ctx.font = "bold 30px sans-serif";
+    // no backing box — a drop shadow keeps the text readable over the court
+    ctx.shadowColor = "rgba(0,0,0,0.9)";
+    ctx.shadowBlur = 6;
+    ctx.fillStyle = "#fff";   // white reads best over the court (team = jersey colour)
+    // long database names (e.g. クリスティアーノ・ロナウド) shrink to fit the tag
+    const size = this.name.length > 11 ? 18 : this.name.length > 7 ? 24 : 30;
+    ctx.font = `bold ${size}px sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(`${this.idx + 1} ${this.name}`, 128, 24);
@@ -455,11 +458,12 @@ export class Player {
     // stamina gauge (track + fill)
     const left = 14, top = 46, width = 228, height = 10;
     const frac = clamp(1 - this.fatigue, 0, 1);
-    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillStyle = "rgba(255,255,255,0.22)";
     ctx.fillRect(left, top, width, height);
     ctx.fillStyle = frac > 0.5 ? "rgb(80,220,110)"
       : frac > 0.25 ? "rgb(240,200,70)" : "rgb(235,80,60)";
     ctx.fillRect(left, top, width * frac, height);
+    ctx.shadowBlur = 0;
 
     this.nameTex.update();
     this.gaugeDrawn = this.fatigue;

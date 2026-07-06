@@ -1,6 +1,6 @@
 import { Game } from "./game";
 import { TEAM_NAMES, TEAM_COLORS } from "./config";
-import { ROSTER, ROSTER_SIZE, STARTERS, computeOffPriority, ATTR_META, ABILITY_META, type AbilityKey, type PlayerDef } from "./attributes";
+import { ROSTER, ROSTER_SIZE, STARTERS, computeOffPriority, randomizeRosters, ATTR_META, ABILITY_META, type AbilityKey, type PlayerDef } from "./attributes";
 
 const colorOf = (team: number): string => {
   const c = TEAM_COLORS[team];
@@ -20,6 +20,7 @@ const INFO: Record<string, string> = {
   POS: "ポジション（PG/SG/SF/PF/C）。役割で動きが変わります。PF/Cはゴール下へのポストアップ（押し込み）でレイアップ/ダンク、PGはボール運び・ゲームメイクを担います。",
   HT: "身長(cm)。身長の高さ。リバウンド・ブロック・ゴール下の競り合い（手の届く高さ）に影響します。",
   PRI: "オフェンス優先度（ファースト/セカンドチョイス）。高いほど第1得点オプションとして優先的にボールが集まり、自分から攻めます。低いほど第2・第3オプションに回ります。",
+  入替: "スタメンとベンチの選手を入れ替えます。相手を選ぶと即座に交換されます（背番号は枠に付きます）。",
 };
 for (const m of ATTR_META) INFO[m.label] = `【${m.name}】${m.tip}`;
 for (const m of ABILITY_META) INFO[m.label] = `【特殊能力】${m.tip}`;
@@ -43,6 +44,7 @@ export class UI {
   private root: HTMLDivElement;
   private hud: HTMLDivElement;
   private pregamePanel!: HTMLDivElement;
+  private editorHost!: HTMLDivElement;
   private resultPanel!: HTMLDivElement;
   private resultScore!: HTMLDivElement;
   private resultWinner!: HTMLDivElement;
@@ -61,6 +63,7 @@ export class UI {
   private speedBtns: HTMLButtonElement[] = [];
 
   private phase: Phase = "pregame";
+  private benchTab = [false, false];   // which tab each team editor is showing
 
   speed = 1;
   onRestart: () => void = () => {};
@@ -241,18 +244,39 @@ export class UI {
 
     const hintRow = document.createElement("div");
     Object.assign(hintRow.style, { fontSize: "12px", opacity: "0.65" });
-    hintRow.textContent = "名前・身長(cm)・ポジション・能力(0–100)・特殊能力（チップをクリックでON/OFF）を設定して TIP OFF。列見出しやチップにカーソルを合わせると説明が出ます。";
+    hintRow.textContent = "選手は毎試合ランダム編成（WE2010データベースから抽選）。名前・身長(cm)・ポジション・能力(0–100)・特殊能力（チップをクリックでON/OFF）を編集して TIP OFF。列見出しやチップにカーソルを合わせると説明が出ます。";
 
     p.append(title, hintRow);
-    for (let t = 0; t < 2; t++) p.appendChild(this.buildTeamEditor(t));
+    this.editorHost = document.createElement("div");
+    Object.assign(this.editorHost.style, { width: "100%" } as Partial<CSSStyleDeclaration>);
+    p.appendChild(this.editorHost);
 
+    const buttons = document.createElement("div");
+    Object.assign(buttons.style, { display: "flex", gap: "10px", marginTop: "8px" } as Partial<CSSStyleDeclaration>);
+    const reroll = this.button("ランダム編成しなおす");
+    Object.assign(reroll.style, { fontSize: "15px", padding: "11px 22px" });
+    reroll.onclick = () => this.newMatchup();
     const start = this.button("TIP OFF");
-    Object.assign(start.style, { fontSize: "17px", padding: "11px 30px", marginTop: "8px", background: "rgba(70,120,220,0.95)" });
+    Object.assign(start.style, { fontSize: "17px", padding: "11px 30px", background: "rgba(70,120,220,0.95)" });
     start.onclick = () => { this.setPhase("playing"); this.onStart(); };
-    p.appendChild(start);
+    buttons.append(reroll, start);
+    p.appendChild(buttons);
 
     this.root.appendChild(p);
     this.pregamePanel = p;
+    this.newMatchup();   // the first matchup is drawn at once
+  }
+
+  /** Draw a fresh random matchup from the database and rebuild the editors. */
+  private newMatchup(): void {
+    randomizeRosters();
+    this.refreshEditors();
+  }
+
+  /** Rebuild the editor tables from the current ROSTER (keeps the tab state). */
+  private refreshEditors(): void {
+    this.editorHost.replaceChildren();
+    for (let t = 0; t < 2; t++) this.editorHost.appendChild(this.buildTeamEditor(t));
   }
 
   private buildTeamEditor(team: number): HTMLDivElement {
@@ -263,10 +287,10 @@ export class UI {
       background: "rgba(255,255,255,0.03)", border: `1px solid ${color}`, borderRadius: "10px",
     } as Partial<CSSStyleDeclaration>);
 
-    // header line: team name on the left, the STARTERS/BENCH tabs on the right
+    // header line: team name with the STARTERS/BENCH tabs right beside it
     const headRow = document.createElement("div");
     Object.assign(headRow.style, {
-      display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px",
+      display: "flex", alignItems: "center", gap: "14px", marginBottom: "6px",
     } as Partial<CSSStyleDeclaration>);
     const head = document.createElement("div");
     Object.assign(head.style, { fontSize: "16px", fontWeight: "800", color, textAlign: "left" });
@@ -279,11 +303,12 @@ export class UI {
       Object.assign(table.style, { width: "max-content" } as Partial<CSSStyleDeclaration>);
       const cols = document.createElement("div");
       Object.assign(cols.style, { display: "flex", gap: "6px", alignItems: "center", fontSize: "11px", fontWeight: "700", opacity: "0.9", margin: "2px 0 4px" });
-      cols.appendChild(this.headerCell("NAME", 90));
+      cols.appendChild(this.headerCell("NAME", 150));
       cols.appendChild(this.headerCell("POS", 48));
       cols.appendChild(this.headerCell("HT", 46));
       for (const f of ATTR_FIELDS) cols.appendChild(this.headerCell(f.label, 50));
       cols.appendChild(this.headerCell("PRI", 50));
+      cols.appendChild(this.headerCell("入替", 130));
       table.appendChild(cols);
       for (let i = from; i < to; i++) table.appendChild(this.editorRow(team, i));
       return table;
@@ -303,6 +328,7 @@ export class UI {
     const tabStarters = mkTab("スタメン");
     const tabBench = mkTab(`ベンチ (${ROSTER_SIZE - STARTERS})`);
     const select = (bench: boolean) => {
+      this.benchTab[team] = bench;   // survives editor rebuilds (swaps, rerolls)
       starterTable.style.display = bench ? "none" : "block";
       benchTable.style.display = bench ? "block" : "none";
       tabStarters.style.background = bench ? "rgba(20,24,34,0.9)" : "rgba(70,120,220,0.95)";
@@ -310,7 +336,7 @@ export class UI {
     };
     tabStarters.onclick = () => select(false);
     tabBench.onclick = () => select(true);
-    select(false);
+    select(this.benchTab[team]);
     tabs.append(tabStarters, tabBench);
     headRow.appendChild(tabs);
     wrap.appendChild(headRow);
@@ -334,7 +360,7 @@ export class UI {
     const name = document.createElement("input");
     name.type = "text"; name.value = def.name;
     Object.assign(name.style, {
-      width: "90px", flexShrink: "0", fontSize: "13px", fontWeight: "700", pointerEvents: "auto", boxSizing: "border-box",
+      width: "150px", flexShrink: "0", fontSize: "13px", fontWeight: "700", pointerEvents: "auto", boxSizing: "border-box",
       background: "rgba(20,24,34,0.9)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "4px",
     } as Partial<CSSStyleDeclaration>);
     name.onchange = () => { def.name = name.value.trim() || def.name; name.value = def.name; };
@@ -375,6 +401,35 @@ export class UI {
     }
     row.appendChild(this.ratingCell(Math.round(computeOffPriority(def) * 100), "rgba(240,200,90,0.95)", (v) => { def.priority = v / 100; }));
 
+    // swap control: exchange this player with anyone in the other group
+    const swap = document.createElement("select");
+    Object.assign(swap.style, {
+      width: "130px", flexShrink: "0", fontSize: "11px", pointerEvents: "auto", boxSizing: "border-box",
+      background: "rgba(20,24,34,0.9)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const isStarter = i < STARTERS;
+    const head = document.createElement("option");
+    head.value = "-1";
+    head.textContent = isStarter ? "⇄ ベンチと入替…" : "⇄ スタメンと入替…";
+    swap.appendChild(head);
+    const from = isStarter ? STARTERS : 0;
+    const to = isStarter ? ROSTER_SIZE : STARTERS;
+    for (let j = from; j < to; j++) {
+      const other = ROSTER[team][j];
+      const o = document.createElement("option");
+      o.value = String(j);
+      o.textContent = `#${j + 1} ${other.name} (${other.role})`;
+      swap.appendChild(o);
+    }
+    swap.onchange = () => {
+      const j = parseInt(swap.value);
+      if (j < 0) return;
+      const r = ROSTER[team];
+      [r[i], r[j]] = [r[j], r[i]];
+      this.refreshEditors();   // both tabs redraw with the swapped line-ups
+    };
+    row.appendChild(swap);
+
     // second line: 特殊能力 toggle chips (click to grant/remove)
     const wrap = document.createElement("div");
     wrap.appendChild(row);
@@ -387,7 +442,7 @@ export class UI {
     const row = document.createElement("div");
     Object.assign(row.style, { display: "flex", gap: "4px", alignItems: "center", margin: "0 0 7px" } as Partial<CSSStyleDeclaration>);
 
-    const label = this.cell("特能", 90, "right");
+    const label = this.cell("特能", 150, "right");
     Object.assign(label.style, { fontSize: "10px", opacity: "0.55", paddingRight: "6px", boxSizing: "border-box" } as Partial<CSSStyleDeclaration>);
     row.appendChild(label);
 
@@ -476,7 +531,11 @@ export class UI {
 
     const back = this.button("← BACK");
     Object.assign(back.style, { fontSize: "16px", padding: "10px 26px", marginTop: "4px" });
-    back.onclick = () => { this.setPhase("pregame"); this.onBack(); };
+    back.onclick = () => {
+      this.setPhase("pregame");
+      this.newMatchup();   // 毎試合ランダム編成 — a fresh draw for the next game
+      this.onBack();
+    };
 
     p.append(title, this.resultScore, this.resultWinner, this.resultStats, back);
     this.root.appendChild(p);
@@ -523,14 +582,14 @@ export class UI {
 
     const cols = document.createElement("div");
     Object.assign(cols.style, { display: "flex", gap: "4px", fontSize: "10px", opacity: "0.6", margin: "1px 0" });
-    cols.appendChild(this.cell("", 70));
+    cols.appendChild(this.cell("", 130));   // must match the name-cell width below
     for (const c of STAT_COLS) cols.appendChild(this.cell(c.label, 38, "center"));
     table.appendChild(cols);
 
     for (const pl of game.allPlayers(team)) {
       const row = document.createElement("div");
       Object.assign(row.style, { display: "flex", gap: "4px", fontSize: "12px", margin: "1px 0" });
-      const nm = this.cell(`${pl.role} ${pl.name}`, 70);
+      const nm = this.cell(`${pl.role} ${pl.name}`, 130);
       nm.style.opacity = pl.idx < STARTERS ? "0.95" : "0.7"; // bench slightly dimmed
       row.appendChild(nm);
       for (const c of STAT_COLS) {
