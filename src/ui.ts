@@ -1,6 +1,6 @@
 import { Game } from "./game";
 import { TEAM_NAMES, TEAM_COLORS } from "./config";
-import { ROSTER, computeOffPriority, type Attributes } from "./attributes";
+import { ROSTER, ROSTER_SIZE, STARTERS, computeOffPriority, ATTR_META, ABILITY_META, type AbilityKey, type PlayerDef } from "./attributes";
 
 const colorOf = (team: number): string => {
   const c = TEAM_COLORS[team];
@@ -11,34 +11,21 @@ const clamp100 = (v: number): number => Math.max(0, Math.min(100, v));
 
 type Phase = "pregame" | "playing" | "result";
 
-// Editable rating columns shown in the pre-game roster editor.
-const ATTR_FIELDS: { key: keyof Attributes; label: string }[] = [
-  { key: "speed", label: "SPD" },
-  { key: "strength", label: "STR" },
-  { key: "finishing", label: "FIN" },
-  { key: "midRange", label: "MID" },
-  { key: "three", label: "3PT" },
-  { key: "defRebound", label: "REB" },
-  { key: "steal", label: "STL" },
-  { key: "passing", label: "PAS" },
-];
-// Per-column explanations, shown in a modal when the header is clicked.
+// Editable rating columns: driven by ATTR_META so the editor always matches the
+// Attributes schema. Explanations (shown on header hover) come from the same
+// metadata, plus the non-rating columns below.
+const ATTR_FIELDS = ATTR_META;
 const INFO: Record<string, string> = {
   NAME: "選手名。自由に変更できます。",
   POS: "ポジション（PG/SG/SF/PF/C）。役割で動きが変わります。PF/Cはゴール下へのポストアップ（押し込み）でレイアップ/ダンク、PGはボール運び・ゲームメイクを担います。",
-  HT: "身長(cm)。リバウンド・ブロック・ゴール下の競り合い(手の届く高さ)に影響します。",
-  SPD: "走力。コート上の移動速度。",
-  STR: "強さ（フィジカル）。ゴール下やドライブでの押し合い・押し返しの強さ。高いほど押されにくく、相手を押し下げられます。",
-  FIN: "フィニッシュ力。リム付近のレイアップ/ダンクの決定力。",
-  MID: "ミドルシュート決定力。",
-  "3PT": "3ポイントシュート決定力。",
-  REB: "リバウンド力。ルーズボール確保の競り合いに影響。",
-  STL: "スティール力。ボールへの絡み・パスカットの成功率。",
-  PAS: "パス力。パスの通しやすさ／カットされにくさ。",
+  HT: "身長(cm)。身長の高さ。リバウンド・ブロック・ゴール下の競り合い（手の届く高さ）に影響します。",
   PRI: "オフェンス優先度（ファースト/セカンドチョイス）。高いほど第1得点オプションとして優先的にボールが集まり、自分から攻めます。低いほど第2・第3オプションに回ります。",
 };
+for (const m of ATTR_META) INFO[m.label] = `【${m.name}】${m.tip}`;
+for (const m of ABILITY_META) INFO[m.label] = `【特殊能力】${m.tip}`;
 const ROLES = ["PG", "SG", "SF", "PF", "C"];
 const STAT_COLS: { key: keyof import("./entities").Stats; label: string }[] = [
+  { key: "min", label: "MIN" },
   { key: "pts", label: "PTS" },
   { key: "reb", label: "REB" },
   { key: "ast", label: "AST" },
@@ -46,6 +33,9 @@ const STAT_COLS: { key: keyof import("./entities").Stats; label: string }[] = [
   { key: "blk", label: "BLK" },
   { key: "tov", label: "TO" },
 ];
+// `min` is stored in game-clock seconds — show it as minutes with one decimal.
+const fmtStat = (key: string, v: number): string =>
+  key === "min" ? (v / 60).toFixed(1) : String(v);
 
 // A DOM overlay with three screens: a pre-game roster editor, the in-game HUD,
 // and a final result screen with each player's box score.
@@ -67,6 +57,7 @@ export class UI {
   private quarter: HTMLSpanElement;
   private shot: HTMLSpanElement;
   private banner: HTMLDivElement;
+  private subFeed!: HTMLDivElement;
   private speedBtns: HTMLButtonElement[] = [];
 
   private phase: Phase = "pregame";
@@ -130,6 +121,17 @@ export class UI {
     this.shot = document.createElement("span");
     sc.appendChild(this.shot);
     this.hud.appendChild(sc);
+
+    // ---- substitution feed (メンバーチェンジ) ----
+    // centre of the screen, just below the main event banner (FOUL etc.), so a
+    // foul banner and the resulting substitutions can show together
+    this.subFeed = document.createElement("div");
+    css(this.subFeed, {
+      position: "absolute", top: "58%", left: "50%", transform: "translateX(-50%)",
+      display: "flex", flexDirection: "column", gap: "8px", alignItems: "center",
+      pointerEvents: "none",
+    });
+    this.hud.appendChild(this.subFeed);
 
     // ---- event banner ----
     this.banner = document.createElement("div");
@@ -239,7 +241,7 @@ export class UI {
 
     const hintRow = document.createElement("div");
     Object.assign(hintRow.style, { fontSize: "12px", opacity: "0.65" });
-    hintRow.textContent = "名前・身長(cm)・ポジション・能力(0–100)を設定して TIP OFF。列見出し(ⓘ)をクリックすると各項目の説明が出ます。";
+    hintRow.textContent = "名前・身長(cm)・ポジション・能力(0–100)・特殊能力（チップをクリックでON/OFF）を設定して TIP OFF。列見出しやチップにカーソルを合わせると説明が出ます。";
 
     p.append(title, hintRow);
     for (let t = 0; t < 2; t++) p.appendChild(this.buildTeamEditor(t));
@@ -261,29 +263,63 @@ export class UI {
       background: "rgba(255,255,255,0.03)", border: `1px solid ${color}`, borderRadius: "10px",
     } as Partial<CSSStyleDeclaration>);
 
+    // header line: team name on the left, the STARTERS/BENCH tabs on the right
+    const headRow = document.createElement("div");
+    Object.assign(headRow.style, {
+      display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px",
+    } as Partial<CSSStyleDeclaration>);
     const head = document.createElement("div");
-    Object.assign(head.style, { fontSize: "16px", fontWeight: "800", color, textAlign: "left", marginBottom: "6px" });
+    Object.assign(head.style, { fontSize: "16px", fontWeight: "800", color, textAlign: "left" });
     head.textContent = TEAM_NAMES[team];
-    wrap.appendChild(head);
+    headRow.appendChild(head);
+
+    // one table per group, behind tabs — the header row repeats in each
+    const buildTable = (from: number, to: number): HTMLDivElement => {
+      const table = document.createElement("div");
+      Object.assign(table.style, { width: "max-content" } as Partial<CSSStyleDeclaration>);
+      const cols = document.createElement("div");
+      Object.assign(cols.style, { display: "flex", gap: "6px", alignItems: "center", fontSize: "11px", fontWeight: "700", opacity: "0.9", margin: "2px 0 4px" });
+      cols.appendChild(this.headerCell("NAME", 90));
+      cols.appendChild(this.headerCell("POS", 48));
+      cols.appendChild(this.headerCell("HT", 46));
+      for (const f of ATTR_FIELDS) cols.appendChild(this.headerCell(f.label, 50));
+      cols.appendChild(this.headerCell("PRI", 50));
+      table.appendChild(cols);
+      for (let i = from; i < to; i++) table.appendChild(this.editorRow(team, i));
+      return table;
+    };
+    const starterTable = buildTable(0, STARTERS);
+    const benchTable = buildTable(STARTERS, ROSTER_SIZE);
+    benchTable.style.display = "none";
+
+    // the tabs themselves
+    const tabs = document.createElement("div");
+    Object.assign(tabs.style, { display: "flex", gap: "6px" } as Partial<CSSStyleDeclaration>);
+    const mkTab = (label: string): HTMLButtonElement => {
+      const b = this.button(label);
+      Object.assign(b.style, { fontSize: "12px", padding: "4px 14px" } as Partial<CSSStyleDeclaration>);
+      return b;
+    };
+    const tabStarters = mkTab("スタメン");
+    const tabBench = mkTab(`ベンチ (${ROSTER_SIZE - STARTERS})`);
+    const select = (bench: boolean) => {
+      starterTable.style.display = bench ? "none" : "block";
+      benchTable.style.display = bench ? "block" : "none";
+      tabStarters.style.background = bench ? "rgba(20,24,34,0.9)" : "rgba(70,120,220,0.95)";
+      tabBench.style.background = bench ? "rgba(70,120,220,0.95)" : "rgba(20,24,34,0.9)";
+    };
+    tabStarters.onclick = () => select(false);
+    tabBench.onclick = () => select(true);
+    select(false);
+    tabs.append(tabStarters, tabBench);
+    headRow.appendChild(tabs);
+    wrap.appendChild(headRow);
 
     // the wide table scrolls horizontally inside the box (so it never widens the
     // panel beyond the screen); header + rows scroll together
     const scroller = document.createElement("div");
     Object.assign(scroller.style, { width: "100%", overflowX: "auto", paddingBottom: "4px" } as Partial<CSSStyleDeclaration>);
-    const table = document.createElement("div");
-    Object.assign(table.style, { width: "max-content" } as Partial<CSSStyleDeclaration>);
-
-    const cols = document.createElement("div");
-    Object.assign(cols.style, { display: "flex", gap: "6px", alignItems: "center", fontSize: "11px", fontWeight: "700", opacity: "0.9", margin: "2px 0 4px" });
-    cols.appendChild(this.headerCell("NAME", 90));
-    cols.appendChild(this.headerCell("POS", 48));
-    cols.appendChild(this.headerCell("HT", 46));
-    for (const f of ATTR_FIELDS) cols.appendChild(this.headerCell(f.label, 40));
-    cols.appendChild(this.headerCell("PRI", 40));
-    table.appendChild(cols);
-
-    for (let i = 0; i < 5; i++) table.appendChild(this.editorRow(team, i));
-    scroller.appendChild(table);
+    scroller.append(starterTable, benchTable);
     wrap.appendChild(scroller);
     return wrap;
   }
@@ -339,6 +375,49 @@ export class UI {
     }
     row.appendChild(this.ratingCell(Math.round(computeOffPriority(def) * 100), "rgba(240,200,90,0.95)", (v) => { def.priority = v / 100; }));
 
+    // second line: 特殊能力 toggle chips (click to grant/remove)
+    const wrap = document.createElement("div");
+    wrap.appendChild(row);
+    wrap.appendChild(this.abilityRow(def, color));
+    return wrap;
+  }
+
+  // A row of toggle chips, one per 特殊能力; lit = the player has it.
+  private abilityRow(def: PlayerDef, color: string): HTMLDivElement {
+    const row = document.createElement("div");
+    Object.assign(row.style, { display: "flex", gap: "4px", alignItems: "center", margin: "0 0 7px" } as Partial<CSSStyleDeclaration>);
+
+    const label = this.cell("特能", 90, "right");
+    Object.assign(label.style, { fontSize: "10px", opacity: "0.55", paddingRight: "6px", boxSizing: "border-box" } as Partial<CSSStyleDeclaration>);
+    row.appendChild(label);
+
+    for (const m of ABILITY_META) {
+      const chip = document.createElement("button");
+      chip.textContent = m.label;
+      const paint = () => {
+        const on = def.abilities?.includes(m.key) ?? false;
+        Object.assign(chip.style, {
+          background: on ? color : "rgba(20,24,34,0.9)",
+          color: on ? "#0d1016" : "rgba(255,255,255,0.55)",
+          border: on ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.16)",
+          fontWeight: on ? "800" : "600",
+        } as Partial<CSSStyleDeclaration>);
+      };
+      Object.assign(chip.style, {
+        fontSize: "10px", padding: "2px 7px", borderRadius: "9px", cursor: "pointer",
+        pointerEvents: "auto", whiteSpace: "nowrap", flexShrink: "0",
+      } as Partial<CSSStyleDeclaration>);
+      paint();
+      chip.onclick = () => {
+        const list = def.abilities ?? (def.abilities = []);
+        const i = list.indexOf(m.key as AbilityKey);
+        if (i >= 0) list.splice(i, 1); else list.push(m.key);
+        paint();
+      };
+      chip.onmouseenter = () => this.showTip(m.label, chip);
+      chip.onmouseleave = () => this.hideTip();
+      row.appendChild(chip);
+    }
     return row;
   }
 
@@ -357,17 +436,17 @@ export class UI {
   // the 0–100 value at a glance and updates live as you type.
   private ratingCell(value: number, color: string, onSet: (v: number) => void): HTMLDivElement {
     const wrap = document.createElement("div");
-    Object.assign(wrap.style, { width: "40px", flexShrink: "0", display: "flex", flexDirection: "column", alignItems: "center", gap: "3px" } as Partial<CSSStyleDeclaration>);
+    Object.assign(wrap.style, { width: "50px", flexShrink: "0", display: "flex", flexDirection: "column", alignItems: "center", gap: "3px" } as Partial<CSSStyleDeclaration>);
 
     const inp = document.createElement("input");
     inp.type = "number"; inp.min = "0"; inp.max = "100"; inp.value = String(value);
     Object.assign(inp.style, {
-      width: "40px", fontSize: "12px", textAlign: "center", pointerEvents: "auto", boxSizing: "border-box",
+      width: "46px", fontSize: "12px", textAlign: "center", pointerEvents: "auto", boxSizing: "border-box",
       background: "rgba(20,24,34,0.9)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "4px",
     } as Partial<CSSStyleDeclaration>);
 
     const track = document.createElement("div");
-    Object.assign(track.style, { width: "40px", height: "5px", background: "rgba(255,255,255,0.12)", borderRadius: "3px", overflow: "hidden" } as Partial<CSSStyleDeclaration>);
+    Object.assign(track.style, { width: "46px", height: "5px", background: "rgba(255,255,255,0.12)", borderRadius: "3px", overflow: "hidden" } as Partial<CSSStyleDeclaration>);
     const fill = document.createElement("div");
     Object.assign(fill.style, { width: `${value}%`, height: "100%", background: color } as Partial<CSSStyleDeclaration>);
     track.appendChild(fill);
@@ -448,14 +527,15 @@ export class UI {
     for (const c of STAT_COLS) cols.appendChild(this.cell(c.label, 38, "center"));
     table.appendChild(cols);
 
-    for (let i = 0; i < 5; i++) {
-      const pl = game.players[team * 5 + i];
+    for (const pl of game.allPlayers(team)) {
       const row = document.createElement("div");
       Object.assign(row.style, { display: "flex", gap: "4px", fontSize: "12px", margin: "1px 0" });
       const nm = this.cell(`${pl.role} ${pl.name}`, 70);
-      nm.style.opacity = "0.95";
+      nm.style.opacity = pl.idx < STARTERS ? "0.95" : "0.7"; // bench slightly dimmed
       row.appendChild(nm);
-      for (const c of STAT_COLS) row.appendChild(this.cell(String(pl.stats[c.key]), 38, "center"));
+      for (const c of STAT_COLS) {
+        row.appendChild(this.cell(fmtStat(c.key, pl.stats[c.key]), 38, "center"));
+      }
       table.appendChild(row);
     }
     scroller.appendChild(table);
@@ -525,6 +605,31 @@ export class UI {
       this.banner.style.opacity = "0.95";
     } else {
       this.banner.style.opacity = "0";
+    }
+
+    // substitution feed: one chip per swap, centred like the event banner,
+    // fading out at the end of its life
+    this.subFeed.replaceChildren();
+    for (const e of game.subEvents) {
+      const color = colorOf(e.team);
+      const chip = document.createElement("div");
+      Object.assign(chip.style, {
+        background: "rgba(12,15,22,0.86)", border: `1px solid ${color}`,
+        borderRadius: "10px", padding: "8px 22px", textAlign: "center",
+        opacity: String(Math.min(1, e.ttl / 0.8)),
+        boxShadow: "0 6px 20px rgba(0,0,0,0.45)",
+      } as Partial<CSSStyleDeclaration>);
+      const title = document.createElement("div");
+      Object.assign(title.style, { fontSize: "13px", opacity: "0.7", letterSpacing: "3px", fontWeight: "700" });
+      title.textContent = "メンバーチェンジ";
+      const line = document.createElement("div");
+      Object.assign(line.style, {
+        fontSize: "26px", fontWeight: "800", color, letterSpacing: "1px",
+        textShadow: "0 3px 12px rgba(0,0,0,0.5)",
+      });
+      line.textContent = e.text;
+      chip.append(title, line);
+      this.subFeed.appendChild(chip);
     }
   }
 }

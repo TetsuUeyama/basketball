@@ -3,11 +3,12 @@ import {
   DynamicTexture,
 } from "@babylonjs/core";
 import { TEAM_COLORS } from "./config";
-import { Attributes, PlayerDef, rate, roleOffense, computeOffPriority } from "./attributes";
-import { clamp } from "./util";
+import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority } from "./attributes";
+import { clamp, rand } from "./util";
 
-// A player's box-score line for the current game.
-export interface Stats { pts: number; reb: number; ast: number; stl: number; blk: number; tov: number; fgm: number; fga: number; }
+// A player's box-score line for the current game. `min` is time on court in
+// game-clock seconds (shown as minutes in the result screen).
+export interface Stats { pts: number; reb: number; ast: number; stl: number; blk: number; tov: number; fgm: number; fga: number; min: number; }
 
 // Quaternion rotating the default down-pointing arm (0,-1,0) onto a unit vector.
 function aimDownTo(vx: number, vy: number, vz: number): Quaternion {
@@ -25,7 +26,9 @@ function aimDownTo(vx: number, vy: number, vz: number): Quaternion {
 // ---------------------------------------------------------------------------
 export class Player {
   readonly team: number;
-  readonly idx: number;          // 0..4 within the team
+  readonly idx: number;          // roster index within the team (0..12); jersey = idx+1
+  slot = 0;                      // court slot 0..4 while on the floor (man-matching key)
+  stintT = 0;                    // game-seconds since this player last checked in
   name: string;
   readonly attr: Attributes;
   height: number;                // metres
@@ -35,7 +38,7 @@ export class Player {
   playmaking: number;            // 0..1 ball-bringing / playmaking role (PG = high)
 
   // box-score stats accumulated over the current game
-  readonly stats: Stats = { pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0 };
+  readonly stats: Stats = { pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, min: 0 };
   readonly pos = new Vector3();  // logical position (feet)
   readonly root: TransformNode;
 
@@ -46,6 +49,11 @@ export class Player {
   // floating name tag, redrawn when the name changes
   private nameTex!: DynamicTexture;
   private readonly teamRGB: { r: number; g: number; b: number };
+
+  // jersey-number decals, one per Z side; the visible one is the player's back
+  private numDecalPlus!: Mesh;
+  private numDecalMinus!: Mesh;
+  private numberSide = 1;   // which local Z side currently shows the number
 
   decisionT = 0;                 // cooldown before the next AI decision
   driveTarget = new Vector3();   // where a ball-handler is heading
@@ -67,6 +75,22 @@ export class Player {
   // initiate movement) until this elapses, modelling the release follow-through
   coolT = 0;
 
+  // 特殊能力 — set of AbilityKey flags from the roster def
+  abilities: Set<AbilityKey>;
+  // ダイレクトプレイ: window (seconds) after catching a pass for one-touch play
+  quickT = 0;
+
+  // --- conditioning (スタミナ/加速) ---
+  // Actual speed achieved last frame (m/s), measured from displacement; the
+  // acceleration model builds on it so a standing start ramps up to top speed.
+  curSpd = 0;
+  fatigue = 0;     // 0 (fresh) .. 1 (gassed) — drains speed and accuracy
+  prevX = 0;       // position at the start of the frame, to measure curSpd
+  prevZ = 0;
+  velX = 0;        // measured velocity (m/s) — used to lead a moving receiver
+  velZ = 0;
+  private gaugeDrawn = 0;  // fatigue value last painted on the name-tag gauge
+
   // brief lock-out after touching a loose ball, so one tip doesn't re-trigger
   // a dozen contacts on the same frame-span
   touchCool = 0;
@@ -84,7 +108,8 @@ export class Player {
   constructor(scene: Scene, team: number, idx: number, def: PlayerDef) {
     this.team = team;
     this.idx = idx;
-    this.spotIdx = idx;
+    this.slot = Math.min(idx, 4);   // starters own their slot; bench get one on check-in
+    this.spotIdx = this.slot;
     this.name = def.name;
     this.attr = def.attr;
     this.height = def.height;
@@ -92,6 +117,7 @@ export class Player {
 
     // offensive identity: role baseline nudged by ratings (or an explicit priority)
     this.role = def.role;
+    this.abilities = new Set(def.abilities ?? []);
     this.offPriority = computeOffPriority(def);
     this.playmaking = roleOffense(def.role).playmaking;
 
@@ -119,19 +145,20 @@ export class Player {
     head.material = headMat;
     head.parent = this.root;
 
-    // Jersey number on a small billboard so teams/roles are readable.
-    const numPlane = MeshBuilder.CreatePlane(`num_${team}_${idx}`, { size: 0.7 }, scene);
-    numPlane.position.y = 1.05;
-    numPlane.position.z = 0.31;
-    const numTex = new DynamicTexture(`numtex_${team}_${idx}`, { width: 64, height: 64 }, scene, false);
+    // Jersey number, printed on the BACK of the jersey. A decal projects the
+    // digits onto the capsule so they follow the body's curve instead of
+    // floating on a flat plane. Bodies never yaw, so "the back" is simply the
+    // side away from the basket being attacked — one decal is baked for each
+    // Z side and setNumberSide() shows the correct one (flipped at half-time).
+    const numTex = new DynamicTexture(`numtex_${team}_${idx}`, { width: 128, height: 128 }, scene, false);
     numTex.hasAlpha = true;
     const ctx = numTex.getContext() as unknown as CanvasRenderingContext2D;
-    ctx.clearRect(0, 0, 64, 64);
+    ctx.clearRect(0, 0, 128, 128);
     ctx.fillStyle = "white";
-    ctx.font = "bold 44px sans-serif";
+    ctx.font = "bold 84px sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(String(idx + 1), 32, 34);
+    ctx.fillText(String(idx + 1), 64, 68);
     numTex.update();
     const numMat = new StandardMaterial(`nummat_${team}_${idx}`, scene);
     numMat.diffuseTexture = numTex;
@@ -139,8 +166,38 @@ export class Player {
     numMat.emissiveColor = new Color3(1, 1, 1);
     numMat.disableLighting = true;
     numMat.backFaceCulling = false;
-    numPlane.material = numMat;
-    numPlane.parent = this.root;
+    // The number is carried by a thin curved shell (a ribbon) hugging the
+    // torso just outside the capsule surface, so the digits follow the body's
+    // curve like a print on the jersey. Vertices are computed here explicitly —
+    // no dependency on projection/UV internals. The arc sweep direction is
+    // chosen per side so the digits read left-to-right for a viewer standing
+    // on that side (default left-handed camera: +X is screen-right when
+    // looking along +Z, and -X when looking along -Z).
+    const makeNumberShell = (sign: number): Mesh => {
+      const R = 0.315;                    // just proud of the 0.3 body radius
+      const yTop = 1.42, yBot = 0.88;     // upper back
+      const SEG = 12;
+      const span = Math.PI * 0.55;        // ~100° of wrap around the torso
+      const top: Vector3[] = [];
+      const bot: Vector3[] = [];
+      for (let i = 0; i <= SEG; i++) {
+        const a = (i / SEG - 0.5) * span * (sign > 0 ? -1 : 1);
+        const x = Math.sin(a) * R;
+        const z = Math.cos(a) * R * sign;
+        top.push(new Vector3(x, yTop, z));
+        bot.push(new Vector3(x, yBot, z));
+      }
+      // [bot, top] puts texture-v the right way up (confirmed on-screen)
+      const shell = MeshBuilder.CreateRibbon(`numshell_${sign}_${team}_${idx}`, {
+        pathArray: [bot, top], sideOrientation: Mesh.DOUBLESIDE,
+      }, scene);
+      shell.material = numMat;
+      shell.parent = this.root;
+      shell.isVisible = false;            // Game picks the back side each half
+      return shell;
+    };
+    this.numDecalPlus = makeNumberShell(1);
+    this.numDecalMinus = makeNumberShell(-1);
 
     // Floating name tag that always faces the camera, so personalities are legible.
     const namePlane = MeshBuilder.CreatePlane(`name_${team}_${idx}`, { width: 1.7, height: 0.42 }, scene);
@@ -202,9 +259,142 @@ export class Player {
     if (this.jumpRemaining > 0) this.jumpRemaining = Math.max(0, this.jumpRemaining - dt);
   }
 
+  /** True if this player has the given 特殊能力. */
+  has(key: AbilityKey): boolean {
+    return this.abilities.has(key);
+  }
+
+  /** Show the jersey number on the given Z side (+1 / -1) — the player's back,
+   *  i.e. the side away from the basket he attacks. Flips at half-time.
+   *  The shoulders carry a slight forward bias, so they follow the CHEST side
+   *  (the opposite one) — otherwise the team attacking -Z reads front-to-back
+   *  reversed, with its arms hung on the back. */
+  setNumberSide(sign: number): void {
+    this.numberSide = sign >= 0 ? 1 : -1;
+    this.numDecalPlus.isVisible = sign > 0;
+    this.numDecalMinus.isVisible = sign < 0;
+    this.armPivotL.position.z = -this.numberSide * 0.06;
+    this.armPivotR.position.z = -this.numberSide * 0.06;
+  }
+
+  /** Yaw the whole figure so the chest (the side opposite the number) points at
+   *  a world point — bench players following the ball with their eyes. On-court
+   *  bodies never yaw (all game maths assumes it), so this is bench-only. */
+  faceToward(x: number, z: number, yawOffset = 0): void {
+    const fx = x - this.pos.x, fz = z - this.pos.z;
+    if (Math.abs(fx) + Math.abs(fz) < 0.01) return;
+    const s = this.numberSide;
+    // RotationY(θ) maps local +Z to (sinθ, 0, cosθ); the chest is local -s·Z
+    this.root.rotation.y = Math.atan2(-s * fx, -s * fz) + yawOffset;
+  }
+
+  // --- bench idle: watching the game with a personality of one's own ---
+  private benchGazeOff = 0;                       // personal gaze offset (rad)
+  private benchGazeT = 0;                         // time to the next re-aim
+  private benchActT = 1 + Math.random() * 5;      // time to the next fidget
+  private benchArmT = 0;                          // current arm gesture time left
+
+  /**
+   * One frame of sitting on the bench watching the ball: gaze follows it with a
+   * personal offset that drifts every couple of seconds, and every few seconds
+   * a small random fidget fires — a little hop, a hand half-raised, arms spread.
+   * Handles its own jump ticking and mesh sync (bench players get no on-court
+   * per-frame updates).
+   */
+  benchIdle(dt: number, ballX: number, ballZ: number): void {
+    this.benchGazeT -= dt;
+    if (this.benchGazeT <= 0) {
+      this.benchGazeT = rand(0.8, 2.5);
+      this.benchGazeOff = rand(-0.22, 0.22);
+    }
+    this.faceToward(ballX, ballZ, this.benchGazeOff);
+
+    this.updateJump(dt);
+    if (this.benchArmT > 0) {
+      this.benchArmT -= dt;
+      if (this.benchArmT <= 0) this.handsRest();  // gesture over — settle down
+    }
+    this.benchActT -= dt;
+    if (this.benchActT <= 0) {
+      this.benchActT = rand(2.0, 7.0);
+      const roll = Math.random();
+      if (roll < 0.35) {
+        this.jump(rand(0.06, 0.16), rand(0.25, 0.4));      // a little hop
+      } else if (roll < 0.6) {
+        this.reach(new Vector3(this.pos.x + rand(-0.4, 0.4), rand(2.1, 2.9),
+          this.pos.z + rand(-0.4, 0.4)));                   // one hand comes up
+        this.benchArmT = rand(0.4, 1.0);
+      } else if (roll < 0.8) {
+        this.armsWide();                                    // arms spread wide
+        this.benchArmT = rand(0.4, 0.9);
+      } else {
+        this.reach(new Vector3(this.pos.x, rand(2.6, 3.2), this.pos.z), true);
+        this.benchArmT = rand(0.35, 0.8);                   // both hands, briefly
+      }
+    }
+    this.sync();
+  }
+
+  /** Clear any bench yaw before stepping onto the court (game maths and the
+   *  arm rig assume an unrotated root). */
+  resetFacing(): void {
+    this.root.rotation.y = 0;
+  }
+
   /** Tick down the post-pass/shot recovery cooldown. */
   tickCooldown(dt: number): void {
     if (this.coolT > 0) this.coolT = Math.max(0, this.coolT - dt);
+    if (this.quickT > 0) this.quickT = Math.max(0, this.quickT - dt);
+  }
+
+  /**
+   * Speed available this frame (m/s): accelerates from the measured current
+   * speed toward top speed. 加速力 sets the ramp, 速度 the ceiling, and fatigue
+   * lowers the ceiling. Pure — call with the frame's dt wherever the player moves.
+   */
+  accelSpeed(dt: number, mult = 1): number {
+    const target = this.runSpeed * mult * (1 - this.fatigue * 0.2);
+    const acc = 4 + rate(this.attr.accel) * 10;        // m/s² — sluggish .. explosive
+    return Math.min(target, this.curSpd + acc * dt);
+  }
+
+  /**
+   * Measure the speed actually achieved this frame and update fatigue.
+   * スタミナ slows the drain; dead balls (free throws, pauses) recover.
+   * Call once per frame after all movement/collisions have resolved.
+   */
+  tickMotion(dt: number, resting: boolean): void {
+    if (dt > 0) {
+      const moved = Math.hypot(this.pos.x - this.prevX, this.pos.z - this.prevZ);
+      this.curSpd = Math.min(moved / dt, 12);
+      this.velX = (this.pos.x - this.prevX) / dt;
+      this.velZ = (this.pos.z - this.prevZ) / dt;
+    }
+    if (resting) {
+      // a dead ball is only a breather — it barely restores anything
+      this.fatigue = Math.max(0, this.fatigue - 0.003 * dt);
+    } else {
+      const effort = this.runSpeed > 0 ? clamp(this.curSpd / this.runSpeed, 0, 1.2) : 0;
+      const drain = (0.003 + effort * 0.02) * (1.3 - rate(this.attr.stamina));
+      const rest = effort < 0.1 ? 0.002 : 0;           // catching a breath while standing
+      this.fatigue = clamp(this.fatigue + (drain - rest) * dt, 0, 1);
+    }
+    // keep the name-tag stamina gauge current (repaint only on visible change)
+    if (Math.abs(this.fatigue - this.gaugeDrawn) > 0.02) this.drawNameTag();
+  }
+
+  /** Sitting on the bench: a slow, steady recovery (not an instant refill) —
+   *  a high stamina rating also means recovering faster between stints. */
+  benchRecover(dt: number): void {
+    const rec = 0.002 + rate(this.attr.stamina) * 0.004;   // ~0.0024 .. ~0.006 per sec
+    this.fatigue = Math.max(0, this.fatigue - rec * dt);
+    if (Math.abs(this.fatigue - this.gaugeDrawn) > 0.02) this.drawNameTag();
+  }
+
+  /** A one-off recovery chunk at a period break (quarter rest / halftime). */
+  breakRecover(amount: number): void {
+    this.fatigue = Math.max(0, this.fatigue - amount);
+    if (Math.abs(this.fatigue - this.gaugeDrawn) > 0.02) this.drawNameTag();
   }
 
   /** True while following through on a pass/shot — must not initiate movement. */
@@ -236,6 +426,7 @@ export class Player {
    *  edited) roster def. `attr` is a live reference, so rating edits already apply. */
   applyDef(def: PlayerDef): void {
     this.role = def.role;
+    this.abilities = new Set(def.abilities ?? []);
     this.runSpeed = 5.4 + rate(def.attr.speed) * 1.9;
     this.offPriority = computeOffPriority(def);
     this.playmaking = roleOffense(def.role).playmaking;
@@ -246,7 +437,9 @@ export class Player {
     }
   }
 
-  // Paint the floating "<number> <name>" tag onto its texture.
+  // Paint the floating "<number> <name>" tag plus the stamina gauge underneath.
+  // The gauge shows what's left in the tank (1 - fatigue): green when fresh,
+  // amber when winded, red when gassed.
   private drawNameTag(): void {
     const ctx = this.nameTex.getContext() as unknown as CanvasRenderingContext2D;
     ctx.clearRect(0, 0, 256, 64);
@@ -254,17 +447,31 @@ export class Player {
     ctx.fillRect(0, 0, 256, 64);
     const c = this.teamRGB;
     ctx.fillStyle = `rgb(${c.r * 255},${c.g * 255},${c.b * 255})`;
-    ctx.font = "bold 34px sans-serif";
+    ctx.font = "bold 30px sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(`${this.idx + 1} ${this.name}`, 128, 34);
+    ctx.fillText(`${this.idx + 1} ${this.name}`, 128, 24);
+
+    // stamina gauge (track + fill)
+    const left = 14, top = 46, width = 228, height = 10;
+    const frac = clamp(1 - this.fatigue, 0, 1);
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(left, top, width, height);
+    ctx.fillStyle = frac > 0.5 ? "rgb(80,220,110)"
+      : frac > 0.25 ? "rgb(240,200,70)" : "rgb(235,80,60)";
+    ctx.fillRect(left, top, width * frac, height);
+
     this.nameTex.update();
+    this.gaugeDrawn = this.fatigue;
   }
 
-  /** Zero this player's box score (called at the start of a game). */
+  /** Zero this player's box score and conditioning (start of a game). */
   resetStats(): void {
     const s = this.stats;
-    s.pts = s.reb = s.ast = s.stl = s.blk = s.tov = s.fgm = s.fga = 0;
+    s.pts = s.reb = s.ast = s.stl = s.blk = s.tov = s.fgm = s.fga = s.min = 0;
+    this.fatigue = 0;
+    this.curSpd = 0;
+    this.stintT = 0;
   }
 
   /** Both arms hang at the sides (default pose). */

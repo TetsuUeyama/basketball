@@ -39,7 +39,11 @@ export const THREE_DIST = 6.75;   // beyond this counts as a 3-pointer
 export const PLAYER_SPEED = 6.2;  // offensive run speed
 export const DEF_SPEED = 6.5;     // defenders are a touch quicker so they can recover
 export const PASS_SPEED = 13;     // pass travel speed
-export const SHOT_CLOCK = 24;
+// Shot clock scaled to the compressed quarter (60s vs the NBA's 720s): a full
+// 24 would almost never bind, so 14 keeps real urgency. Partial resets (after
+// a foul / offensive rebound) keep the NBA's 14/24 proportion → 8.
+export const SHOT_CLOCK = 14;
+export const SHOT_CLOCK_PARTIAL = 8;
 export const QUARTER_TIME = 60;   // game-seconds per quarter (shown on the clock)
 export const QUARTERS = 4;
 
