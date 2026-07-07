@@ -68,12 +68,18 @@ export class Player {
   driveSide = 1;   // offence: which way the handler is attacking (-1 left, +1 right)
   shadeSide = 1;   // defence: which way the on-ball defender is shading
   reactT = 0;      // defence: reaction lag remaining before the shade catches up
-  beatenT = 0;     // offence: time remaining of a successful blow-by burst
+  beatenT = 0;     // offence: time remaining of a successful (speed) blow-by burst
+  powerT = 0;      // offence: time remaining of a bull/power drive shoving the man back
+  stalledT = 0;    // offence: time the handler is walled off (contained), pulling it back out
   lean = 0;        // defence: lateral weight / centre of gravity (-1..1, 0 = square)
 
   // recovery cooldown after a pass or shot — the player is rooted (can't
   // initiate movement) until this elapses, modelling the release follow-through
   coolT = 0;
+  // landing recovery — after coming down from a jump the centre of gravity has
+  // to settle before he can explode into the next jump or sprint (not fully
+  // rooted: he can still shuffle, just can't leap again or take off at speed)
+  landT = 0;
 
   // 特殊能力 — set of AbilityKey flags from the roster def
   abilities: Set<AbilityKey>;
@@ -246,8 +252,16 @@ export class Player {
 
   readonly meshes: Mesh[];
 
+  /** 敏捷性: how quickly the body resets for the next action after a pass,
+   *  shot or landing — quick players recover in roughly half the time. */
+  recoveryMult(): number {
+    return 1.3 - rate(this.attr.agility) * 0.65;   // ~0.66 (quick) .. ~1.24 (slow)
+  }
+
   /** Begin a vertical jump of `height` metres lasting `dur` seconds. */
   jump(height: number, dur: number): void {
+    // still gathering balance from the last landing — can't leap yet
+    if (this.landT > 0) return;
     // don't restart a bigger jump with a smaller one mid-air
     if (this.jumpRemaining > 0 && height <= this.jumpHeight) return;
     this.jumpHeight = height;
@@ -256,7 +270,15 @@ export class Player {
   }
 
   updateJump(dt: number): void {
-    if (this.jumpRemaining > 0) this.jumpRemaining = Math.max(0, this.jumpRemaining - dt);
+    if (this.jumpRemaining > 0) {
+      this.jumpRemaining = Math.max(0, this.jumpRemaining - dt);
+      if (this.jumpRemaining === 0) {
+        // landing: the centre of gravity has to settle before the next jump or
+        // sprint — bigger jumps take longer, and quick (敏捷性) players reset
+        // fastest. Blocks a re-jump and drags the first step (see accelSpeed).
+        this.landT = (0.22 + this.jumpHeight * 0.4) * this.recoveryMult();
+      }
+    }
   }
 
   /** True if this player has the given 特殊能力. */
@@ -335,8 +357,23 @@ export class Player {
     this.sync();
   }
 
-  /** Clear any bench yaw before stepping onto the court (game maths and the
-   *  arm rig assume an unrotated root). */
+  /** Turn an on-court body toward a world point, easing at up to `maxStep`
+   *  radians this frame so a player tracks the play (the ball, or the basket he
+   *  attacks) without snapping around. Uses the same chest-facing convention as
+   *  faceToward; the arm rig (aimArm) now accounts for the resulting yaw. */
+  faceSmooth(x: number, z: number, maxStep: number): void {
+    const fx = x - this.pos.x, fz = z - this.pos.z;
+    if (Math.abs(fx) + Math.abs(fz) < 0.05) return;   // target on top of us — hold facing
+    const s = this.numberSide;
+    const target = Math.atan2(-s * fx, -s * fz);
+    let d = target - this.root.rotation.y;
+    while (d > Math.PI) d -= 2 * Math.PI;             // shortest angular path
+    while (d < -Math.PI) d += 2 * Math.PI;
+    this.root.rotation.y += clamp(d, -maxStep, maxStep);
+  }
+
+  /** Clear any yaw (start of game / bench gaze); the body squares up again on the
+   *  next facing update. */
   resetFacing(): void {
     this.root.rotation.y = 0;
   }
@@ -344,6 +381,7 @@ export class Player {
   /** Tick down the post-pass/shot recovery cooldown. */
   tickCooldown(dt: number): void {
     if (this.coolT > 0) this.coolT = Math.max(0, this.coolT - dt);
+    if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
     if (this.quickT > 0) this.quickT = Math.max(0, this.quickT - dt);
   }
 
@@ -353,7 +391,10 @@ export class Player {
    * lowers the ceiling. Pure — call with the frame's dt wherever the player moves.
    */
   accelSpeed(dt: number, mult = 1): number {
-    const target = this.runSpeed * mult * (1 - this.fatigue * 0.2);
+    // recovering balance (post pass/shot) or still settling from a landing
+    // barely lets the feet move — the first step off a landing is sluggish
+    const rec = (this.coolT > 0 || this.landT > 0) ? 0.35 : 1;
+    const target = this.runSpeed * mult * (1 - this.fatigue * 0.2) * rec;
     const acc = 4 + rate(this.attr.accel) * 10;        // m/s² — sluggish .. explosive
     return Math.min(target, this.curSpd + acc * dt);
   }
@@ -438,7 +479,8 @@ export class Player {
     }
   }
 
-  // Paint the floating "<number> <name>" tag plus the stamina gauge underneath.
+  // Paint the floating name tag plus the stamina gauge underneath. The jersey
+  // number lives on the player's back (a decal), not beside the name.
   // The gauge shows what's left in the tank (1 - fatigue): green when fresh,
   // amber when winded, red when gassed.
   private drawNameTag(): void {
@@ -453,7 +495,7 @@ export class Player {
     ctx.font = `bold ${size}px sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(`${this.idx + 1} ${this.name}`, 128, 24);
+    ctx.fillText(this.name, 128, 24);
 
     // stamina gauge (track + fill)
     const left = 14, top = 46, width = 228, height = 10;
@@ -500,13 +542,22 @@ export class Player {
   }
 
   // Point an arm from its shoulder toward a world point — direction only, so the
-  // arm keeps its fixed length. The root carries no yaw, so shoulder world = root
-  // position + the pivot's local offset (Y also scaled by the figure's height).
+  // arm keeps its fixed length. The root may now carry a yaw (players turn to face
+  // the play), so the shoulder's world position rotates with the body, and the
+  // desired reach — computed in world space — is converted back into the root's
+  // local frame before it becomes the arm's (local) aim. R_y(θ): local +Z →
+  // (sinθ,0,cosθ), local +X → (cosθ,0,-sinθ). At θ=0 this is the old direct maths.
   private aimArm(pivot: TransformNode, world: Vector3): void {
-    const sx = this.root.position.x + pivot.position.x;
-    const sy = this.root.position.y + pivot.position.y * this.root.scaling.y;
-    const sz = this.root.position.z + pivot.position.z;
-    this.setArmDir(pivot, world.x - sx, world.y - sy, world.z - sz);
+    const th = this.root.rotation.y;
+    const c = Math.cos(th), s = Math.sin(th);
+    const px = pivot.position.x, py = pivot.position.y * this.root.scaling.y, pz = pivot.position.z;
+    // shoulder world = root + R_y(θ)·(local shoulder offset)
+    const sx = this.root.position.x + (c * px + s * pz);
+    const sy = this.root.position.y + py;
+    const sz = this.root.position.z + (-s * px + c * pz);
+    // reach direction in world → rotate into the root's local frame (R_y(-θ))
+    const wx = world.x - sx, wy = world.y - sy, wz = world.z - sz;
+    this.setArmDir(pivot, c * wx - s * wz, wy, s * wx + c * wz);
   }
 
   private setArmDir(pivot: TransformNode, dx: number, dy: number, dz: number): void {

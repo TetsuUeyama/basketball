@@ -38,6 +38,17 @@ const STAT_COLS: { key: keyof import("./entities").Stats; label: string }[] = [
 const fmtStat = (key: string, v: number): string =>
   key === "min" ? (v / 60).toFixed(1) : String(v);
 
+// Stats that pop a floating "＋" badge over a player's icon the moment he earns
+// them (score / assist / rebound / steal / block / turnover).
+const POP_STATS: { key: keyof import("./entities").Stats; label: string; color: string }[] = [
+  { key: "pts", label: "P", color: "#63e08c" },
+  { key: "ast", label: "A", color: "#5ec8ff" },
+  { key: "reb", label: "R", color: "#ffd85e" },
+  { key: "stl", label: "S", color: "#ff9d43" },
+  { key: "blk", label: "B", color: "#c98cff" },
+  { key: "tov", label: "TO", color: "#ff6b6b" },
+];
+
 // A DOM overlay with three screens: a pre-game roster editor, the in-game HUD,
 // and a final result screen with each player's box score.
 export class UI {
@@ -59,8 +70,16 @@ export class UI {
   private quarter: HTMLSpanElement;
   private shot: HTMLSpanElement;
   private banner: HTMLDivElement;
+  private bannerKey = "";           // current banner content, to avoid rebuilding each frame
   private subFeed!: HTMLDivElement;
   private speedBtns: HTMLButtonElement[] = [];
+  // bottom player bars: face icons for each team, toggling on-court ⇄ bench
+  private iconRows: HTMLDivElement[] = [];
+  private iconTabs: HTMLButtonElement[][] = [[], []];
+  private showBench: boolean[] = [false, false];
+  private iconKey: string[] = ["", ""];
+  private iconEl = new Map<import("./entities").Player, HTMLDivElement>(); // player → its current icon element
+  private statSnap = new Map<import("./entities").Player, number[]>();     // last-seen POP_STATS values
 
   private phase: Phase = "pregame";
   private benchTab = [false, false];   // which tab each team editor is showing
@@ -141,7 +160,15 @@ export class UI {
     css(this.banner, {
       position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
       fontSize: "52px", fontWeight: "800", letterSpacing: "2px", opacity: "0",
-      textShadow: "0 4px 20px rgba(0,0,0,0.6)", transition: "opacity 0.2s",
+      textAlign: "center", transition: "opacity 0.2s",
+      // crisp dark outline (8-way) + a soft drop shadow, so the team-coloured text
+      // reads sharply against the court instead of blurring into it. text-shadow
+      // is inherited, so the scorer/assist sub-lines get the same outline.
+      textShadow: [
+        "1px 1px 0 #000", "-1px 1px 0 #000", "1px -1px 0 #000", "-1px -1px 0 #000",
+        "0 2px 0 #000", "0 -2px 0 #000", "2px 0 0 #000", "-2px 0 0 #000",
+        "0 5px 18px rgba(0,0,0,0.7)",
+      ].join(", "),
     });
     this.hud.appendChild(this.banner);
 
@@ -171,6 +198,7 @@ export class UI {
     hint.textContent = "drag: orbit  ·  wheel: zoom";
     this.hud.appendChild(hint);
 
+    this.buildPlayerBars();
     this.buildTooltip();
     this.buildPregame();
     this.buildResult();
@@ -201,6 +229,7 @@ export class UI {
   private showTip(label: string, anchor: HTMLElement): void {
     const info = INFO[label];
     if (!info) return;
+    this.tipTitle.style.color = "#fff";
     this.tipTitle.textContent = label;
     this.tipBody.textContent = info;
     const tip = this.tooltip;
@@ -217,6 +246,28 @@ export class UI {
 
   private hideTip(): void {
     this.tooltip.style.display = "none";
+  }
+
+  // Hover a player icon → show his live box score, floated ABOVE the icon (the
+  // icons sit near the bottom of the screen).
+  private showStatTip(player: import("./entities").Player, anchor: HTMLElement): void {
+    this.tipTitle.style.color = colorOf(player.team);
+    this.tipTitle.textContent = `#${player.idx + 1}  ${player.name}`;
+    const s = player.stats;
+    const cell = (label: string, v: number | string): string =>
+      `<span style="display:inline-block;min-width:66px"><b style="opacity:.6">${label}</b> ${v}</span>`;
+    this.tipBody.innerHTML =
+      `<div>${cell("PTS", s.pts)}${cell("REB", s.reb)}${cell("AST", s.ast)}</div>` +
+      `<div>${cell("STL", s.stl)}${cell("BLK", s.blk)}${cell("TO", s.tov)}</div>` +
+      `<div style="margin-top:3px;opacity:.8">FG ${s.fgm}/${s.fga}　MIN ${(s.min / 60).toFixed(1)}</div>`;
+    const tip = this.tooltip;
+    tip.style.display = "block";
+    const r = anchor.getBoundingClientRect();
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = r.left + r.width / 2 - tw / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - 8 - tw));
+    tip.style.left = `${left}px`;
+    tip.style.top = `${Math.max(8, r.top - th - 8)}px`;   // above the icon
   }
 
   // ---- screens -----------------------------------------------------------
@@ -645,9 +696,201 @@ export class UI {
     });
   }
 
+  // ---- bottom player bars (face icons per team, on-court ⇄ bench tabs) ----
+
+  private buildPlayerBars(): void {
+    // flank the speed / RESTART row: team 0's icons grow leftward from just left
+    // of centre, team 1's grow rightward from just right of centre, leaving a
+    // fixed central gap for the controls — anchored to centre so the gap stays
+    // put no matter how many icons each side shows (on-court 5 vs bench 8).
+    const HALF_GAP = "130px";   // half the central gap reserved for the controls
+    for (let t = 0; t < 2; t++) {
+      const panel = document.createElement("div");
+      Object.assign(panel.style, {
+        position: "absolute", bottom: "16px",
+        ...(t === 0 ? { right: `calc(50% + ${HALF_GAP})` } : { left: `calc(50% + ${HALF_GAP})` }),
+        display: "flex", flexDirection: "column", gap: "5px",
+        alignItems: t === 0 ? "flex-end" : "flex-start",   // hug the centre
+        pointerEvents: "none",                              // icons don't block the camera drag
+      } as Partial<CSSStyleDeclaration>);
+
+      // tab row: ON COURT / BENCH
+      const tabs = document.createElement("div");
+      Object.assign(tabs.style, { display: "flex", gap: "4px", pointerEvents: "auto" } as Partial<CSSStyleDeclaration>);
+      (["ON COURT", "BENCH"] as const).forEach((label, ti) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        Object.assign(b.style, {
+          background: "rgba(20,24,34,0.85)", color: "#fff", border: "1px solid rgba(255,255,255,0.18)",
+          borderRadius: "6px", padding: "2px 8px", fontSize: "10px", fontWeight: "700",
+          letterSpacing: "0.5px", cursor: "pointer",
+        } as Partial<CSSStyleDeclaration>);
+        b.onclick = () => { this.showBench[t] = ti === 1; this.iconKey[t] = ""; };
+        this.iconTabs[t].push(b);
+        tabs.appendChild(b);
+      });
+
+      const row = document.createElement("div");
+      Object.assign(row.style, { display: "flex", gap: "6px" } as Partial<CSSStyleDeclaration>);
+      this.iconRows[t] = row;
+
+      // tabs on top, icon row beneath (both teams)
+      panel.appendChild(tabs);
+      panel.appendChild(row);
+      this.hud.appendChild(panel);
+    }
+  }
+
+  // A small face avatar: team-coloured disc, a simple generated head, and the
+  // jersey number, with the player's name beneath. No portrait art exists, so
+  // the face is drawn procedurally and the number/name identify the player.
+  private makeFaceIcon(player: import("./entities").Player): HTMLDivElement {
+    const wrap = document.createElement("div");
+    Object.assign(wrap.style, {
+      width: "48px", display: "flex", flexDirection: "column", alignItems: "center", gap: "2px",
+      pointerEvents: "auto", cursor: "help",   // hover shows the player's box score
+    } as Partial<CSSStyleDeclaration>);
+    wrap.onmouseenter = () => this.showStatTip(player, wrap);
+    wrap.onmouseleave = () => this.hideTip();
+
+    const face = document.createElement("div");
+    Object.assign(face.style, {
+      position: "relative", width: "42px", height: "42px", borderRadius: "50%",
+      overflow: "hidden", border: `2px solid ${colorOf(player.team)}`,
+      boxShadow: "0 2px 6px rgba(0,0,0,0.5)",
+    } as Partial<CSSStyleDeclaration>);
+    const canvas = document.createElement("canvas");
+    canvas.width = 42; canvas.height = 42;
+    Object.assign(canvas.style, { width: "42px", height: "42px", display: "block" } as Partial<CSSStyleDeclaration>);
+    this.drawFace(canvas, player);
+    face.appendChild(canvas);
+
+    const num = document.createElement("div");
+    num.textContent = String(player.idx + 1);
+    Object.assign(num.style, {
+      position: "absolute", right: "0", bottom: "0", minWidth: "15px", height: "15px",
+      lineHeight: "15px", padding: "0 2px", fontSize: "10px", fontWeight: "800",
+      textAlign: "center", color: "#fff", background: colorOf(player.team),
+      borderTopLeftRadius: "6px",
+    } as Partial<CSSStyleDeclaration>);
+    face.appendChild(num);
+    wrap.appendChild(face);
+
+    const name = document.createElement("div");
+    name.textContent = player.name;
+    Object.assign(name.style, {
+      maxWidth: "50px", fontSize: "9px", fontWeight: "600", color: "#e8ecf4",
+      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      textShadow: "0 1px 3px rgba(0,0,0,0.9)",
+    } as Partial<CSSStyleDeclaration>);
+    wrap.appendChild(name);
+    return wrap;
+  }
+
+  private drawFace(canvas: HTMLCanvasElement, player: import("./entities").Player): void {
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const W = canvas.width, H = canvas.height;
+    const tc = TEAM_COLORS[player.team];
+    // team-tinted background disc
+    ctx.fillStyle = `rgb(${Math.round(tc.r * 120 + 25)},${Math.round(tc.g * 120 + 25)},${Math.round(tc.b * 120 + 25)})`;
+    ctx.fillRect(0, 0, W, H);
+    // deterministic variety per player so faces aren't all identical
+    const h = (player.idx * 2654435761) >>> 0;
+    const skins = ["#f2cfa8", "#e6b48c", "#cf9a6a", "#a9713f", "#8a5a2b"];
+    const hairs = ["#20140a", "#3a2413", "#0e0e0e", "#5a3a1c", "#7a5230"];
+    const skin = skins[h % skins.length];
+    const hair = hairs[(h >> 3) % hairs.length];
+    // head
+    ctx.fillStyle = skin;
+    ctx.beginPath(); ctx.arc(W / 2, H * 0.52, W * 0.30, 0, Math.PI * 2); ctx.fill();
+    // hair cap
+    ctx.fillStyle = hair;
+    ctx.beginPath(); ctx.arc(W / 2, H * 0.46, W * 0.31, Math.PI * 1.05, Math.PI * 1.95); ctx.fill();
+    // eyes
+    ctx.fillStyle = "#26211c";
+    ctx.beginPath(); ctx.arc(W * 0.41, H * 0.52, 1.7, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(W * 0.59, H * 0.52, 1.7, 0, Math.PI * 2); ctx.fill();
+    // mouth
+    ctx.strokeStyle = "rgba(80,40,30,0.8)"; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.arc(W / 2, H * 0.60, W * 0.10, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+  }
+
+  private refreshPlayerBars(game: Game): void {
+    for (let t = 0; t < 2; t++) {
+      // highlight the active tab
+      this.iconTabs[t].forEach((b, ti) => {
+        const active = (ti === 1) === this.showBench[t];
+        b.style.background = active ? colorOf(t) : "rgba(20,24,34,0.85)";
+        b.style.opacity = active ? "1" : "0.7";
+      });
+      // which players to show: the current on-court five, or the eight on the bench
+      const onCourt = game.players.filter((p) => p.team === t);
+      const set = new Set(onCourt);
+      const list = this.showBench[t] ? game.roster[t].filter((p) => !set.has(p)) : onCourt;
+      // rebuild only when the shown set (or tab) changes — subs swap the five
+      const key = `${this.showBench[t] ? "B" : "C"}:${list.map((p) => p.idx).join(",")}`;
+      if (key === this.iconKey[t]) continue;
+      this.iconKey[t] = key;
+      const row = this.iconRows[t];
+      this.hideTip();   // a hovered icon may be getting replaced — drop its tip
+      row.replaceChildren();
+      for (const p of list) {
+        const el = this.makeFaceIcon(p);
+        this.iconEl.set(p, el);   // remember it so stat pops can anchor above it
+        row.appendChild(el);
+      }
+    }
+  }
+
+  // Floating "＋" badges: compare each player's box score to last frame and pop a
+  // badge over his icon for anything he just earned (score/assist/rebound/etc.).
+  private updateStatPops(game: Game): void {
+    if (this.phase !== "playing") return;
+    for (const roster of game.roster) {
+      for (const p of roster) {
+        let snap = this.statSnap.get(p);
+        if (!snap) { this.statSnap.set(p, POP_STATS.map((s) => p.stats[s.key])); continue; }
+        let stack = 0;
+        POP_STATS.forEach((s, i) => {
+          const cur = p.stats[s.key];
+          const d = cur - snap![i];
+          if (d > 0) this.popStat(p, s.label, d, s.color, stack++);
+          snap![i] = cur;   // re-baseline (also absorbs a restart's reset to 0)
+        });
+      }
+    }
+  }
+
+  private popStat(player: import("./entities").Player, label: string, delta: number,
+                  color: string, stack: number): void {
+    const icon = this.iconEl.get(player);
+    if (!icon || !icon.isConnected) return;   // only when the icon is actually on screen
+    const hb = this.hud.getBoundingClientRect();
+    const r = icon.getBoundingClientRect();
+    if (r.width === 0) return;                 // hidden / not laid out
+    const badge = document.createElement("div");
+    badge.textContent = `${label}+${delta}`;
+    Object.assign(badge.style, {
+      position: "absolute", left: `${r.left - hb.left + r.width / 2}px`,
+      top: `${r.top - hb.top - 10 - stack * 17}px`, transform: "translate(-50%,0)",
+      color, fontSize: "15px", fontWeight: "900", letterSpacing: "0.5px",
+      textShadow: "0 1px 3px #000, 0 0 5px rgba(0,0,0,0.9)", pointerEvents: "none",
+      zIndex: "45", opacity: "1", transition: "opacity 1.1s ease-out, transform 1.1s ease-out",
+    } as Partial<CSSStyleDeclaration>);
+    this.hud.appendChild(badge);
+    requestAnimationFrame(() => {   // next frame → animate up and fade, then remove
+      badge.style.opacity = "0";
+      badge.style.transform = "translate(-50%,-32px)";
+    });
+    setTimeout(() => badge.remove(), 1200);
+  }
+
   update(game: Game): void {
     if (this.phase === "playing" && game.state === "final") this.showResult(game);
 
+    this.refreshPlayerBars(game);
+    this.updateStatPops(game);
     this.scoreA.textContent = String(game.score[0]);
     this.scoreB.textContent = String(game.score[1]);
     const t = Math.max(0, game.gameClock);
@@ -658,12 +901,36 @@ export class UI {
     this.shot.textContent = String(Math.max(0, Math.ceil(game.shotClock)));
 
     if (game.lastEvent) {
-      const c = TEAM_COLORS[game.lastEvent.team];
-      this.banner.textContent = game.lastEvent.text;
+      const ev = game.lastEvent;
+      const c = TEAM_COLORS[ev.team];
+      // rebuild the banner only when the event changes, so it doesn't churn the
+      // DOM every frame while a banner is up
+      const key = `${ev.text}|${ev.scorer ?? ""}|${ev.assist ?? ""}`;
+      if (key !== this.bannerKey) {
+        this.bannerKey = key;
+        this.banner.replaceChildren();
+        const main = document.createElement("div");
+        main.textContent = ev.text;
+        this.banner.appendChild(main);
+        // on a made basket, credit who scored (and who assisted) underneath
+        if (ev.scorer) {
+          const sc = document.createElement("div");
+          Object.assign(sc.style, { fontSize: "26px", fontWeight: "700", letterSpacing: "1px", marginTop: "8px" });
+          sc.textContent = ev.scorer;
+          this.banner.appendChild(sc);
+        }
+        if (ev.assist) {
+          const as = document.createElement("div");
+          Object.assign(as.style, { fontSize: "19px", fontWeight: "600", letterSpacing: "1px", marginTop: "3px", opacity: "0.85" });
+          as.textContent = `アシスト  ${ev.assist}`;
+          this.banner.appendChild(as);
+        }
+      }
       this.banner.style.color = `rgb(${c.r * 255},${c.g * 255},${c.b * 255})`;
       this.banner.style.opacity = "0.95";
     } else {
       this.banner.style.opacity = "0";
+      this.bannerKey = "";
     }
 
     // substitution feed: one chip per swap, centred like the event banner,
