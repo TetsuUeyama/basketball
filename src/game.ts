@@ -250,7 +250,7 @@ export class Game {
     sub.stintT = 0;
     sub.cutting = false;
     sub.screening = false;
-    sub.beatenT = sub.powerT = sub.stalledT = sub.reactT = sub.coolT = sub.landT = 0;
+    sub.beatenT = sub.powerT = sub.stalledT = sub.jukeT = sub.reactT = sub.coolT = sub.landT = 0;
     sub.resetFacing();   // court bodies carry no yaw — clear the bench gaze
     this.players[i] = sub;
     const seat = this.benchSeat(out);
@@ -393,6 +393,10 @@ export class Game {
       new Vector3(5, 0, hz + dir * 6),       // right wing
       new Vector3(-6.3, 0, hz + dir * 2.5),  // left corner
       new Vector3(6.3, 0, hz + dir * 2.5),   // right corner
+      // low blocks, just outside the lane line — the post big's home. Guards
+      // and genuine stretch bigs never claim these (see bestOpenSpot).
+      new Vector3(-2.8, 0, hz + dir * 1.4),  // left low block
+      new Vector3(2.8, 0, hz + dir * 1.4),   // right low block
     ];
   }
 
@@ -554,7 +558,7 @@ export class Game {
       t0[i].pos.set(ring0[i][0], 0, ring0[i][1]);
       t1[i].pos.set(ring1[i][0], 0, ring1[i][1]);
     }
-    for (const p of this.players) { p.cutting = false; p.offTimer = rand(0.4, 2); p.spotIdx = p.slot; }
+    for (const p of this.players) { p.cutting = false; p.offTimer = rand(0.4, 2); p.spotIdx = this.homeSpotIdx(p); }
 
     this.tipWinner = chance(0.5) ? 0 : 1;
     this.tipGuard = this.teamPlayers(this.tipWinner)[0];
@@ -856,24 +860,44 @@ export class Game {
     // movement: how the committed 1-on-1 move plays out. D速度 sets how much of
     // his top speed survives while dribbling.
     let mult = 0.84 + rate(h.attr.dribbleSpd) * 0.18;
-    if (h.beatenT > 0) {
+    if (h.jukeT > 0) {
+      // executing a dribble move — the visible footwork (jab step-in, side-step,
+      // or step-back) that shakes the defender before the drive resolves
+      h.jukeT = Math.max(0, h.jukeT - dt);
+      moveToward2D(h.pos, h.jukeTarget.x, h.jukeTarget.z, h.accelToward(dt, h.jukeTarget.x, h.jukeTarget.z, 0.95) * dt);
+    } else if (h.beatenT > 0) {
       // SPEED blow-by: burst past the beaten defender to the rim
       h.beatenT = Math.max(0, h.beatenT - dt);
       mult *= 1.12 + rate(h.attr.agility) * 0.14;        // quick handlers burst harder
-      moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelSpeed(dt, mult) * dt);
+      moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelToward(dt, h.driveTarget.x, h.driveTarget.z, mult) * dt);
     } else if (h.powerT > 0) {
       // POWER drive: grind straight at the rim INTO the defender. He advances
       // slower, but the collision step (holdWeight²) shoves the weaker man back,
       // so a strong handler bulls his way to the basket and a weak one bogs down.
       h.powerT = Math.max(0, h.powerT - dt);
       mult *= 0.5 + rate(h.attr.balance) * 0.35;         // strong = keeps churning through contact
-      moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelSpeed(dt, mult) * dt);
+      moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelToward(dt, h.driveTarget.x, h.driveTarget.z, mult) * dt);
+      // PHYSICAL WALL: a defender bodying him up who actually wins the strength
+      // battle (higher holdWeight — mostly ボディバランス) stonewalls the drive
+      // instead of getting walked to the rim; a weaker one still gets bulldozed.
+      const dm = this.onBallDefender(h);
+      if (dm && dist2D(h.pos, dm.pos) < 0.95) {
+        // a set, strong-bodied defender (ボディバランス, + some 守判断) can
+        // stonewall a committed bull drive; the handler's own strength (and post
+        // footwork) makes him harder to stop — a weak defender just gets bulldozed
+        const stop = rate(dm.attr.balance) * 0.85 + rate(dm.attr.defense) * 0.2
+          - rate(h.attr.balance) * 0.75 - (h.has("post") ? 0.15 : 0);
+        if (chance(clamp(stop, 0, 0.85) * dt * 2.5)) {
+          h.powerT = 0;
+          h.stalledT = rand(0.3, 0.5);                   // couldn't move him — walled off
+        }
+      }
     } else if (h.stalledT > 0) {
       // WALLED OFF: the defender held his ground — the handler is contained and
       // has to pull the ball back out, losing a step of tempo.
       h.stalledT = Math.max(0, h.stalledT - dt);
       this.setDrive(h, rimFloor, dist2D(h.pos, rimFloor) + 0.5); // retreat dribble
-      moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelSpeed(dt, 0.5) * dt);
+      moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelToward(dt, h.driveTarget.x, h.driveTarget.z, 0.5) * dt);
     } else {
       // probing dribble between moves — a body in the lane holds him up (balance
       // battle), but this is just jostling, not a committed attack
@@ -884,7 +908,7 @@ export class Game {
         const base = this.isBig(h) ? 0.34 : 0.38;
         mult *= clamp(base + edge * 0.6, 0.2, 0.95);
       }
-      moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelSpeed(dt, mult) * dt);
+      moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelToward(dt, h.driveTarget.x, h.driveTarget.z, mult) * dt);
     }
     this.clampCourt(h.pos);
     // once established, the handler must not dribble back across halfway
@@ -920,7 +944,7 @@ export class Game {
     // a committed 1-on-1 move is already under way — see it through (the burst /
     // bull drive carries him; the finish check above ends it at the rim) rather
     // than re-deciding every tick, which is what made the old drive look mushy
-    if (h.beatenT > 0 || h.powerT > 0) return;
+    if (h.beatenT > 0 || h.powerT > 0 || h.jukeT > 0) return;
     // walled off: contained this rep — kick it out to a better look, otherwise
     // keep pulling it back out (movement handles the retreat) and re-attack once
     // the stall clears
@@ -979,6 +1003,15 @@ export class Game {
       if (isThree) pShoot += tac.threeBias * 0.22 * tw - 0.05;
       pShoot = clamp(pShoot, 0.03, 0.95);
       if (open && chance(pShoot)) { this.shoot(h, dHoop, dDef); return; }
+
+      // a defender closing out on a shooter with a handle can be punished with a
+      // STEP-BACK: bait the closeout, then blow by or rise into clean space
+      if (!open && dDef < 1.5 && this.canIso(h, dHoop) && h.jukeT <= 0
+          && (rate(h.attr.midAcc) > 0.55 || rate(h.attr.threeAcc) > 0.6)
+          && chance(clamp(0.05 + rate(h.attr.dribbleAcc) * 0.14 + rate(h.attr.agility) * 0.1, 0, 0.32))) {
+        const d = this.onBallDefender(h);
+        if (d) { this.stepBack(h, d, dHoop); return; }
+      }
 
       // not a clean look → this is where a scorer ATTACKS his man off the dribble
       // (a real isolation), trying to beat him with speed or power rather than
@@ -1090,9 +1123,12 @@ export class Game {
       + rate(h.attr.dribbleAcc) * 0.2 + (h.has("driver") ? 0.1 : 0)
       - (rate(d.attr.agility) * 0.55 + rate(d.attr.reaction) * 0.35
         + rate(d.attr.defense) * 0.35 + (d.has("manMark") ? 0.12 : 0));
+    // POWER is a physical battle: the defender resists mostly with ボディバランス
+    // (raw strength), and only secondarily with 守判断 — so a strong-bodied
+    // defender walls off a bull drive even if his defensive IQ is ordinary.
     const powerEdge = rate(h.attr.balance) * 0.6 + rate(h.attr.aggression) * 0.25
       + rate(h.attr.dribbleAcc) * 0.15 + (h.has("post") ? 0.15 : 0)
-      - (rate(d.attr.balance) * 0.8 + rate(d.attr.defense) * 0.45);
+      - (rate(d.attr.balance) * 1.0 + rate(d.attr.defense) * 0.35);
 
     // a player's OWN tools set his style first: a strong, physical player (high
     // ボディバランス, aggressive) bullies his way in; a quick, high-handle player
@@ -1107,7 +1143,7 @@ export class Game {
       // POWER: shoulder into the defender. Win the strength battle and he drives
       // the man back to the rim; lose it and he's walled off and must reset.
       h.driveSide = d.shadeSide !== 0 ? -d.shadeSide : (chance(0.5) ? 1 : -1);
-      const pPower = clamp(0.58 + powerEdge * 0.96, 0.04, 0.9);
+      const pPower = clamp(0.56 + powerEdge * 0.96, 0.04, 0.9);
       if (chance(pPower)) {
         h.powerT = rand(0.55, 0.9) * (1 + Math.max(0, powerEdge) * 0.4);
         d.lean = clamp(d.lean * 0.4, -1, 1);             // knocked off his base
@@ -1118,33 +1154,94 @@ export class Game {
       return;
     }
 
-    // SPEED: skilled handlers set it up with a fake the other way; the defender
-    // bites — committing his weight — when the move beats his defensive read
-    const useFake = chance(0.3 + rate(h.attr.handling) * 0.5);
-    let go: number;
-    if (useFake) {
-      const fakeDir = chance(0.5) ? 1 : -1;              // sell it one way...
-      go = -fakeDir;                                     // ...attack the other
-      const bite = clamp(0.45 + speedEdge * 0.5 - rate(d.attr.defense) * 0.25, 0.05, 0.95);
-      if (chance(bite)) d.lean = clamp(d.lean + fakeDir * rand(0.6, 1.1), -1, 1);
+    // SPEED: shake the defender with a dribble move, then attack the opening.
+    // 敏捷性(quickness) + D精度(dribble control) drive the deception; the defender
+    // resists with 守判断(defense) + quickness/反応(burst). The move he uses
+    // depends on how the defender is playing him.
+    const jukeEdge = this.jukeDeception(h) - this.jukeDiscipline(d);
+    const rim = this.attackFloor(h.team);
+    const rl = Math.hypot(rim.x - h.pos.x, rim.z - h.pos.z) || 1;
+    const ux = (rim.x - h.pos.x) / rl, uz = (rim.z - h.pos.z) / rl;   // toward rim
+    const latx = -uz, latz = ux;                                      // lateral
+
+    // shake the fronting defender: a jab step-in to freeze him, or a hard
+    // side-step to drag him one way and attack back the other
+    const stepIn = chance(0.35);
+    const fakeDir = chance(0.5) ? 1 : -1;
+    let ox: number, oz: number, leanMag: number;
+    if (stepIn) {
+      ox = ux * 0.35; oz = uz * 0.35; leanMag = 0.7;               // jab toward the rim
+      d.reactT = Math.max(d.reactT, rand(0.15, 0.3) * this.reactionLag(d)); // he hesitates
     } else {
-      go = chance(0.7) ? -d.shadeSide : d.shadeSide;     // attack away from the shade
+      ox = latx * fakeDir * 0.45; oz = latz * fakeDir * 0.45; leanMag = 1.1; // side-step
     }
+    const go = -fakeDir;                                  // attack away from the fake
+    h.jukeT = rand(0.18, 0.3);
+    h.jukeTarget.set(h.pos.x + ox, 0, h.pos.z + oz);
+    this.clampCourt(h.jukeTarget);
+
+    // does he bite? deception vs discipline sets how far his weight shifts — a
+    // low floor and steep slope make quickness/handle (and the defender's
+    // discipline) really tell in whether the move works
+    const bite = clamp(0.3 + jukeEdge * 1.1, 0.03, 0.95);
+    if (chance(bite)) d.lean = clamp(d.lean + fakeDir * rand(0.5, 1.0) * leanMag, -1, 1);
     h.driveSide = go;
 
-    // turn the corner: most likely when the defender's weight is committed away
-    // from the direction of attack (caught leaning the wrong way); otherwise the
-    // quick feet stayed in front and the handler is stalled (contained)
-    const wrongWay = clamp(-d.lean * go, 0, 1);          // 1 = fully leaning the wrong way
+    // turn the corner: most likely when his weight is committed the wrong way;
+    // otherwise the quick feet stayed in front and the handler is stalled
+    const wrongWay = clamp(-d.lean * go, 0, 1);
     const pBeat = clamp(0.5 + speedEdge * 0.95 + wrongWay * 0.4, 0.02, 0.95);
     if (chance(pBeat)) {
-      h.beatenT = rand(0.5, 0.85) * (1 + Math.max(0, speedEdge) * 0.3); // elite handlers blow by harder
-      d.reactT = Math.max(d.reactT, rand(0.3, 0.55) * this.reactionLag(d)); // caught flat-footed
-      d.lean = clamp(d.lean + go * 0.3, -1, 1);          // momentum carries him further wrong
+      h.beatenT = rand(0.5, 0.85) * (1 + Math.max(0, speedEdge) * 0.3);
+      d.reactT = Math.max(d.reactT, rand(0.3, 0.55) * this.reactionLag(d));
+      d.lean = clamp(d.lean + go * 0.3, -1, 1);
     } else {
-      h.stalledT = rand(0.3, 0.55);                      // stayed in front — reset/kick
+      h.stalledT = rand(0.3, 0.55);
     }
     this.setDriveSide(h);
+  }
+
+  // How well a handler sells a dribble move — quickness + dribble control lead.
+  private jukeDeception(h: Player): number {
+    return rate(h.attr.agility) * 0.45 + rate(h.attr.dribbleAcc) * 0.4
+      + rate(h.attr.handling) * 0.15 + (h.has("driver") ? 0.1 : 0);
+  }
+
+  // How well a defender stays in front / doesn't bite — defence + burst.
+  private jukeDiscipline(d: Player): number {
+    return rate(d.attr.defense) * 0.4 + rate(d.attr.agility) * 0.35
+      + rate(d.attr.reaction) * 0.25 + (d.has("manMark") ? 0.1 : 0);
+  }
+
+  // STEP-BACK: retreat off the dribble against a defender contesting a shot. If he
+  // over-commits forward (bites the shot fake) the handler blows by him off the
+  // step; if he stays down, the handler has bought clean separation for a jumper.
+  // Baiting the closeout scales with the handler's shot threat + deception; the
+  // defender resists with discipline.
+  private stepBack(h: Player, d: Player, dHoop: number): void {
+    const rim = this.attackFloor(h.team);
+    const bx = h.pos.x - rim.x, bz = h.pos.z - rim.z;     // away from the rim
+    const bl = Math.hypot(bx, bz) || 1;
+    h.jukeT = rand(0.2, 0.32);
+    h.jukeTarget.set(h.pos.x + (bx / bl) * 0.7, 0, h.pos.z + (bz / bl) * 0.7);
+    this.clampCourt(h.jukeTarget);
+
+    const shotThreat = Math.max(rate(h.attr.threeAcc), rate(h.attr.midAcc));
+    const edge = this.jukeDeception(h) - this.jukeDiscipline(d);
+    const bait = clamp(0.2 + edge * 0.5 + shotThreat * 0.25, 0.05, 0.82);
+    if (chance(bait)) {
+      // he lunged forward → attack past him off the step-back
+      h.beatenT = rand(0.5, 0.8) * (1 + Math.max(0, edge) * 0.3);
+      d.reactT = Math.max(d.reactT, rand(0.35, 0.6) * this.reactionLag(d));
+      d.lean = clamp(d.lean * 0.5, -1, 1);
+      h.driveSide = chance(0.5) ? 1 : -1;
+      this.setDriveSide(h);                              // the burst goes at the rim
+    } else {
+      // stayed down → the step-back bought a cushion; hold it for the jumper and
+      // let the next decision fire the (now open) look
+      d.reactT = Math.max(d.reactT, rand(0.3, 0.5) * this.reactionLag(d));
+      h.driveTarget.copyFrom(h.jukeTarget);
+    }
   }
 
   // Aim the drive toward the rim, curving to the chosen side; on a blow-by go
@@ -1225,8 +1322,8 @@ export class Game {
       if (this.handler && this.handler.beatenT > 0 && d.has("covering")) {
         const hx = this.handler.pos.x, hz = this.handler.pos.z;
         const t = 0.55;   // meet him partway down the lane to the basket
-        moveToward2D(d.pos, hx + (protect.x - hx) * t, hz + (protect.z - hz) * t,
-          d.accelSpeed(dt, 1.12) * dt);
+        const ctx = hx + (protect.x - hx) * t, ctz = hz + (protect.z - hz) * t;
+        moveToward2D(d.pos, ctx, ctz, d.accelToward(dt, ctx, ctz, 1.12) * dt);
         this.clampCourt(d.pos);
         continue;
       }
@@ -1243,12 +1340,15 @@ export class Game {
           const dx = hx - protect.x, dz = hz - protect.z;
           const len = Math.hypot(dx, dz) || 1;
           // meet the driver a couple of metres off the rim, right in his path
-          moveToward2D(d.pos, protect.x + (dx / len) * 2.0, protect.z + (dz / len) * 2.0,
-            d.accelSpeed(dt, 1.1) * dt);
+          const rtx = protect.x + (dx / len) * 2.0, rtz = protect.z + (dz / len) * 2.0;
+          moveToward2D(d.pos, rtx, rtz, d.accelToward(dt, rtx, rtz, 1.1) * dt);
           this.clampCourt(d.pos);
           continue;
         }
       }
+
+      // transition: caught up-court when possession flipped — get back FIRST
+      if (this.getBackOnDefense(dt, d, man)) continue;
 
       // off-ball: sag toward the basket to help — more for high-help game plans,
       // followed faithfully only by players who buy into the scheme (連携), and
@@ -1257,8 +1357,8 @@ export class Game {
       const sag = (1.2 + help * 1.4) * (this.teamHas(defTeam, "dfLine") ? 1.15 : 1);
       const dx = protect.x - man.pos.x, dz = protect.z - man.pos.z;
       const len = Math.hypot(dx, dz) || 1;
-      moveToward2D(d.pos, man.pos.x + (dx / len) * sag, man.pos.z + (dz / len) * sag,
-        d.accelSpeed(dt) * dt);
+      const stx = man.pos.x + (dx / len) * sag, stz = man.pos.z + (dz / len) * sag;
+      moveToward2D(d.pos, stx, stz, d.accelToward(dt, stx, stz) * dt);
       this.clampCourt(d.pos);
     }
   }
@@ -1307,8 +1407,38 @@ export class Game {
       tz = man.pos.z + uz * gap + lz * cut;
     }
     const mult = man.beatenT > 0 ? 1.06 + rate(d.attr.agility) * 0.12 : 1.05;
-    moveToward2D(d.pos, tx, tz, d.accelSpeed(dt, mult) * dt);
+    moveToward2D(d.pos, tx, tz, d.accelToward(dt, tx, tz, mult) * dt);
     this.clampCourt(d.pos);
+  }
+
+  // TRANSITION — GET BACK FIRST: when possession flips, a defender caught
+  // up-court (he was crashing the glass or posting up a moment ago) sprints
+  // home before worrying about his man. Bigs give the rim absolute priority —
+  // a C (and, a step higher, a PF) whose man is still trailing the play runs
+  // straight back and holds the paint, so the goal is never left open behind
+  // a fast break. Returns true when it handled this frame's movement.
+  private getBackOnDefense(dt: number, d: Player, man: Player): boolean {
+    const s = this.attackSign(this.possession);  // defence's own half: z*s > 0
+    const upCourt = d.pos.z * s < 0.5;           // he hasn't crossed halfway yet
+    const manBack = man.pos.z * s < 0.5;         // ...and neither has his man
+    if (this.isBig(d) && (upCourt || manBack)) {
+      // the C parks right under the goal; a PF holds a step higher up the lane
+      const depth = d.role === "C" ? 1.6 : 3.0;
+      const tz = s * (RIM.z - depth);
+      moveToward2D(d.pos, 0, tz, d.accelToward(dt, 0, tz, 1.15) * dt);
+      this.clampCourt(d.pos);
+      return true;
+    }
+    if (upCourt && manBack) {
+      // he and his man are BOTH still up-court: sprint goal-side (top of the
+      // key, shaded toward his man's lane) instead of jogging beside a trailer
+      // while the ball attacks an open basket
+      const tx = man.pos.x * 0.4, tz = s * (RIM.z - 7);
+      moveToward2D(d.pos, tx, tz, d.accelToward(dt, tx, tz, 1.12) * dt);
+      this.clampCourt(d.pos);
+      return true;
+    }
+    return false;
   }
 
   // Bodies can't overlap: push any two players who collide apart, splitting the
@@ -1379,7 +1509,11 @@ export class Game {
   private chooseReceiver(h: Player): Player | null {
     const rimFloor = this.attackFloor(h.team);
     const tac = this.tactics[h.team].offense;
-    const backcourt = dist2D(h.pos, rimFloor) > 14; // bringing it up vs in the set
+    // bringing it up vs in the set: until the ball is ESTABLISHED in the
+    // frontcourt (frontT) the outlet rules apply — the old distance-only test
+    // left a strip near halfway where a "feed the open scorer" read fired and
+    // sprayed passes to bigs streaking ahead of the ball
+    const backcourt = !this.frontT || dist2D(h.pos, rimFloor) > 14;
 
     // how much interception risk the handler will accept right now: pass-savvy
     // players and ball-movement game plans thread tighter windows, and a dying
@@ -1429,7 +1563,15 @@ export class Game {
           && !(p.cutting && dist2D(p.pos, rimFloor) < 6.5)) {
         value -= 3.0;
       }
-      if (backcourt) value += p.playmaking * 2.5;                  // outlet to the playmaker
+      if (backcourt) {
+        // bringing it up is a GUARD's job: outlet to the playmaker. A big only
+        // gets it here on a genuine hit-ahead — already free near the basket —
+        // never as a bail-out just because he happens to be the most open man
+        // (when the guards are smothered the handler keeps the dribble and the
+        // outlet man drops back to him instead). Only a dying clock overrides.
+        if (this.isBig(p) && dist2D(p.pos, rimFloor) > 6 && this.shotClock > 4) continue;
+        value += p.playmaking * 4.0;
+      }
       else value += p.offPriority * 1.6 * clamp(open / 2, 0, 1);   // feed an open scorer
       // expected value: discount by the chance the pass is picked off
       const score = value * (1 - risk) - risk * 2.5;
@@ -2223,6 +2365,27 @@ export class Game {
     return p.role === "PF" || p.role === "C";
   }
 
+  // Whether this player belongs on the low block in the half-court set. Bigs
+  // live at the goal — only a genuine stretch threat spaces to the perimeter
+  // instead (rare on this DB's compressed scale: C の L精度 is 65..83, so the
+  // bar is 75+, or ロングレンジ with 70+). A ポスト/ペイント specialist plants
+  // himself there regardless of position.
+  private prefersPost(p: Player): boolean {
+    if (p.has("post") || p.has("centerSpot")) return true;
+    if (!this.isBig(p)) return false;
+    const acc = rate(p.attr.threeAcc);
+    const stretch = acc >= 0.75 || (p.has("range") && acc >= 0.7);
+    return !stretch;
+  }
+
+  // The formation spot a player claims when a possession starts fresh: a post
+  // big heads straight for his block (PF left, C right), everyone else takes
+  // the perimeter spot matching his slot.
+  private homeSpotIdx(p: Player): number {
+    if (this.isBig(p) && this.prefersPost(p)) return p.slot === 3 ? 5 : 6;
+    return p.slot;
+  }
+
   // On a shot, the bigs (PF/C) crash the glass hard while guards/wings hold a
   // step back, ready for a long board or to get back in transition.
   private crashBoards(dt: number): void {
@@ -2344,20 +2507,27 @@ export class Game {
       if (p === exclude) continue;
       if (p.rooted) continue;   // following through on a pass/shot — hold position
 
-      // bringing it up after a change of possession: if a big has ended up with
-      // the ball, the primary ball-handler (PG, or SG when the PG has it) comes
-      // BACK toward the ball to take the outlet, instead of jogging to a spot.
-      if (!this.frontT && this.handler && this.isBig(this.handler)
-          && dist2D(this.handler.pos, rim) > 10) {
+      // bringing it up after a change of possession: the primary ball-handler
+      // (PG, or SG when the PG has it) comes BACK toward the ball to take the
+      // outlet — always when a big has ended up with it, and also when he
+      // himself is covered / the passing lane to him is blocked, so the handler
+      // is never forced to bail out to a big just to move the ball.
+      if (!this.frontT && this.handler && dist2D(this.handler.pos, rim) > 10) {
         const tp = this.teamPlayers(team);
         const outlet = tp[0] !== this.handler ? tp[0] : tp[1];
         if (p === outlet) {
-          const s = this.attackSign(team);
-          const bx = this.handler.pos.x, bz = this.handler.pos.z;
-          // show up-court from the ball, toward the middle — a catchable outlet
-          moveToward2D(p.pos, bx * 0.5, bz + s * 2.0, p.accelSpeed(dt, 1.1) * dt);
-          this.clampCourt(p.pos);
-          continue;
+          const wanted = this.isBig(this.handler)
+            || this.nearestDefenderDist(p) < 1.4
+            || this.laneBlock(this.handler, p) !== null;
+          if (wanted) {
+            const s = this.attackSign(team);
+            const bx = this.handler.pos.x, bz = this.handler.pos.z;
+            // show up-court from the ball, toward the middle — a catchable outlet
+            const otx = bx * 0.5, otz = bz + s * 2.0;
+            moveToward2D(p.pos, otx, otz, p.accelToward(dt, otx, otz, 1.1) * dt);
+            this.clampCourt(p.pos);
+            continue;
+          }
         }
       }
 
@@ -2374,7 +2544,7 @@ export class Game {
         // sprint along the cut; cutters move a touch faster than they jog spots
         // (a ラインポジ cutter bursts hard enough to lose his mark)
         moveToward2D(p.pos, p.offTarget.x, p.offTarget.z,
-          p.accelSpeed(dt, p.has("lineMove") ? 1.22 : 1.08) * dt);
+          p.accelToward(dt, p.offTarget.x, p.offTarget.z, p.has("lineMove") ? 1.22 : 1.08) * dt);
         if (dist2DTo(p.pos, p.offTarget.x, p.offTarget.z) < 0.6) {
           const atRim = dist2DTo(p.offTarget, rim.x, rim.z) < 1.6;
           if (atRim) {
@@ -2386,20 +2556,26 @@ export class Game {
             p.offTimer = rand(2.5, 4.5);
           }
         }
+      } else if (this.clearDriveLane(dt, p)) {
+        // stepped out of the ball-handler's drive lane this frame
       } else {
         let spot = spots[p.spotIdx];
+        // a post big HOLDS his block: he doesn't yield deep position just
+        // because a cutter or driver passes close (the collision jostle keeps
+        // bodies apart) — only the handler actually posting on his spot moves him
+        const atPost = p.spotIdx >= 5;
         // relocate when the spot is crowded — on top of the ball-handler, or a
         // team-mate has drifted into this player's area — to keep the floor spread
         if ((this.handler && dist2DTo(this.handler.pos, spot.x, spot.z) < 3)
-            || this.nearestTeammateDist(p) < 3.2) {
+            || (!atPost && this.nearestTeammateDist(p) < 3.2)) {
           p.spotIdx = this.bestOpenSpot(team, spots, p);
           spot = spots[p.spotIdx];
         }
-        moveToward2D(p.pos, spot.x, spot.z, p.accelSpeed(dt) * dt);
+        moveToward2D(p.pos, spot.x, spot.z, p.accelToward(dt, spot.x, spot.z) * dt);
         // continuous separation: ease out of any team-mate's personal space so
         // spacing holds between spot re-reads (real off-ball players never let a
         // team-mate crowd them)
-        this.spacingNudge(dt, p);
+        if (!atPost) this.spacingNudge(dt, p);
 
         if (p.offTimer <= 0) {
           p.offTimer = rand(2.0, 4.0);
@@ -2558,6 +2734,33 @@ export class Game {
     }
   }
 
+  // Get an off-ball team-mate OUT of the ball-handler's driving lane: if he is
+  // standing ahead of the handler and inside the corridor to the rim, he slides
+  // laterally to clear the path (and re-reads to a spot out of the lane), instead
+  // of holding a spot the handler then dribbles straight into. Returns true when
+  // it fires (that frame's movement is handled here). Only in the frontcourt,
+  // where a drive is a real threat.
+  private clearDriveLane(dt: number, p: Player): boolean {
+    const h = this.handler;
+    if (!h || !this.frontT) return false;
+    const rim = this.attackFloor(h.team);
+    const dx = rim.x - h.pos.x, dz = rim.z - h.pos.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const ux = dx / len, uz = dz / len;              // handler → rim
+    const rx = p.pos.x - h.pos.x, rz = p.pos.z - h.pos.z;
+    const along = rx * ux + rz * uz;                 // distance ahead of the handler
+    if (along < 0.3 || along > 5.5) return false;    // behind him, or too far ahead to matter
+    const perp = rx * -uz + rz * ux;                 // signed lateral offset from the lane
+    if (Math.abs(perp) > 1.25) return false;         // already clear of the corridor
+    // slide out to the side he's already on (dead-centre → toward the nearer sideline)
+    const side = Math.abs(perp) < 0.05 ? (p.pos.x >= 0 ? 1 : -1) : (perp > 0 ? 1 : -1);
+    const tx = p.pos.x + -uz * side * 2.2, tz = p.pos.z + ux * side * 2.2;
+    moveToward2D(p.pos, tx, tz, p.accelToward(dt, tx, tz, 1.15) * dt);
+    // re-home to a spot out of the lane so he doesn't drift straight back in
+    p.spotIdx = this.bestOpenSpot(p.team, this.formationSpots(p.team), p);
+    return true;
+  }
+
   // Pick the formation spot that is open (far from defenders), spaced from the
   // ball, and not already occupied by a teammate.
   private bestOpenSpot(team: number, spots: Vector3[], self: Player): number {
@@ -2585,15 +2788,32 @@ export class Game {
       const lane = this.handler ? this.laneOpenness(this.handler.pos, s.x, s.z) : 1;
       const clog = this.handler ? this.clogPenalty(this.handler.pos, rimFloor, s.x, s.z) : 0;
 
-      let score = open * (self.has("positioning") ? 1.35 : 1) // 特能: reads the open spot
-        + Math.min(fromHandler, 6) * 0.3   // keep some distance off the ball
-        + lane * 2.0                       // stay in a live passing lane
-        - clog * 2.5                       // vacate the drive gap to the rim
-        - dist2DTo(self.pos, s.x, s.z) * 0.1;
-      // spot preferences: サイド lives in the corners (idx 3/4), センター up top
-      // near the lane (idx 0)
-      if (self.has("sideSpot") && i >= 3) score += 1.5;
-      if (self.has("centerSpot") && i === 0) score += 1.5;
+      // the low blocks (idx 5/6) are big-man country: guards and genuine
+      // stretch bigs never camp the goal area
+      if (i >= 5 && !this.prefersPost(self)) continue;
+
+      let score: number;
+      if (i >= 5) {
+        // the block: being AT the goal is the point — a post big holds deep
+        // position even with his man draped over him, so openness barely
+        // counts here (ペイント holders are anchored even harder)
+        score = 6.0 + Math.min(open, 2.0) * 0.5 + lane * 0.8
+          - clog * 2.5
+          - dist2DTo(self.pos, s.x, s.z) * 0.1
+          + (self.has("centerSpot") ? 1.5 : 0);
+      } else {
+        score = open * (self.has("positioning") ? 1.35 : 1) // 特能: reads the open spot
+          + Math.min(fromHandler, 6) * 0.3   // keep some distance off the ball
+          + lane * 2.0                       // stay in a live passing lane
+          - clog * 2.5                       // vacate the drive gap to the rim
+          - dist2DTo(self.pos, s.x, s.z) * 0.1;
+        // spot preferences: サイド lives in the corners (idx 3/4)
+        if (self.has("sideSpot") && (i === 3 || i === 4)) score += 1.5;
+        // a post player leaves the goal area only reluctantly — and he doesn't
+        // hunt perimeter openness the way a shooter does, so a wide-open corner
+        // never outbids his block
+        if (this.prefersPost(self)) score = Math.min(score, 4.0) - 1.5;
+      }
       if (score > bestScore) { bestScore = score; bestI = i; }
     }
     return bestI;
@@ -2631,10 +2851,11 @@ export class Game {
     for (const p of this.players) {
       p.cutting = false;
       p.offTimer = rand(0.4, 2.0);
-      p.spotIdx = p.slot;
+      p.spotIdx = this.homeSpotIdx(p);   // post bigs head straight for the block
       p.beatenT = 0;
       p.powerT = 0;
       p.stalledT = 0;
+      p.jukeT = 0;
       p.reactT = 0;
       p.lean = 0;
       p.coolT = 0;   // a change of possession clears any lingering follow-through
@@ -2672,6 +2893,9 @@ export class Game {
       // the pass-jumper is sprinting to his interception point — leave him to it
       if (this.ballMode === "pass" && this.passSteal?.def === d) continue;
       const man = offense[d.slot];
+      // an outlet / throw-in is exactly when a big must sprint home, not shadow
+      // a trailing man up-court
+      if (this.getBackOnDefense(dt, d, man)) continue;
       const dx = protect.x - man.pos.x, dz = protect.z - man.pos.z;
       const len = Math.hypot(dx, dz) || 1;
       moveToward2D(d.pos, man.pos.x + (dx / len) * 1.5, man.pos.z + (dz / len) * 1.5,

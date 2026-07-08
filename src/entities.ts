@@ -71,6 +71,8 @@ export class Player {
   beatenT = 0;     // offence: time remaining of a successful (speed) blow-by burst
   powerT = 0;      // offence: time remaining of a bull/power drive shoving the man back
   stalledT = 0;    // offence: time the handler is walled off (contained), pulling it back out
+  jukeT = 0;       // offence: a dribble move (step-in / side-step / step-back) mid-execution
+  readonly jukeTarget = new Vector3(); // the footwork target while jukeT ticks down
   lean = 0;        // defence: lateral weight / centre of gravity (-1..1, 0 = square)
 
   // recovery cooldown after a pass or shot — the player is rooted (can't
@@ -119,7 +121,7 @@ export class Player {
     this.name = def.name;
     this.attr = def.attr;
     this.height = def.height;
-    this.runSpeed = 5.4 + rate(def.attr.speed) * 1.9; // ~5.4 (slow) .. 7.3 (fast)
+    this.runSpeed = 3.8 + rate(def.attr.speed) * 4.2; // ~3.8 (slow) .. 8.0 (fast)
 
     // offensive identity: role baseline nudged by ratings (or an explicit priority)
     this.role = def.role;
@@ -395,8 +397,28 @@ export class Player {
     // barely lets the feet move — the first step off a landing is sluggish
     const rec = (this.coolT > 0 || this.landT > 0) ? 0.35 : 1;
     const target = this.runSpeed * mult * (1 - this.fatigue * 0.2) * rec;
-    const acc = 4 + rate(this.attr.accel) * 10;        // m/s² — sluggish .. explosive
+    const acc = 3 + rate(this.attr.accel) * 13;        // m/s² — sluggish .. explosive
     return Math.min(target, this.curSpd + acc * dt);
+  }
+
+  /** Fraction of top speed kept when redirecting existing momentum toward
+   *  (tx,tz). 敏捷性 lets a quick player cut/reverse without losing speed; a slow
+   *  one has to decelerate to change direction. ~1 moving straight or from rest. */
+  turnFactor(tx: number, tz: number): number {
+    if (this.curSpd < 1.2) return 1;                   // little momentum to fight
+    const vl = Math.hypot(this.velX, this.velZ);
+    const dx = tx - this.pos.x, dz = tz - this.pos.z;
+    const dl = Math.hypot(dx, dz);
+    if (vl < 0.15 || dl < 0.1) return 1;
+    const dot = (dx * this.velX + dz * this.velZ) / (dl * vl); // -1 (reversal) .. 1 (straight)
+    const turn = (1 - dot) / 2;                         // 0 .. 1
+    const keep = 0.45 + rate(this.attr.agility) * 0.55; // 0.45 (slow) .. 1.0 (quick)
+    return clamp(1 - turn * (1 - keep), 0.35, 1);
+  }
+
+  /** accelSpeed scaled by the cost of changing direction toward (tx,tz). */
+  accelToward(dt: number, tx: number, tz: number, mult = 1): number {
+    return this.accelSpeed(dt, mult) * this.turnFactor(tx, tz);
   }
 
   /**

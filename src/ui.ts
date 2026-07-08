@@ -80,6 +80,9 @@ export class UI {
   private iconKey: string[] = ["", ""];
   private iconEl = new Map<import("./entities").Player, HTMLDivElement>(); // player → its current icon element
   private statSnap = new Map<import("./entities").Player, number[]>();     // last-seen POP_STATS values
+  private controls!: HTMLDivElement;      // speed / RESTART row
+  private iconPanels: HTMLDivElement[] = []; // the two team face-icon panels
+  private layoutMode = "";                // "desktop" | "phone" — recomputed on resize
 
   private phase: Phase = "pregame";
   private benchTab = [false, false];   // which tab each team editor is showing
@@ -149,18 +152,19 @@ export class UI {
     // foul banner and the resulting substitutions can show together
     this.subFeed = document.createElement("div");
     css(this.subFeed, {
-      position: "absolute", top: "58%", left: "50%", transform: "translateX(-50%)",
+      position: "absolute", top: "33%", left: "50%", transform: "translateX(-50%)",
       display: "flex", flexDirection: "column", gap: "8px", alignItems: "center",
-      pointerEvents: "none",
+      pointerEvents: "none", width: "max-content", maxWidth: "94vw",
     });
     this.hud.appendChild(this.subFeed);
 
     // ---- event banner ----
     this.banner = document.createElement("div");
     css(this.banner, {
-      position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
-      fontSize: "52px", fontWeight: "800", letterSpacing: "2px", opacity: "0",
-      textAlign: "center", transition: "opacity 0.2s",
+      position: "absolute", top: "27%", left: "50%", transform: "translate(-50%,-50%)",
+      // responsive: full size on a wide view, shrinks as the window narrows
+      fontSize: "clamp(28px,6.5vw,52px)", fontWeight: "800", letterSpacing: "2px", opacity: "0",
+      textAlign: "center", transition: "opacity 0.2s", whiteSpace: "nowrap", maxWidth: "96vw",
       // crisp dark outline (8-way) + a soft drop shadow, so the team-coloured text
       // reads sharply against the court instead of blurring into it. text-shadow
       // is inherited, so the scorer/assist sub-lines get the same outline.
@@ -172,22 +176,36 @@ export class UI {
     });
     this.hud.appendChild(this.banner);
 
-    // ---- controls ----
+    // ---- controls: a hamburger menu at the top-right (speed + RESTART) ----
+    const menuBtn = this.button("☰");
+    Object.assign(menuBtn.style, {
+      position: "absolute", top: "14px", right: "14px", pointerEvents: "auto",
+      fontSize: "18px", lineHeight: "1", padding: "7px 12px", zIndex: "20",
+    } as Partial<CSSStyleDeclaration>);
+    this.hud.appendChild(menuBtn);
+
     const controls = document.createElement("div");
+    this.controls = controls;
     css(controls, {
-      position: "absolute", bottom: "16px", left: "50%", transform: "translateX(-50%)",
-      display: "flex", gap: "8px", pointerEvents: "auto",
+      position: "absolute", top: "54px", right: "14px", display: "none",
+      flexDirection: "column", gap: "6px", pointerEvents: "auto", zIndex: "20",
+      background: "rgba(12,15,22,0.94)", border: "1px solid rgba(255,255,255,0.15)",
+      borderRadius: "10px", padding: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.55)",
     });
     this.hud.appendChild(controls);
+    menuBtn.onclick = () => { controls.style.display = controls.style.display === "none" ? "flex" : "none"; };
 
+    const speedRow = document.createElement("div");
+    Object.assign(speedRow.style, { display: "flex", gap: "6px" } as Partial<CSSStyleDeclaration>);
     for (const s of [1, 2, 4]) {
       const b = this.button(`${s}x`);
       b.onclick = () => { this.speed = s; this.refreshSpeed(); };
       this.speedBtns.push(b);
-      controls.appendChild(b);
+      speedRow.appendChild(b);
     }
+    controls.appendChild(speedRow);
     const restart = this.button("RESTART");
-    restart.onclick = () => this.onRestart();
+    restart.onclick = () => { this.onRestart(); controls.style.display = "none"; };
     controls.appendChild(restart);
 
     const hint = document.createElement("div");
@@ -304,11 +322,12 @@ export class UI {
 
     const buttons = document.createElement("div");
     Object.assign(buttons.style, { display: "flex", gap: "10px", marginTop: "8px" } as Partial<CSSStyleDeclaration>);
+    // responsive: full size on a wide view, shrinks as the window narrows
     const reroll = this.button("ランダム編成しなおす");
-    Object.assign(reroll.style, { fontSize: "15px", padding: "11px 22px" });
+    Object.assign(reroll.style, { fontSize: "clamp(11px,2.9vw,15px)", padding: "clamp(7px,1.8vw,11px) clamp(12px,3vw,22px)" });
     reroll.onclick = () => this.newMatchup();
     const start = this.button("TIP OFF");
-    Object.assign(start.style, { fontSize: "17px", padding: "11px 30px", background: "rgba(70,120,220,0.95)" });
+    Object.assign(start.style, { fontSize: "clamp(13px,3.3vw,17px)", padding: "clamp(7px,1.8vw,11px) clamp(16px,4vw,30px)", background: "rgba(70,120,220,0.95)" });
     start.onclick = () => { this.setPhase("playing"); this.onStart(); };
     buttons.append(reroll, start);
     p.appendChild(buttons);
@@ -737,6 +756,7 @@ export class UI {
       // tabs on top, icon row beneath (both teams)
       panel.appendChild(tabs);
       panel.appendChild(row);
+      this.iconPanels[t] = panel;
       this.hud.appendChild(panel);
     }
   }
@@ -747,7 +767,8 @@ export class UI {
   private makeFaceIcon(player: import("./entities").Player): HTMLDivElement {
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {
-      width: "48px", display: "flex", flexDirection: "column", alignItems: "center", gap: "2px",
+      width: "48px", flex: "0 0 auto", display: "flex", flexDirection: "column",
+      alignItems: "center", gap: "2px",
       pointerEvents: "auto", cursor: "help",   // hover shows the player's box score
     } as Partial<CSSStyleDeclaration>);
     wrap.onmouseenter = () => this.showStatTip(player, wrap);
@@ -816,6 +837,33 @@ export class UI {
     ctx.beginPath(); ctx.arc(W / 2, H * 0.60, W * 0.10, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
   }
 
+  // Responsive layout. On a phone-width screen both teams' face icons meet at the
+  // centre-bottom in one row (shrunk to fit — see refreshPlayerBars); on a wide
+  // screen they flank the centre. The controls live in the top hamburger either
+  // way, so they don't move.
+  private applyLayout(): void {
+    const mode = window.innerWidth < 640 ? "phone" : "desktop";
+    if (mode === this.layoutMode) return;
+    this.layoutMode = mode;
+    const [p0, p1] = this.iconPanels;
+    const [r0, r1] = this.iconRows;
+    if (mode === "phone") {
+      // ONE row: the two teams meet at the centre-bottom. Per-team sizing (fit
+      // the on-court 5 by shrinking / scroll the full-size bench) is done every
+      // frame in refreshPlayerBars, since it depends on the active tab.
+      if (p0) Object.assign(p0.style, { right: "50%", left: "auto", bottom: "6px", transformOrigin: "bottom right", alignItems: "flex-end", maxWidth: "" });
+      if (p1) Object.assign(p1.style, { left: "50%", right: "auto", bottom: "6px", transformOrigin: "bottom left", alignItems: "flex-start", maxWidth: "" });
+      for (const r of [r0, r1]) if (r) Object.assign(r.style, { overflowY: "hidden", scrollbarWidth: "thin", paddingBottom: "2px" } as Partial<CSSStyleDeclaration>);
+    } else {
+      if (p0) Object.assign(p0.style, { right: "calc(50% + 130px)", left: "auto", bottom: "16px", transform: "none", transformOrigin: "", maxWidth: "", alignItems: "flex-end" });
+      if (p1) Object.assign(p1.style, { left: "calc(50% + 130px)", right: "auto", bottom: "16px", transform: "none", transformOrigin: "", maxWidth: "", alignItems: "flex-start" });
+      for (const r of [r0, r1]) if (r) Object.assign(r.style, {
+        maxWidth: "", overflowX: "visible", overflowY: "visible",
+        pointerEvents: "", scrollbarWidth: "", paddingBottom: "",
+      } as Partial<CSSStyleDeclaration>);
+    }
+  }
+
   private refreshPlayerBars(game: Game): void {
     for (let t = 0; t < 2; t++) {
       // highlight the active tab
@@ -828,6 +876,17 @@ export class UI {
       const onCourt = game.players.filter((p) => p.team === t);
       const set = new Set(onCourt);
       const list = this.showBench[t] ? game.roster[t].filter((p) => !set.has(p)) : onCourt;
+      // phone: ONE row, two teams side by side. Icons are ALWAYS full size — the
+      // row just scrolls horizontally (swipe) within the team's half when the
+      // icons don't all fit. Never scaled.
+      const rw = this.iconRows[t];
+      if (rw) {
+        if (this.layoutMode === "phone") {
+          Object.assign(rw.style, { maxWidth: "49vw", overflowX: "auto", pointerEvents: "auto" });
+        } else {
+          Object.assign(rw.style, { maxWidth: "", overflowX: "visible", pointerEvents: "" });
+        }
+      }
       // rebuild only when the shown set (or tab) changes — subs swap the five
       const key = `${this.showBench[t] ? "B" : "C"}:${list.map((p) => p.idx).join(",")}`;
       if (key === this.iconKey[t]) continue;
@@ -889,6 +948,7 @@ export class UI {
   update(game: Game): void {
     if (this.phase === "playing" && game.state === "final") this.showResult(game);
 
+    this.applyLayout();
     this.refreshPlayerBars(game);
     this.updateStatPops(game);
     this.scoreA.textContent = String(game.score[0]);
@@ -915,13 +975,13 @@ export class UI {
         // on a made basket, credit who scored (and who assisted) underneath
         if (ev.scorer) {
           const sc = document.createElement("div");
-          Object.assign(sc.style, { fontSize: "26px", fontWeight: "700", letterSpacing: "1px", marginTop: "8px" });
+          Object.assign(sc.style, { fontSize: "clamp(16px,3.4vw,26px)", fontWeight: "700", letterSpacing: "1px", marginTop: "8px" });
           sc.textContent = ev.scorer;
           this.banner.appendChild(sc);
         }
         if (ev.assist) {
           const as = document.createElement("div");
-          Object.assign(as.style, { fontSize: "19px", fontWeight: "600", letterSpacing: "1px", marginTop: "3px", opacity: "0.85" });
+          Object.assign(as.style, { fontSize: "clamp(13px,2.5vw,19px)", fontWeight: "600", letterSpacing: "1px", marginTop: "3px", opacity: "0.85" });
           as.textContent = `アシスト  ${ev.assist}`;
           this.banner.appendChild(as);
         }
@@ -933,25 +993,33 @@ export class UI {
       this.bannerKey = "";
     }
 
-    // substitution feed: one chip per swap, centred like the event banner,
-    // fading out at the end of its life
+    // substitution feed: one chip per swap, at most the 3 most recent. When more
+    // pile up, the oldest shown one fades out and the rest shift up to take its
+    // place (a scrolling notification stack).
     this.subFeed.replaceChildren();
-    for (const e of game.subEvents) {
+    const shownSubs = game.subEvents.slice(-3);
+    const subOverflow = game.subEvents.length > 3;
+    for (let si = 0; si < shownSubs.length; si++) {
+      const e = shownSubs[si];
       const color = colorOf(e.team);
+      // the top (oldest shown) chip fades as it is pushed out by newer swaps
+      let op = Math.min(1, e.ttl / 0.8);
+      if (subOverflow && si === 0) op = Math.min(op, 0.35);
       const chip = document.createElement("div");
       Object.assign(chip.style, {
         background: "rgba(12,15,22,0.86)", border: `1px solid ${color}`,
-        borderRadius: "10px", padding: "8px 22px", textAlign: "center",
-        opacity: String(Math.min(1, e.ttl / 0.8)),
-        boxShadow: "0 6px 20px rgba(0,0,0,0.45)",
+        borderRadius: "10px", padding: "clamp(5px,1vw,8px) clamp(12px,2.8vw,22px)",
+        textAlign: "center", opacity: String(op),
+        boxShadow: "0 6px 20px rgba(0,0,0,0.45)", maxWidth: "94vw",
       } as Partial<CSSStyleDeclaration>);
       const title = document.createElement("div");
-      Object.assign(title.style, { fontSize: "13px", opacity: "0.7", letterSpacing: "3px", fontWeight: "700" });
+      // responsive: full size on a wide view, shrinks as the window narrows
+      Object.assign(title.style, { fontSize: "clamp(9px,1.7vw,13px)", opacity: "0.7", letterSpacing: "3px", fontWeight: "700" });
       title.textContent = "メンバーチェンジ";
       const line = document.createElement("div");
       Object.assign(line.style, {
-        fontSize: "26px", fontWeight: "800", color, letterSpacing: "1px",
-        textShadow: "0 3px 12px rgba(0,0,0,0.5)",
+        fontSize: "clamp(15px,3.4vw,26px)", fontWeight: "800", color, letterSpacing: "1px",
+        textShadow: "0 3px 12px rgba(0,0,0,0.5)", whiteSpace: "nowrap",
       });
       line.textContent = e.text;
       chip.append(title, line);
