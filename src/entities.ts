@@ -73,7 +73,13 @@ export class Player {
   stalledT = 0;    // offence: time the handler is walled off (contained), pulling it back out
   jukeT = 0;       // offence: a dribble move (step-in / side-step / step-back) mid-execution
   readonly jukeTarget = new Vector3(); // the footwork target while jukeT ticks down
+  comboN = 0;      // offence: shakes already thrown in the current rocking combo
+  lastFakeDir = 0; // offence: side the last fake sold, so the combo alternates
   lean = 0;        // defence: lateral weight / centre of gravity (-1..1, 0 = square)
+  // world-space lateral axis the lean refers to (unit XZ): the actual lean
+  // direction is (leanAxisX, leanAxisZ) * lean. Set wherever lean is modified.
+  leanAxisX = 0;
+  leanAxisZ = 0;
 
   // recovery cooldown after a pass or shot — the player is rooted (can't
   // initiate movement) until this elapses, modelling the release follow-through
@@ -378,6 +384,9 @@ export class Player {
    *  next facing update. */
   resetFacing(): void {
     this.root.rotation.y = 0;
+    this.root.rotation.x = this.root.rotation.z = 0;   // stand up straight, too
+    this.tiltX = this.tiltZ = 0;
+    this.lean = 0;
   }
 
   /** Tick down the post-pass/shot recovery cooldown. */
@@ -416,9 +425,51 @@ export class Player {
     return clamp(1 - turn * (1 - keep), 0.35, 1);
   }
 
-  /** accelSpeed scaled by the cost of changing direction toward (tx,tz). */
+  /** Fraction of speed kept moving toward (tx,tz) while the body is leaning:
+   *  moving WITH the lean (or square) is smooth, but cutting back AGAINST a
+   *  committed lean means first hauling the centre of gravity back over the
+   *  feet — that first step is slow. This is what a dribbler exploits by
+   *  rocking a defender side to side and bursting past the side he can't
+   *  recover to (the lean itself decays with 敏捷性 elsewhere). */
+  leanFactor(tx: number, tz: number): number {
+    const m = Math.abs(this.lean);
+    if (m < 0.12) return 1;                            // basically square
+    const dx = tx - this.pos.x, dz = tz - this.pos.z;
+    const dl = Math.hypot(dx, dz);
+    if (dl < 0.05) return 1;
+    // signed world-space lean direction
+    const lx = this.leanAxisX * this.lean, lz = this.leanAxisZ * this.lean;
+    const ll = Math.hypot(lx, lz);
+    if (ll < 1e-4) return 1;
+    const align = (dx * lx + dz * lz) / (dl * ll);     // -1 against .. +1 with
+    return clamp(1 - m * Math.max(0, -align) * 0.55, 0.4, 1);
+  }
+
+  /** accelSpeed scaled by the cost of changing direction toward (tx,tz) and of
+   *  fighting a committed body lean. */
   accelToward(dt: number, tx: number, tz: number, mult = 1): number {
-    return this.accelSpeed(dt, mult) * this.turnFactor(tx, tz);
+    return this.accelSpeed(dt, mult) * this.turnFactor(tx, tz) * this.leanFactor(tx, tz);
+  }
+
+  /** How fast (units/s) this player hauls his centre of gravity back over his
+   *  feet. クイックネス(敏捷性) rules it — and because the WE2010-derived scale
+   *  is compressed (most AGI sits in ~65..85), the slope is deliberately steep
+   *  so a real quartile gap shows: ~0.7/s for a heavy-footed 65 (a full lean
+   *  takes ~1.4 s to reset) vs ~2.0/s for a quick 85 (~0.5 s). */
+  leanRecoverRate(): number {
+    // pivot ~70: measured re-attack cadence is ~1.2 s, so below the pivot a
+    // full lean SURVIVES into the next shake (it stacks), above it the weight
+    // is square again before the dribbler can go
+    return clamp(0.35 + (rate(this.attr.agility) - 0.70) * 9.0, 0.3, 2.6);
+  }
+
+  /** Ease the committed lateral weight back to square when nobody is actively
+   *  duelling this player. (The on-ball duel has its own recovery in
+   *  defendOnBall, toward the shade.) */
+  decayLean(dt: number): void {
+    if (this.lean === 0) return;
+    const r = this.leanRecoverRate() * dt;
+    this.lean += clamp(-this.lean, -r, r);
   }
 
   /**
@@ -481,8 +532,31 @@ export class Player {
     return Math.sin(k * Math.PI) * this.jumpHeight;  // up then back down
   }
 
+  private tiltX = 0;  // smoothed visual body tilt (rad), applied in sync()
+  private tiltZ = 0;
+
   sync(): void {
     this.root.position.set(this.pos.x, this.jumpY(), this.pos.z);
+    // VISIBLE body lean: tip the whole figure toward the committed centre of
+    // gravity. World lean vector → the yaw-local frame using the codebase's
+    // verified convention (RotationY(θ) maps local +Z to (sinθ,0,cosθ) — see
+    // faceToward), then pitch/roll the root. Smoothed so shakes read as weight
+    // shifts, not snaps.
+    const m = this.lean * 0.30;                     // up to ~17° at a full lean
+    let tx = 0, tz = 0;
+    if (Math.abs(m) > 0.02) {
+      const wx = this.leanAxisX * m, wz = this.leanAxisZ * m;
+      const th = this.root.rotation.y;
+      const c = Math.cos(th), s = Math.sin(th);
+      const lx = wx * c - wz * s;                   // lean, in the yaw-local frame
+      const lz = wx * s + wz * c;
+      tx = lz;                                      // pitch: tip toward local +Z
+      tz = -lx;                                     // roll:  tip toward local +X
+    }
+    this.tiltX += (tx - this.tiltX) * 0.25;
+    this.tiltZ += (tz - this.tiltZ) * 0.25;
+    this.root.rotation.x = this.tiltX;
+    this.root.rotation.z = this.tiltZ;
   }
 
   /** Re-read name / height / role / priority / derived values from a (possibly
@@ -491,7 +565,7 @@ export class Player {
     this.role = def.role;
     this.attr = def.attr;   // re-bind: pre-game swaps can replace the def object
     this.abilities = new Set(def.abilities ?? []);
-    this.runSpeed = 5.4 + rate(def.attr.speed) * 1.9;
+    this.runSpeed = 3.8 + rate(def.attr.speed) * 4.2; // keep in sync with the constructor
     this.offPriority = computeOffPriority(def);
     this.playmaking = roleOffense(def.role).playmaking;
     if (def.name !== this.name) { this.name = def.name; this.drawNameTag(); }
