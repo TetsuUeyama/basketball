@@ -130,6 +130,9 @@ export interface PlayerDef {
   attr: Attributes;
   abilities?: AbilityKey[]; // 特殊能力 — 持っているものだけ列挙
   priority?: number;  // explicit offensive priority 0..1 (overrides the role/skill default)
+  // 評価ロール (UI): ハンドラー/エース/3&D等。OVRとチーム戦力バーの重み付けを
+  // 切り替える表示評価専用の設定 — 試合中のAIは変えない。undefined = 自動(ポジション基準)
+  evalRole?: string;
   // reserved (not wired into the sim yet): 安定度 / 逆手精度 / 逆手頻度 from the DB
   future?: { stability: number; offhandAcc: number; offhandFreq: number };
 }
