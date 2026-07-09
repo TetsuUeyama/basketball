@@ -54,6 +54,7 @@ export class UI {
   private resultWinner!: HTMLDivElement;
   private resultStats!: HTMLDivElement;
   private tooltip!: HTMLDivElement;
+  private tipHideT = 0;   // pending grace-period hide (see scheduleHideTip)
   private tipTitle!: HTMLDivElement;
   private tipBody!: HTMLDivElement;
 
@@ -99,6 +100,14 @@ export class UI {
 
   constructor() {
     const css = (el: HTMLElement, s: Partial<CSSStyleDeclaration>) => Object.assign(el.style, s);
+
+    // scrollable rows that must NOT grow when the scrollbar appears (the icon
+    // rows swap between a fitting and an overflowing list) hide the bar itself
+    const st = document.createElement("style");
+    st.textContent =
+      ".bball-hscroll{scrollbar-width:none;-ms-overflow-style:none}"
+      + ".bball-hscroll::-webkit-scrollbar{display:none}";
+    document.head.appendChild(st);
 
     this.root = document.createElement("div");
     css(this.root, {
@@ -177,10 +186,11 @@ export class UI {
     });
     this.hud.appendChild(this.banner);
 
-    // ---- controls: a hamburger menu at the top-right (speed + RESTART) ----
+    // ---- controls: a hamburger menu at the right, level with the shot clock
+    // (up at 14px it collided with the scoreboard's team name) ----
     const menuBtn = this.button("☰");
     Object.assign(menuBtn.style, {
-      position: "absolute", top: "14px", right: "14px", pointerEvents: "auto",
+      position: "absolute", top: "92px", right: "14px", pointerEvents: "auto",
       fontSize: "18px", lineHeight: "1", padding: "7px 12px", zIndex: "20",
     } as Partial<CSSStyleDeclaration>);
     this.hud.appendChild(menuBtn);
@@ -188,7 +198,7 @@ export class UI {
     const controls = document.createElement("div");
     this.controls = controls;
     css(controls, {
-      position: "absolute", top: "54px", right: "14px", display: "none",
+      position: "absolute", top: "132px", right: "14px", display: "none",
       flexDirection: "column", gap: "6px", pointerEvents: "auto", zIndex: "20",
       background: "rgba(12,15,22,0.94)", border: "1px solid rgba(255,255,255,0.15)",
       borderRadius: "10px", padding: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.55)",
@@ -245,6 +255,10 @@ export class UI {
     Object.assign(this.tipBody.style, { fontSize: "12px", lineHeight: "1.65", opacity: "0.92" });
 
     tip.append(this.tipTitle, this.tipBody);
+    // the stat tip carries a button, so the tip itself must survive the mouse
+    // travelling onto it (hide is scheduled with a grace period instead)
+    tip.onmouseenter = () => { if (this.tipHideT) { window.clearTimeout(this.tipHideT); this.tipHideT = 0; } };
+    tip.onmouseleave = () => this.hideTip();
     document.body.appendChild(tip);
     this.tooltip = tip;
   }
@@ -274,7 +288,16 @@ export class UI {
   }
 
   private hideTip(): void {
+    if (this.tipHideT) { window.clearTimeout(this.tipHideT); this.tipHideT = 0; }
     this.tooltip.style.display = "none";
+    this.tooltip.style.pointerEvents = "none";
+  }
+
+  /** Hide the tooltip after a short grace period — cancelled if the mouse
+   *  arrives on the tooltip itself (it may hold a button). */
+  private scheduleHideTip(): void {
+    if (this.tipHideT) window.clearTimeout(this.tipHideT);
+    this.tipHideT = window.setTimeout(() => { this.tipHideT = 0; this.hideTip(); }, 200);
   }
 
   // Hover a player icon → show his live box score, floated ABOVE the icon (the
@@ -289,7 +312,21 @@ export class UI {
       `<div>${cell("PTS", s.pts)}${cell("REB", s.reb)}${cell("AST", s.ast)}</div>` +
       `<div>${cell("STL", s.stl)}${cell("BLK", s.blk)}${cell("TO", s.tov)}</div>` +
       `<div style="margin-top:3px;opacity:.8">FG ${s.fgm}/${s.fga}　MIN ${(s.min / 60).toFixed(1)}</div>`;
+    // ステータス確認 → the pregame full-ratings modal (25 ratings, hexagon,
+    // 特殊能力 and the hand-set 評価ロール) for this player
+    const btn = this.button("ステータス確認");
+    Object.assign(btn.style, {
+      display: "block", width: "100%", marginTop: "7px", fontSize: "11px",
+      padding: "5px 0", boxSizing: "border-box",
+    } as Partial<CSSStyleDeclaration>);
+    btn.onclick = () => {
+      this.hideTip();
+      const def = ROSTER[player.team]?.[player.idx];
+      if (def) this.openDetailModal(def, player.team);
+    };
+    this.tipBody.appendChild(btn);
     const tip = this.tooltip;
+    tip.style.pointerEvents = "auto";   // the button must be clickable
     tip.style.display = "block";
     const r = anchor.getBoundingClientRect();
     const tw = tip.offsetWidth, th = tip.offsetHeight;
@@ -508,6 +545,28 @@ export class UI {
   private effWeights(def: PlayerDef): { ax: number[]; ht: number } {
     return (def.evalRole && UI.EVAL_ROLES[def.evalRole])
       || UI.ROLE_W[def.role] || UI.ROLE_W.SF;
+  }
+
+  // The five position chips in a row — every position this player can cover
+  // (his own included) lit in the SAME team-colour highlight, the rest dimmed.
+  private positionChips(def: PlayerDef, color: string): HTMLDivElement {
+    const covers = new Set(this.coverablePositions(def));
+    const row = document.createElement("div");
+    Object.assign(row.style, { display: "flex", gap: "4px", justifyContent: "center" } as Partial<CSSStyleDeclaration>);
+    for (const r of ["PG", "SG", "SF", "PF", "C"]) {
+      const on = covers.has(r);
+      const c = document.createElement("span");
+      Object.assign(c.style, {
+        fontSize: "10px", fontWeight: "800", width: "36px", padding: "2px 0",
+        textAlign: "center", borderRadius: "6px", boxSizing: "border-box",
+        background: on ? color : "rgba(255,255,255,0.04)",
+        color: on ? "#0d1016" : "rgba(255,255,255,0.28)",
+        border: on ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.1)",
+      } as Partial<CSSStyleDeclaration>);
+      c.textContent = r;
+      row.appendChild(c);
+    }
+    return row;
   }
 
   // 守れるポジション: the game's substitution adjacency (roleFit in game.ts),
@@ -1025,12 +1084,12 @@ export class UI {
     nm.textContent = `${def.role}  ${def.name}`;
     const meta = document.createElement("div");
     Object.assign(meta.style, { fontSize: "12px", opacity: "0.8", whiteSpace: "nowrap" });
-    const covers = this.coverablePositions(def);
     meta.textContent = `${Math.round(def.height * 100)}cm  OVR ${this.ovrOf(def)}`
-      + (covers.length > 1 ? `  守れる: ${covers.join("/")}` : "")
       + (def.evalRole ? `  [${def.evalRole}]` : "");
     head.append(nm, meta);
     panel.appendChild(head);
+    // coverable positions — five chips above the ratings, his lit up
+    panel.appendChild(this.positionChips(def, color));
 
     // hexagon digest + all 25 ratings: side by side on desktop, stacked into a
     // tall column on the phone (chart on top, ratings below, full width)
@@ -1131,14 +1190,10 @@ export class UI {
     head.append(nm, meta);
     card.appendChild(head);
 
-    // multi-position defenders wear it proudly
-    const covers = this.coverablePositions(def);
-    if (covers.length > 1) {
-      const cv2 = document.createElement("div");
-      Object.assign(cv2.style, { fontSize: "10px", opacity: "0.7", margin: "0 0 2px" });
-      cv2.textContent = `守れるポジション: ${covers.join(" / ")}`;
-      card.appendChild(cv2);
-    }
+    // coverable positions: the five chips with his lit up
+    const chipsRow = this.positionChips(def, color);
+    chipsRow.style.margin = "1px 0 3px";
+    card.appendChild(chipsRow);
 
     const cv = document.createElement("canvas");
     cv.width = 236; cv.height = 196;
@@ -1405,7 +1460,24 @@ export class UI {
       });
 
       const row = document.createElement("div");
-      Object.assign(row.style, { display: "flex", gap: "6px" } as Partial<CSSStyleDeclaration>);
+      Object.assign(row.style, { display: "flex", gap: "6px", touchAction: "pan-x" } as Partial<CSSStyleDeclaration>);
+      row.classList.add("bball-hscroll");   // scrolling never shows a bar / adds height
+      // the bar is hidden, so give the mouse ways to slide the bench row:
+      // wheel scrolls it sideways, and press-drag pans it (touch swipes natively)
+      row.onwheel = (e) => {
+        if (row.scrollWidth <= row.clientWidth) return;
+        row.scrollLeft += e.deltaY || e.deltaX;
+        e.preventDefault();
+      };
+      let dragX = -1, dragScroll = 0;
+      row.onpointerdown = (e) => {
+        if (e.pointerType !== "mouse" || row.scrollWidth <= row.clientWidth) return;
+        dragX = e.clientX; dragScroll = row.scrollLeft;
+        row.setPointerCapture(e.pointerId);
+      };
+      row.onpointermove = (e) => { if (dragX >= 0) row.scrollLeft = dragScroll - (e.clientX - dragX); };
+      row.onpointerup = () => { dragX = -1; };
+      row.onpointercancel = () => { dragX = -1; };
       this.iconRows[t] = row;
 
       // tabs on top, icon row beneath (both teams)
@@ -1427,7 +1499,7 @@ export class UI {
       pointerEvents: "auto", cursor: "help",   // hover shows the player's box score
     } as Partial<CSSStyleDeclaration>);
     wrap.onmouseenter = () => this.showStatTip(player, wrap);
-    wrap.onmouseleave = () => this.hideTip();
+    wrap.onmouseleave = () => this.scheduleHideTip();   // grace to reach the tip's button
 
     const face = document.createElement("div");
     Object.assign(face.style, {
@@ -1508,7 +1580,7 @@ export class UI {
       // frame in refreshPlayerBars, since it depends on the active tab.
       if (p0) Object.assign(p0.style, { right: "50%", left: "auto", bottom: "6px", transformOrigin: "bottom right", alignItems: "flex-end", maxWidth: "" });
       if (p1) Object.assign(p1.style, { left: "50%", right: "auto", bottom: "6px", transformOrigin: "bottom left", alignItems: "flex-start", maxWidth: "" });
-      for (const r of [r0, r1]) if (r) Object.assign(r.style, { overflowY: "hidden", scrollbarWidth: "thin", paddingBottom: "2px" } as Partial<CSSStyleDeclaration>);
+      for (const r of [r0, r1]) if (r) Object.assign(r.style, { overflowY: "hidden", paddingBottom: "" } as Partial<CSSStyleDeclaration>);
     } else {
       if (p0) Object.assign(p0.style, { right: "calc(50% + 130px)", left: "auto", bottom: "16px", transform: "none", transformOrigin: "", maxWidth: "", alignItems: "flex-end" });
       if (p1) Object.assign(p1.style, { left: "calc(50% + 130px)", right: "auto", bottom: "16px", transform: "none", transformOrigin: "", maxWidth: "", alignItems: "flex-start" });
@@ -1535,10 +1607,26 @@ export class UI {
       // row just scrolls horizontally (swipe) within the team's half when the
       // icons don't all fit. Never scaled.
       const rw = this.iconRows[t];
-      if (rw) {
+      const pn = this.iconPanels[t];
+      if (rw && pn) {
         if (this.layoutMode === "phone") {
-          Object.assign(rw.style, { maxWidth: "49vw", overflowX: "auto", pointerEvents: "auto" });
+          // ONE icon size for both tabs: whatever lets the on-court FIVE fill
+          // the team's half (48px icons + 6px gaps → 264px natural)
+          const natural5 = 5 * 48 + 4 * 6;
+          const s = Math.min(1, (window.innerWidth * 0.49) / natural5);
+          pn.style.transform = `scale(${s})`;
+          if (this.showBench[t]) {
+            // BENCH: same-size icons that SLIDE — the scroll window is sized in
+            // pre-scale units so it still shows exactly the half width
+            Object.assign(rw.style, {
+              maxWidth: `${Math.round((window.innerWidth * 0.49) / s)}px`,
+              overflowX: "auto", pointerEvents: "auto",
+            });
+          } else {
+            Object.assign(rw.style, { maxWidth: "", overflowX: "visible", pointerEvents: "auto" });
+          }
         } else {
+          pn.style.transform = "none";
           Object.assign(rw.style, { maxWidth: "", overflowX: "visible", pointerEvents: "" });
         }
       }
