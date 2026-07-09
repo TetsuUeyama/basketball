@@ -130,10 +130,13 @@ export interface PlayerDef {
   attr: Attributes;
   abilities?: AbilityKey[]; // 特殊能力 — 持っているものだけ列挙
   priority?: number;  // explicit offensive priority 0..1 (overrides the role/skill default)
-  // 評価ロール (UI): ハンドラー/エース/3&D等。OVRとチーム戦力バーの重み付けを
-  // 切り替える表示評価専用の設定 — 試合中のAIは変えない。undefined = 自動(ポジション基準)
+  // 評価ロール: ハンドラー/エース/3&D等。OVR/チーム戦力バーの評価重みに加え、
+  // ROLE_BEHAVIOR 経由で**試合中の挙動**（仮想特能・攻撃優先度・プレイメイキング）
+  // も変える。undefined = 自動(ポジション基準の評価・挙動補正なし)
   evalRole?: string;
-  // reserved (not wired into the sim yet): 安定度 / 逆手精度 / 逆手頻度 from the DB
+  // 利き手 (DBの利き足を読み替え)。攻める側の選択と逆手フィニッシュ精度に影響
+  hand?: "R" | "L";
+  // 安定度は未配線。逆手精度/逆手頻度は利き手システムが使用
   future?: { stability: number; offhandAcc: number; offhandFreq: number };
 }
 
@@ -167,6 +170,35 @@ export const TACTICS: Tactics[] = [
 
 /** Map a 0..100 rating to a 0..1 factor. */
 export const rate = (r: number): number => clamp(r, 0, 100) / 100;
+
+// ---------------------------------------------------------------------------
+// 評価ロール → 試合中の挙動 (keys = UI の EVAL_ROLES と同じ日本語名)。
+// `ab` はロールが付与する“仮想特能” — 既存の特殊能力の配線にそのまま乗るので、
+// ロールを設定するだけで該当する判断・動きが変わる。`pri` は攻撃優先度への加算
+// （ボールが集まる度・守備の省エネ判定に影響）、`pm` はプレイメイキング加算
+// （ボール運び/アウトレットの受け手優先度に影響）。
+// ---------------------------------------------------------------------------
+export const ROLE_BEHAVIOR: Record<string, { ab?: AbilityKey[]; pri?: number; pm?: number }> = {
+  メインハンドラー:      { ab: ["keepDribble"], pm: 0.5 },               // ボール運び役を奪う(PG基準1.0超え)
+  セカンドハンドラー:    { pm: 0.2 },                                    // 第2の組み立て役
+  フロアジェネラル:      { ab: ["general"], pm: 0.45 },                  // チーム全体の動きを速く正確に
+  スラッシャー:          { ab: ["driver"], pri: 0.06 },                  // ドライブを積極的に選ぶ
+  エース:                { ab: ["striker", "isoShooter"], pri: 0.18 },   // 第1オプション化+単独で打ち切る
+  スポットアップ:        { ab: ["oneTouch"], pri: 0.02 },                // キャッチ&シュート特化
+  "3&D":                 { ab: ["oneTouch", "manMark"], pri: -0.06 },    // C&S+タイトなマンマーク
+  ポイントフォワード:    { pm: 0.3 },                                    // FWがボールを運ぶ
+  ストレッチ:            { ab: ["range", "sideSpot"], pri: 0.02 },       // 射程延長+外に張る(ポスト常駐しない)
+  リムプロテクター:      { ab: ["covering"], pri: -0.1 },                // 抜かれた味方のカバーへ先回り
+  リムランナー:          { ab: ["leakOut"], pri: -0.04 },                // 攻守交替で真っ先に走る
+  スクリーナー:          { pri: -0.12 },                                 // スクリーン頻度はgame.ts側で加算
+  プレイメイキングビッグ: { ab: ["throughPass"], pm: 0.35 },              // ビッグがラストパスを配る
+  リバウンダー:          { ab: ["centerSpot"], pri: -0.12 },             // ペイント常駐+ビッグ同様に板へ突入
+  フロアスペーサー:      { ab: ["sideSpot", "oneTouch"], pri: -0.04 },   // コーナーに張ってC&S
+  オフボールカッター:    { ab: ["lineMove"], pri: -0.02 },               // カットが速く頻度も上がる
+  ロックダウン:          { ab: ["manMark"], pri: -0.1 },                 // 常時全力マーク(省エネ免除)
+  スイッチディフェンダー: { ab: ["covering", "manMark"], pri: -0.08 },    // カバー+マーク両立(省エネ免除)
+  エナジーガイ:          { ab: ["interceptor"], pri: -0.08 },            // リーチイン/飛び出し+常時全力
+};
 
 // ---------------------------------------------------------------------------
 // Role-based offensive identity. `scoreBase` is how much of a scoring option the
@@ -239,7 +271,7 @@ export function randomizeRosters(): void {
   const roles = ["PG", "SG", "SF", "PF", "C", ...BENCH_ROLES];
   for (let t = 0; t < 2; t++) {
     for (let i = 0; i < ROSTER_SIZE; i++) {
-      const [name, , hcm, ratings, mask, extras] = draw(roles[i]);
+      const [name, , hcm, ratings, mask, extras, hand] = draw(roles[i]);
       const def = ROSTER[t][i];
       def.name = name;
       def.role = roles[i];
@@ -247,6 +279,7 @@ export function randomizeRosters(): void {
       def.priority = undefined;
       ATTR_META.forEach((m, k) => { def.attr[m.key] = clamp(ratings[k] ?? 50, 0, 100); });
       def.abilities = ABILITY_META.filter((_, b) => mask & (1 << b)).map((m) => m.key);
+      def.hand = hand === "L" ? "L" : "R";
       def.future = { stability: extras[0] ?? 0, offhandAcc: extras[1] ?? 0, offhandFreq: extras[2] ?? 0 };
     }
   }

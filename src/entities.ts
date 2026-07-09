@@ -3,7 +3,7 @@ import {
   DynamicTexture,
 } from "@babylonjs/core";
 import { TEAM_COLORS } from "./config";
-import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority } from "./attributes";
+import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority, ROLE_BEHAVIOR } from "./attributes";
 import { clamp, rand } from "./util";
 
 // A player's box-score line for the current game. `min` is time on court in
@@ -34,6 +34,10 @@ export class Player {
   height: number;                // metres
   runSpeed: number;              // m/s, derived from the `speed` rating
   role: string;                  // PG / SG / SF / PF / C
+  evalRole: string | undefined;  // 評価ロール — behaviour modifiers applied in applyDef
+  hand: "R" | "L" = "R";         // 利き手 — preferred attacking side & finish hand
+  offhandAcc = 5;                // 逆手精度 2..8 (WE2010 scale) — weak-hand finish quality
+  offhandFreq = 5;               // 逆手頻度 2..8 — how willingly he goes weak-side
   offPriority: number;           // 0..1 scoring-option weight (go-to scorer = high)
   playmaking: number;            // 0..1 ball-bringing / playmaking role (PG = high)
 
@@ -445,6 +449,13 @@ export class Player {
     return clamp(1 - m * Math.max(0, -align) * 0.55, 0.4, 1);
   }
 
+  /** +1 = the dominant-hand side, -1 = the weak side (driveSide space). */
+  strongSide(): number { return this.hand === "L" ? -1 : 1; }
+
+  /** How strongly he favours his dominant side when free to choose a side —
+   *  逆手頻度 8 plays both ways (50/50), 2 is heavily one-handed (~70/30). */
+  strongSideBias(): number { return 0.5 + (1 - this.offhandFreq / 8) * 0.27; }
+
   /** accelSpeed scaled by the cost of changing direction toward (tx,tz) and of
    *  fighting a committed body lean. */
   accelToward(dt: number, tx: number, tz: number, mult = 1): number {
@@ -568,6 +579,19 @@ export class Player {
     this.runSpeed = 3.8 + rate(def.attr.speed) * 4.2; // keep in sync with the constructor
     this.offPriority = computeOffPriority(def);
     this.playmaking = roleOffense(def.role).playmaking;
+    // 評価ロールを実挙動へ: 仮想特能の付与と優先度/プレイメイキング補正。
+    // これで「エースにはボールが集まる」「ロックダウンは常時マンマーク」等が
+    // 既存の特殊能力/優先度の配線に乗って動く。
+    this.evalRole = def.evalRole;
+    this.hand = def.hand ?? "R";
+    this.offhandAcc = def.future?.offhandAcc || 5;
+    this.offhandFreq = def.future?.offhandFreq || 5;
+    const rb = def.evalRole ? ROLE_BEHAVIOR[def.evalRole] : undefined;
+    if (rb) {
+      for (const k of rb.ab ?? []) this.abilities.add(k);
+      this.offPriority = clamp(this.offPriority + (rb.pri ?? 0), 0, 1);
+      this.playmaking = clamp(this.playmaking + (rb.pm ?? 0), 0, 1);
+    }
     if (def.name !== this.name) { this.name = def.name; this.drawNameTag(); }
     if (def.height !== this.height) {
       this.height = def.height;

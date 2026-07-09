@@ -518,8 +518,9 @@ export class UI {
   };
 
   // 評価ロール: a hand-set role overrides the position weights — the same
-  // player rates differently as an エース than as a 3&D piece. Display /
-  // team-strength evaluation only; the in-game AI is untouched.
+  // player rates differently as an エース than as a 3&D piece. Roles also
+  // CHANGE IN-GAME BEHAVIOUR via ROLE_BEHAVIOR in attributes.ts (virtual
+  // abilities + priority/playmaking shifts, applied at tip-off in applyDef).
   // `pos` = which positions can take the role; undefined = 全ポジション共通
   // (the modern position-crossing jobs). `short` = the code shown on the pill.
   private static readonly EVAL_ROLES: Record<string, { ax: number[]; ht: number; short: string; pos?: string[]; tip: string }> = {
@@ -1115,7 +1116,7 @@ export class UI {
     nm.textContent = `${def.role}  ${def.name}`;
     const meta = document.createElement("div");
     Object.assign(meta.style, { fontSize: "12px", opacity: "0.8", whiteSpace: "nowrap" });
-    meta.textContent = `${Math.round(def.height * 100)}cm  OVR ${this.ovrOf(def)}`;
+    meta.textContent = `${Math.round(def.height * 100)}cm ${def.hand === "L" ? "左" : "右"}利き  OVR ${this.ovrOf(def)}`;
     // 役割 — switched HERE (the icon pill is display-only): opens the same
     // picker as the pregame roster, then the modal rebuilds with the new role
     const roleBtn = document.createElement("button");
@@ -1230,7 +1231,7 @@ export class UI {
     nm.textContent = `${def.role}  ${def.name}`;
     const meta = document.createElement("div");
     Object.assign(meta.style, { fontSize: "11px", opacity: "0.75", whiteSpace: "nowrap" });
-    meta.textContent = `${Math.round(def.height * 100)}cm  OVR ${this.ovrOf(def)}`
+    meta.textContent = `${Math.round(def.height * 100)}cm ${def.hand === "L" ? "左" : "右"}利き  OVR ${this.ovrOf(def)}`
       + (def.evalRole ? `  [${def.evalRole}]` : "");
     head.append(nm, meta);
     card.appendChild(head);
