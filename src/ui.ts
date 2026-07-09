@@ -415,7 +415,35 @@ export class UI {
   /** Draw a fresh random matchup from the database and rebuild the editors. */
   private newMatchup(): void {
     randomizeRosters();
+    this.autoAssignRoles();   // sensible default 役割 for the fresh draw
     this.refreshEditors();
+  }
+
+  // Hand every player a default 評価ロール from the fresh draw: the role his
+  // profile fits best among those his position can take, with a team-balance
+  // penalty so five エース never happens — the roles spread across the squad.
+  // Starters are assigned first (they define the team's shape), then the bench.
+  private autoAssignRoles(): void {
+    for (let t = 0; t < 2; t++) {
+      const taken = new Map<string, number>();
+      for (let i = 0; i < ROSTER_SIZE; i++) {
+        const def = ROSTER[t][i];
+        const ax = this.axesOf(def);
+        const hs = UI.heightValue(def.height * 100);
+        let best = "";
+        let bestS = -Infinity;
+        for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
+          if (r.pos && !r.pos.includes(def.role)) continue;
+          let s = r.ht * hs, tot = r.ht;
+          for (let k = 0; k < ax.length; k++) { s += r.ax[k] * ax[k]; tot += r.ax[k]; }
+          s /= tot;
+          s -= (taken.get(nm) ?? 0) * 4;   // balance: each repeat costs 4 pts
+          if (s > bestS) { bestS = s; best = nm; }
+        }
+        def.evalRole = best || undefined;
+        if (best) taken.set(best, (taken.get(best) ?? 0) + 1);
+      }
+    }
   }
 
   /** Rebuild the VS board and both roster cards from the current ROSTER. */
@@ -945,13 +973,15 @@ export class UI {
   // Floating role-picker menu: press the pill → choose the 評価ロール from a
   // list (the current one is lit in the team colour). Closes on pick or on any
   // press outside.
-  private openRolePicker(def: PlayerDef, team: number, anchor: HTMLElement): void {
+  private openRolePicker(def: PlayerDef, team: number, anchor: HTMLElement,
+                         onPick?: () => void): void {
     this.closeRolePicker();
     this.hidePlayerCard();
+    this.hideTip();
     const color = colorOf(team);
     const menu = document.createElement("div");
     Object.assign(menu.style, {
-      position: "fixed", zIndex: "80", display: "flex", flexDirection: "column", gap: "4px",
+      position: "fixed", zIndex: "88", display: "flex", flexDirection: "column", gap: "4px",
       background: "rgba(12,15,22,0.98)", border: "1px solid rgba(255,255,255,0.25)",
       borderRadius: "10px", padding: "7px", boxShadow: "0 12px 32px rgba(0,0,0,0.6)",
       pointerEvents: "auto",
@@ -973,7 +1003,8 @@ export class UI {
       b.onclick = () => {
         def.evalRole = nm === "自動" ? undefined : nm;
         this.closeRolePicker();
-        this.refreshEditors();   // OVR + team bars re-evaluate
+        if (onPick) onPick();
+        else this.refreshEditors();   // OVR + team bars re-evaluate
       };
       cell.appendChild(b);
       // ⓘ — press (or hover) to read what the role means / what it rewards
@@ -1084,9 +1115,23 @@ export class UI {
     nm.textContent = `${def.role}  ${def.name}`;
     const meta = document.createElement("div");
     Object.assign(meta.style, { fontSize: "12px", opacity: "0.8", whiteSpace: "nowrap" });
-    meta.textContent = `${Math.round(def.height * 100)}cm  OVR ${this.ovrOf(def)}`
-      + (def.evalRole ? `  [${def.evalRole}]` : "");
-    head.append(nm, meta);
+    meta.textContent = `${Math.round(def.height * 100)}cm  OVR ${this.ovrOf(def)}`;
+    // 役割 — switched HERE (the icon pill is display-only): opens the same
+    // picker as the pregame roster, then the modal rebuilds with the new role
+    const roleBtn = document.createElement("button");
+    roleBtn.textContent = `役割: ${def.evalRole ?? "自動"} ▾`;
+    Object.assign(roleBtn.style, {
+      fontSize: "11px", fontWeight: "700", padding: "3px 12px", borderRadius: "8px",
+      cursor: "pointer", whiteSpace: "nowrap",
+      background: def.evalRole ? color : "rgba(255,255,255,0.07)",
+      color: def.evalRole ? "#0d1016" : "#dfe4ee",
+      border: def.evalRole ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.2)",
+    } as Partial<CSSStyleDeclaration>);
+    roleBtn.onclick = () => this.openRolePicker(def, team, roleBtn, () => {
+      this.refreshEditors();            // pregame VS board / rosters re-evaluate
+      this.openDetailModal(def, team);  // ...and this modal reopens up to date
+    });
+    head.append(nm, meta, roleBtn);
     panel.appendChild(head);
     // coverable positions — five chips above the ratings, his lit up
     panel.appendChild(this.positionChips(def, color));
@@ -1532,6 +1577,23 @@ export class UI {
       textShadow: "0 1px 3px rgba(0,0,0,0.9)",
     } as Partial<CSSStyleDeclaration>);
     wrap.appendChild(name);
+
+    // 評価ロール pill under the name — DISPLAY only (switching happens inside
+    // the ステータス確認 modal). The icon bar rebuilds when a role changes,
+    // because the role codes are part of the rebuild key.
+    const color = colorOf(player.team);
+    const cur = ROSTER[player.team]?.[player.idx]?.evalRole;
+    const rolePill = document.createElement("div");
+    rolePill.textContent = cur ? (UI.EVAL_ROLES[cur]?.short ?? "?") : "-";
+    Object.assign(rolePill.style, {
+      width: "44px", fontSize: "8px", padding: "1px 0", textAlign: "center",
+      borderRadius: "6px", boxSizing: "border-box", lineHeight: "1.4",
+      background: cur ? color : "rgba(20,24,34,0.85)",
+      color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.7)",
+      border: cur ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.22)",
+      fontWeight: cur ? "800" : "600",
+    } as Partial<CSSStyleDeclaration>);
+    wrap.appendChild(rolePill);
     return wrap;
   }
 
@@ -1630,8 +1692,10 @@ export class UI {
           Object.assign(rw.style, { maxWidth: "", overflowX: "visible", pointerEvents: "" });
         }
       }
-      // rebuild only when the shown set (or tab) changes — subs swap the five
-      const key = `${this.showBench[t] ? "B" : "C"}:${list.map((p) => p.idx).join(",")}`;
+      // rebuild only when the shown set (or a name / tab / 評価ロール) changes —
+      // names are in the key so a tip-off applyRoster rename rebuilds at once
+      const key = `${this.showBench[t] ? "B" : "C"}:`
+        + list.map((p) => `${p.idx}:${p.name}:${ROSTER[t]?.[p.idx]?.evalRole ?? ""}`).join(",");
       if (key === this.iconKey[t]) continue;
       this.iconKey[t] = key;
       const row = this.iconRows[t];
@@ -1692,8 +1756,13 @@ export class UI {
     if (this.phase === "playing" && game.state === "final") this.showResult(game);
 
     this.applyLayout();
-    this.refreshPlayerBars(game);
-    this.updateStatPops(game);
+    // only while actually playing: during the pregame screen the Players still
+    // carry the PREVIOUS draw's names (applyRoster runs at tip-off), so icons
+    // built then would show stale names
+    if (this.phase === "playing") {
+      this.refreshPlayerBars(game);
+      this.updateStatPops(game);
+    }
     this.scoreA.textContent = String(game.score[0]);
     this.scoreB.textContent = String(game.score[1]);
     const t = Math.max(0, game.gameClock);
