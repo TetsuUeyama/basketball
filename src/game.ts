@@ -55,6 +55,12 @@ export class Game {
   // true once the ball has been established in the frontcourt this possession —
   // from then on, taking it back across halfway is a BACKCOURT violation
   private frontT = false;
+  // fast-break window: >0 for a few seconds after a live-ball change of
+  // possession (steal / defensive rebound), while the ball is still in the
+  // backcourt and the defence is scrambling back. During it the handler
+  // attacks the rim and wings sprint the lanes — this is where SPEED / 加速力
+  // / 敏捷性 pay off in the open court (the half-court is spot-based).
+  private pushT = 0;
 
   // pass animation
   private passFrom = new Vector3();
@@ -842,6 +848,7 @@ export class Game {
 
   private updateLive(dt: number): void {
     const h = this.handler!;
+    if (this.pushT > 0) this.pushT = Math.max(0, this.pushT - dt);
     // ball clearly past halfway → frontcourt established for this possession
     if (!this.frontT && this.attackSign(h.team) * h.pos.z > 0.6) this.frontT = true;
     this.runOffense(dt, h);
@@ -972,6 +979,10 @@ export class Game {
       return;
     }
 
+    // FAST BREAK: a guard/wing with the ball and an open floor pushes it hard
+    // at the rim before the defence sets (the big already outlet above).
+    if (this.pushT > 0) { this.pushBreak(h, dHoop); return; }
+
     // at the rim → finish; shot-clock dying → put one up
     // at the rim → finish. A handler arriving at full burst takes off earlier —
     // the driving layup/floater launches from a step further out
@@ -1006,6 +1017,23 @@ export class Game {
         od.reactT = Math.max(od.reactT, rand(0.35, 0.6) * this.reactionLag(od));
         this.setDriveSide(h);
         return;
+      }
+      // ATTACK THE CLOSEOUT: a defender still flying at him under control-less
+      // momentum (high closing speed) can be driven straight past — the handle
+      // (技術) and quickness (敏捷性) beat him, and his ボディバランス is what
+      // lets him stop and stay down instead of blowing by. A slow, balanced
+      // closeout isn't punished.
+      if (od && !od.airborne && dDef < 2.4 && od.curSpd > od.runSpeed * 0.55
+          && this.canIso(h, dHoop)) {
+        const edge = rate(h.attr.handling) * 0.4 + rate(h.attr.agility) * 0.35
+          + rate(h.attr.dribbleAcc) * 0.25 - rate(od.attr.balance) * 0.5;
+        if (chance(clamp(0.3 + edge, 0.08, 0.75))) {
+          h.driveSide = this.pickSide(h);
+          h.beatenT = rand(0.55, 0.85);
+          od.reactT = Math.max(od.reactT, rand(0.3, 0.5) * this.reactionLag(od));
+          this.setDriveSide(h);
+          return;
+        }
       }
     }
 
@@ -1142,6 +1170,36 @@ export class Game {
   // up himself rather than getting stuck.
   private advanceSafely(h: Player): void {
     this.setDrive(h, this.attackFloor(h.team), 8);   // ~top of the key, in the frontcourt
+  }
+
+  // Open a fast-break window after a live-ball change of possession, if the
+  // ball is in the backcourt (a real chance to beat the defence down the floor).
+  private maybeStartPush(): void {
+    const h = this.handler;
+    if (h && !this.frontT && this.attackSign(h.team) * h.pos.z < 6) this.pushT = 4.5;
+  }
+
+  // FAST BREAK: the handler pushes the ball hard at the rim before the defence
+  // gets set. If a wing has beaten his man down the floor and is open near the
+  // rim, hit him for the layup instead. SPEED / 加速力 (how fast the handler
+  // covers ground and the runners fill the lanes) decide whether it lands.
+  private pushBreak(h: Player, dHoop: number): void {
+    // ahead-of-the-ball runner open at the rim → drop it off
+    const rim = this.attackFloor(h.team);
+    let best: Player | null = null, bestGap = 1.6;
+    for (const p of this.teamPlayers(h.team)) {
+      if (p === h) continue;
+      const dRim = dist2D(p.pos, rim);
+      const ahead = this.attackSign(h.team) * (p.pos.z - h.pos.z) > 1.5;
+      if (ahead && dRim < 4.5) {
+        const g = this.nearestDefenderDist(p);
+        if (g > bestGap) { bestGap = g; best = p; }
+      }
+    }
+    if (best && dHoop > 3 && this.passToReceiver(h, best)) return;
+    // otherwise attack the rim himself (a beaten defender behind him can't stop it)
+    if (dHoop < 1.9) { this.finishAtRim(h, this.nearestDefenderDist(h)); return; }
+    this.setDrive(h, rim, 1.5);
   }
 
   // Whether the handler is in a spot to take his man off the dribble: close
@@ -1443,13 +1501,23 @@ export class Game {
         const gap = dist2D(d.pos, man.pos);
         if (gap < 1.5) {
           const close = 1 - gap / 1.5;                 // 1 at point-blank, 0 at 1.5 m
-          const stl = rate(d.attr.reaction) * 0.5 + rate(d.attr.defense) * 0.3
-            + rate(d.attr.agility) * 0.2;
+          const stl = rate(d.attr.reaction) * 0.45 + rate(d.attr.agility) * 0.35
+            + rate(d.attr.defense) * 0.2;
           // ドリブルキープ shields the ball; スライディング strips it more often
           const resist = rate(man.attr.dribbleAcc) * 0.6 + rate(man.attr.handling) * 0.4
             + (man.has("keepDribble") ? 0.25 : 0);
           const slide = d.has("interceptor") ? 1.3 : 1;
-          const pPoke = Math.max(0.005, (0.03 + stl * 0.1 - resist * 0.06 + press * 0.05) * slide);
+          // CROSSOVER REACH-IN: the ball is exposed mid-dribble-move, so quick
+          // hands (敏捷性/反応) poke it during a juke — BUT a skilled, quick
+          // ball-handler (D精度/技術/敏捷性) keeps it on a string, so the poke
+          // only bites when the defender's quickness OUT-strips the handler's
+          // security. (Without this, high 敏捷性 backfired: agile players juke
+          // more and were punished for it — see attr-impact tuning.)
+          const secure = rate(man.attr.dribbleAcc) * 0.5 + rate(man.attr.handling) * 0.3
+            + rate(man.attr.agility) * 0.2;
+          const exposed = man.jukeT > 0
+            ? 1 + Math.max(0, rate(d.attr.agility) * 0.6 + rate(d.attr.reaction) * 0.4 - secure) * 2.2 : 1;
+          const pPoke = Math.max(0.005, (0.03 + stl * 0.1 - resist * 0.06 + press * 0.05) * slide * exposed);
           if (chance(pPoke * close * dt)) { this.steal(d); return; }
           if (chance((0.02 + press * 0.045) * close * dt)) { this.defensiveFoul(man); return; }
         }
@@ -1610,7 +1678,7 @@ export class Game {
       // and keep the handler in front; a wrong-footed lean drags them the other
       // way and opens the lane. This is what makes a good on-ball defender bite.
       const lx = -uz, lz = ux;
-      const mirror = 0.35 + rate(d.attr.agility) * 0.55 + rate(d.attr.reaction) * 0.3
+      const mirror = 0.28 + rate(d.attr.agility) * 0.8 + rate(d.attr.reaction) * 0.22
         + (d.evalRole === "ロックダウン" ? 0.2 : 0);   // the stopper stays glued in front
       const cut = clamp(d.shadeSide * mirror + d.lean * 0.45, -1.1, 1.1) * 0.6;
       tx = man.pos.x + ux * gap + lx * cut;
@@ -1704,7 +1772,7 @@ export class Game {
   // ボディバランス wins the body battle: a strong post player backs his man down
   // and is pushed around less; a weak one yields ground.
   private holdWeight(p: Player): number {
-    let w = 0.5 + rate(p.attr.balance) * 0.95;                // ~0.6 (weak) .. ~1.45 (strong)
+    let w = 0.5 + rate(p.attr.balance) * 0.78;                // ~0.6 (weak) .. ~1.28 (strong)
     if (p === this.handler) w += 0.5 + (p.has("post") ? 0.3 : 0); // protects the ball / posts up
     else if (p.screening) w += 0.6;                           // a set screen holds firm
     else if (p.team === 1 - this.possession) w += 0.25;       // defenders hold position
@@ -2008,6 +2076,7 @@ export class Game {
         d.decisionT = 0.4;
         this.ball.vel.set(0, 0, 0);
         this.resetMotion();
+        this.maybeStartPush();   // a pick-off is the cleanest fast-break start
         this.leakOut();      // 飛び出し runners sprint out off the pick
         this.setEvent("INTERCEPTED", d.team);
       } else {
@@ -2596,6 +2665,7 @@ export class Game {
     p.decisionT = 0.4;
     this.ball.vel.set(0, 0, 0);
     this.resetMotion();
+    if (!offensive) this.maybeStartPush();   // change of possession → run the break
     this.leakOut();          // 飛び出し runners take off on the change of possession
     p.jump(0.35, 0.4);
     this.setEvent(label ?? (offensive ? "OFF. REBOUND" : "REBOUND"), p.team);
@@ -2788,6 +2858,19 @@ export class Game {
             continue;
           }
         }
+      }
+
+      // FILL THE LANES: on a fast break, wings (not the ball-handler) sprint
+      // ahead down their side to the rim, ready for the drop-off. Faster
+      // players (速度/加速力) get there first — this is where open-court speed
+      // turns into transition layups. Bigs trail; the handler pushes it himself.
+      if (this.pushT > 0 && this.handler && p !== this.handler && !this.isBig(p)) {
+        const s = this.attackSign(team);
+        const side = p.pos.x >= 0 ? 1 : -1;
+        const tx = side * 4.5, tz = s * (RIM.z - 1.5);
+        moveToward2D(p.pos, tx, tz, p.accelToward(dt, tx, tz, 1.25) * dt);
+        this.clampCourt(p.pos);
+        continue;
       }
 
       // a 司令塔 on the floor (and a キープ handler buying time) speeds up the
@@ -3247,6 +3330,7 @@ export class Game {
     // brought up / established in the frontcourt afresh
     this.assistFrom = this.assistTo = null;
     this.frontT = false;
+    this.pushT = 0;   // a fresh possession clears any prior fast-break window
   }
 
   // 飛び出し: on a live-ball turnover, leak-out runners on the NEW offence take

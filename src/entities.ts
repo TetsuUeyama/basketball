@@ -131,7 +131,7 @@ export class Player {
     this.name = def.name;
     this.attr = def.attr;
     this.height = def.height;
-    this.runSpeed = 3.8 + rate(def.attr.speed) * 4.2; // ~3.8 (slow) .. 8.0 (fast)
+    this.runSpeed = 3.2 + rate(def.attr.speed) * 4.8; // ~3.2 (slow) .. 8.0 (fast)
 
     // offensive identity: role baseline nudged by ratings (or an explicit priority)
     this.role = def.role;
@@ -410,7 +410,7 @@ export class Player {
     // barely lets the feet move — the first step off a landing is sluggish
     const rec = (this.coolT > 0 || this.landT > 0) ? 0.35 : 1;
     const target = this.runSpeed * mult * (1 - this.fatigue * 0.2) * rec;
-    const acc = 3 + rate(this.attr.accel) * 13;        // m/s² — sluggish .. explosive
+    const acc = 2.5 + rate(this.attr.accel) * 15;      // m/s² — sluggish .. explosive first step
     return Math.min(target, this.curSpd + acc * dt);
   }
 
@@ -425,7 +425,7 @@ export class Player {
     if (vl < 0.15 || dl < 0.1) return 1;
     const dot = (dx * this.velX + dz * this.velZ) / (dl * vl); // -1 (reversal) .. 1 (straight)
     const turn = (1 - dot) / 2;                         // 0 .. 1
-    const keep = 0.45 + rate(this.attr.agility) * 0.55; // 0.45 (slow) .. 1.0 (quick)
+    const keep = 0.32 + rate(this.attr.agility) * 0.68; // 0.32 (slow) .. 1.0 (quick)
     return clamp(1 - turn * (1 - keep), 0.35, 1);
   }
 
@@ -576,7 +576,7 @@ export class Player {
     this.role = def.role;
     this.attr = def.attr;   // re-bind: pre-game swaps can replace the def object
     this.abilities = new Set(def.abilities ?? []);
-    this.runSpeed = 3.8 + rate(def.attr.speed) * 4.2; // keep in sync with the constructor
+    this.runSpeed = 3.2 + rate(def.attr.speed) * 4.8; // keep in sync with the constructor
     this.offPriority = computeOffPriority(def);
     this.playmaking = roleOffense(def.role).playmaking;
     // 評価ロールを実挙動へ: 仮想特能の付与と優先度/プレイメイキング補正。
