@@ -1704,7 +1704,7 @@ export class Game {
   // ボディバランス wins the body battle: a strong post player backs his man down
   // and is pushed around less; a weak one yields ground.
   private holdWeight(p: Player): number {
-    let w = 0.5 + rate(p.attr.balance) * 1.5;                 // ~0.65 (weak) .. ~2.0 (strong)
+    let w = 0.5 + rate(p.attr.balance) * 0.95;                // ~0.6 (weak) .. ~1.45 (strong)
     if (p === this.handler) w += 0.5 + (p.has("post") ? 0.3 : 0); // protects the ball / posts up
     else if (p.screening) w += 0.6;                           // a set screen holds firm
     else if (p.team === 1 - this.possession) w += 0.25;       // defenders hold position
@@ -2054,7 +2054,9 @@ export class Game {
     let falloff = isThree ? 0.05 - rate(h.attr.threeRange) * 0.035 : 0.03;
     if (h.has("range")) falloff *= 0.65;
     let p = baseLine + skill * 0.42 - Math.max(0, dHoop - distRef) * falloff;
-    // カーブ: an angled mid-range look can use the glass for a cleaner make
+    // カーブ: an angled mid-range look can use the glass for a cleaner make.
+    // (bank shots are a rare situation, so this stays a narrow, small bonus —
+    // boosting the coefficient can't make バンク broadly impactful.)
     if (!isThree && Math.abs(h.pos.x) > 1.5 && dHoop < 6.5) {
       p += rate(h.attr.bank) * 0.07;
     }
@@ -2062,9 +2064,13 @@ export class Game {
     if (h.quickT > 0 && h.has("oneTouch")) p += 0.05;
     // contest — S威力 shoots through the contact; a 1対1シュート specialist
     // barely feels a single defender (only real help bothers him)
-    let contestScale = 1 - rate(h.attr.shotStrength) * 0.55;
+    // S威力: shooting through contact. The coefficient (0.78) and the penalty
+    // magnitude (0.24) are re-centred together so AVERAGE scoring is unchanged
+    // but the SLOPE is steeper — a strong shooter shrugs off contests a weak
+    // one can't (attr-impact tuning: revived S威力 from ~0 to a real effect).
+    let contestScale = 1 - rate(h.attr.shotStrength) * 0.78;
     if (h.has("isoShooter") && this.defendersWithin(h, 2.4) <= 1) contestScale *= 0.6;
-    p -= clamp(1.8 - dDef, 0, 1.8) * 0.18 * contestScale;
+    p -= clamp(1.8 - dDef, 0, 1.8) * 0.24 * contestScale;
     // off-balance (shooting on the move) — S技術 keeps the mechanics clean
     if (h.beatenT > 0 || h.curSpd > h.runSpeed * 0.55) {
       p -= 0.10 * (1 - rate(h.attr.shotTech));
@@ -2110,7 +2116,7 @@ export class Game {
     if (!dunk && h.driveSide === -h.strongSide()) {
       p -= (1 - h.offhandAcc / 8) * 0.1;
     }
-    p -= clamp(1.0 - dDef, 0, 1.0) * 0.25 * (1 - rate(h.attr.shotStrength) * 0.6);
+    p -= clamp(1.0 - dDef, 0, 1.0) * 0.35 * (1 - rate(h.attr.shotStrength) * 0.85);
     p -= this.clutchFactor(h) * 0.1;
     this.shotMade = chance(clamp(p, 0.2, 0.97));
 
