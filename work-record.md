@@ -885,6 +885,45 @@
   これ以上のトリムはポスト/リバウンドの手応えを損なうため現状維持。**全て実機WebGL未検証**（速攻の
   見た目・レーンランナー・クローズアウトの抜き）。
 
+## 2026-07-11 (80) アイコンのホバーtip/モーダルが不安定なバグ修正（ユーザー指摘）
+- 真因: `showStatTip`/`showTextTip`が**前のアイコンのscheduleHideTip(200ms猶予)のタイマーを未キャンセル**。
+  アイコンA離脱→タイマー起動→200ms以内にアイコンBへ→Bのtip表示するが、Aのタイマーが後で発火し
+  **Bのtipを消す**（=出たり出なかったり／ボタンに手を伸ばす途中でtip消滅→モーダルが開かない）。
+- 修正: 両show関数の冒頭で`tipHideT`をクリア。showTextTipはpointerEvents:noneも明示（ボタン無しtip）。
+  openDetailModalはガード無しで確実に開くため、tip消滅さえ直れば安定。tsc✓。実機ホバー要確認。
+
+## 2026-07-11 (81) バザービーター/惰性 + ボールのバウンド物理（ユーザー要望）
+- **1a デスペレーションヒーヴ**: decide先頭に、gameClock<0.9(残り0.9秒) or shotClock<0.45 で dHoop>1.8 なら
+  **どこからでも無理な体制でもshoot()**（距離減衰でmake%は自動的に極小=祈りシュート）。ビッグの運び上げより優先。
+  ショットクロック違反の一部がヒーヴに置換=現実的。
+- **1b バザー後の惰性**: gameClock<=0でも held/loose中は即endQuarterせず`coastT=0.8s`プレー続行→惰性で
+  少し動いてから終了（即フリーズ回避）。空中のシュートは従来通り完走(バザービーター)。endQuarterでcoastT/ballFallingリセット。
+- **2 ボールのバウンド物理**: `stepBallFreeFlight`(重力+床バウンド係数0.62+コート境界反射)をupdateLooseと共用に抽出。
+  **メイド時**: ボールをリムからネット下向きに落とし`ballFalling=true`→updatePauseで床までバウンド（従来は真下スーッと消え）。
+  ミスは既存startReboundでリムからカラム(既にバウンド済)。
+- 実測: 20.4点/チーム・TO2.6・FG%53(ヒーヴ分低下)・速攻12.2・NaN0・全試合正常終了。tsc✓。
+  ⚠ バウンド/惰性/ヒーヴの見た目はWebGL要確認。
+
+## 2026-07-11 (82) 得点時のネット揺れ・リムフラッシュ演出（ユーザー要望: わかりやすく）
+- court.ts: buildHoopが`{net, rimMat}`を返す→buildCourtが`Hoops{nets[],rimMats[]}`返却。`hoopIndex(end)`。
+  main.tsで`game.attachHoops(hoops)`配線。
+- game.ts: `swishNet(team)`で得点したリム側の`netSwish[i]=0.6`起動。`tickSwish(dt)`をupdateで毎フレーム—
+  ネットをY方向に伸ばして減衰バネ(exp(-e*7))+左右スウェイ、リム材のemissiveをフラッシュ。0でrest復帰。
+  メイドFG(resolveShot)+メイドFT(updateFreeThrow)でトリガー。
+- headlessではhoops=nullでtickSwishは即return（安全）。**vite build成功=実レンダラーのmesh操作は有効**。
+  ⚠ 揺れ/フラッシュの見た目・強さはWebGL要目視調整（scaling係数0.5/sway0.15/emissive0.6は初期値）。
+- 追強化(ユーザー: もう少しわかりやすく): バックボード材も公開(Hoops.boardMats)、swishTeamで得点側記憶。
+  ネット伸び0.5→0.9/sway0.15→0.25/持続0.6→1.1s、**リム+バックボードを得点チームカラー(TEAM_COLORS)で
+  パルスフラッシュ**（どちらが決めたか明確に）。tsc/vite build✓。
+
+## 2026-07-11 (83) 超ロング・ブザービーターの命中率を現実化（ユーザー: 精度高すぎ）
+- game.ts shoot(): 3Pの距離減衰を線形のみ→**2次collapse項**を追加。
+  `over = max(0, dHoop - THREE_DIST(6.75))`、`heaveDrop = over²*0.011*(1 - rate(L速度)*0.33)`。
+  L速度MAXで係数0.00737。clamp下限を0.04→0.02（ヒーヴが数%まで落ちる）。
+- 計測(headless probe): L精度MAX/L速度MAXの選手で 6.75m=56%, 9m=51%, **13m(超ロング)=19.8%**,
+  16m以上=2%床。L速度50なら12mで既に2%、L精度50は10mで17%。**通常アーク/ディープ3はほぼ不変**
+  （near-lineでover≈0→heaveDrop≈0）。要望「L精度L速度MAXでようやく2割」に一致。tsc✓。
+
 ### 次回再開ポイント
 1. `npm run dev` で総合playtest（本セッションは大半が実機未検証: 抜き3種/守備・ブロック/選手の向き/
    スペーシング/着地硬直/踏切/顔アイコン・スタッツポップ・ホバー/スローイン/バナー/トランジション守備の戻り）

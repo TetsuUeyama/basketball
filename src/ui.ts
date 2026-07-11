@@ -80,6 +80,7 @@ export class UI {
 
   private phase: Phase = "pregame";
   private playerCard!: HTMLDivElement;  // floating pregame detail card (hex chart)
+  private vsBoard: HTMLDivElement | null = null;  // VS strength board (avoid overlapping it)
   private dragFrom: { team: number; idx: number } | null = null; // bar being carried
   private dragGhost: HTMLDivElement | null = null;               // the carried name bar
   private dragHl: HTMLElement | null = null;                     // highlighted drop row
@@ -272,10 +273,15 @@ export class UI {
   // Same floating tooltip, but with free-form title/body (role explanations
   // and the like — anything not registered in INFO).
   private showTextTip(title: string, body: string, anchor: HTMLElement): void {
+    // showing a fresh tip cancels any pending grace-period hide left over from
+    // the icon/anchor the mouse just left — otherwise that stale timer fires
+    // and hides THIS tip (the "appears then vanishes" flicker between icons)
+    if (this.tipHideT) { window.clearTimeout(this.tipHideT); this.tipHideT = 0; }
     this.tipTitle.style.color = "#fff";
     this.tipTitle.textContent = title;
     this.tipBody.textContent = body;
     const tip = this.tooltip;
+    tip.style.pointerEvents = "none";   // a plain text tip carries no button
     tip.style.display = "block";
     // anchor under the header, clamped to the viewport once its width is known
     const r = anchor.getBoundingClientRect();
@@ -303,6 +309,8 @@ export class UI {
   // Hover a player icon → show his live box score, floated ABOVE the icon (the
   // icons sit near the bottom of the screen).
   private showStatTip(player: import("./entities").Player, anchor: HTMLElement): void {
+    // cancel a stale grace-period hide from the icon just left (see showTextTip)
+    if (this.tipHideT) { window.clearTimeout(this.tipHideT); this.tipHideT = 0; }
     this.tipTitle.style.color = colorOf(player.team);
     this.tipTitle.textContent = `#${player.idx + 1}  ${player.name}`;
     const s = player.stats;
@@ -454,7 +462,8 @@ export class UI {
     const phone = window.innerWidth < 640;
     this.pregameMode = phone ? "phone" : "desktop";
     this.editorHost.replaceChildren();
-    this.editorHost.appendChild(this.buildVsBoard());
+    this.vsBoard = this.buildVsBoard();
+    this.editorHost.appendChild(this.vsBoard);
 
     if (phone) {
       // one roster at a time behind team tabs — two stacked 13-man cards would
@@ -1103,17 +1112,23 @@ export class UI {
       background: "rgba(12,15,22,0.98)", border: "1px solid rgba(255,255,255,0.22)",
       borderRadius: "14px", padding: phone ? "12px 10px" : "14px 16px",
       boxShadow: "0 16px 48px rgba(0,0,0,0.65)",
-      width: phone ? "96vw" : "auto", maxWidth: "96vw", maxHeight: "92vh",
+      width: phone ? "96vw" : "540px", maxWidth: "96vw", maxHeight: "92vh",
       overflow: "auto", boxSizing: "border-box",
       display: "flex", flexDirection: "column", gap: "10px", textAlign: "left",
     } as Partial<CSSStyleDeclaration>);
 
-    // header: POS name — height / OVR / role
+    // header: name on its own line (shown in full — the panel widens to fit,
+    // ellipsis only if it would exceed the panel/screen), then height/OVR/role
     const head = document.createElement("div");
-    Object.assign(head.style, { display: "flex", alignItems: "baseline", gap: "10px" } as Partial<CSSStyleDeclaration>);
+    Object.assign(head.style, { display: "flex", flexDirection: "column", gap: "4px" } as Partial<CSSStyleDeclaration>);
     const nm = document.createElement("div");
-    Object.assign(nm.style, { fontSize: "17px", fontWeight: "800", color, flex: "1" });
+    Object.assign(nm.style, {
+      fontSize: "17px", fontWeight: "800", color,
+      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%",
+    } as Partial<CSSStyleDeclaration>);
     nm.textContent = `${def.role}  ${def.name}`;
+    const sub = document.createElement("div");
+    Object.assign(sub.style, { display: "flex", alignItems: "baseline", gap: "10px", flexWrap: "wrap" } as Partial<CSSStyleDeclaration>);
     const meta = document.createElement("div");
     Object.assign(meta.style, { fontSize: "12px", opacity: "0.8", whiteSpace: "nowrap" });
     meta.textContent = `${Math.round(def.height * 100)}cm ${def.hand === "L" ? "左" : "右"}利き  OVR ${this.ovrOf(def)}`;
@@ -1132,28 +1147,35 @@ export class UI {
       this.refreshEditors();            // pregame VS board / rosters re-evaluate
       this.openDetailModal(def, team);  // ...and this modal reopens up to date
     });
-    head.append(nm, meta, roleBtn);
-    panel.appendChild(head);
-    // coverable positions — five chips above the ratings, his lit up
-    panel.appendChild(this.positionChips(def, color));
+    sub.append(meta, roleBtn);
+    head.append(nm, sub);
 
-    // hexagon digest + all 25 ratings: side by side on desktop, stacked into a
-    // tall column on the phone (chart on top, ratings below, full width)
-    const body = document.createElement("div");
-    Object.assign(body.style, {
-      display: "flex", gap: "12px", alignItems: phone ? "center" : "flex-start",
-      flexDirection: phone ? "column" : "row", flexWrap: phone ? "nowrap" : "wrap",
-      justifyContent: "center",
+    // TOP ROW: name / role / coverable positions on the left, hexagon chart on
+    // the right (stacked on the phone). The ratings grid goes FULL WIDTH below.
+    const infoCol = document.createElement("div");
+    Object.assign(infoCol.style, {
+      display: "flex", flexDirection: "column", gap: "6px",
+      flex: "1 1 auto", minWidth: "0", alignItems: phone ? "center" : "stretch",
     } as Partial<CSSStyleDeclaration>);
+    infoCol.append(head, this.positionChips(def, color));
     const cv = document.createElement("canvas");
     cv.width = 236; cv.height = 196;
+    Object.assign(cv.style, { flex: "0 0 auto" } as Partial<CSSStyleDeclaration>);
     this.drawHexChart(cv, this.axesOf(def), color);
-    body.appendChild(cv);
+    const topRow = document.createElement("div");
+    Object.assign(topRow.style, {
+      display: "flex", gap: "12px", width: "100%",
+      flexDirection: phone ? "column" : "row",
+      alignItems: phone ? "center" : "center", justifyContent: "space-between",
+    } as Partial<CSSStyleDeclaration>);
+    topRow.append(infoCol, cv);
+    panel.appendChild(topRow);
 
+    // STATUS: all 25 ratings across the full width below
     const grid = document.createElement("div");
     Object.assign(grid.style, {
-      display: "grid", gap: "6px 10px", width: phone ? "100%" : "auto",
-      gridTemplateColumns: phone ? "repeat(3, minmax(0, 1fr))" : "repeat(5, minmax(84px, 1fr))",
+      display: "grid", gap: "6px 12px", width: "100%",
+      gridTemplateColumns: phone ? "repeat(3, minmax(0, 1fr))" : "repeat(5, minmax(0, 1fr))",
     } as Partial<CSSStyleDeclaration>);
     for (const m of ATTR_META) {
       const v = def.attr[m.key];
@@ -1177,8 +1199,7 @@ export class UI {
       cell.append(lab, line);
       grid.appendChild(cell);
     }
-    body.appendChild(grid);
-    panel.appendChild(body);
+    panel.appendChild(grid);
 
     // 特殊能力 chips (with their explanations on hover)
     const chips = document.createElement("div");
@@ -1224,13 +1245,15 @@ export class UI {
     const card = this.playerCard;
     card.replaceChildren();
 
+    // name on its own line (full name; ellipsis only if it exceeds the card),
+    // meta beneath — so a long name isn't squeezed down to a couple of letters
     const head = document.createElement("div");
-    Object.assign(head.style, { display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "2px" } as Partial<CSSStyleDeclaration>);
+    Object.assign(head.style, { display: "flex", flexDirection: "column", gap: "1px", marginBottom: "2px" } as Partial<CSSStyleDeclaration>);
     const nm = document.createElement("div");
-    Object.assign(nm.style, { fontSize: "14px", fontWeight: "800", color, flex: "1", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+    Object.assign(nm.style, { fontSize: "14px", fontWeight: "800", color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" });
     nm.textContent = `${def.role}  ${def.name}`;
     const meta = document.createElement("div");
-    Object.assign(meta.style, { fontSize: "11px", opacity: "0.75", whiteSpace: "nowrap" });
+    Object.assign(meta.style, { fontSize: "11px", opacity: "0.75", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
     meta.textContent = `${Math.round(def.height * 100)}cm ${def.hand === "L" ? "左" : "右"}利き  OVR ${this.ovrOf(def)}`
       + (def.evalRole ? `  [${def.evalRole}]` : "");
     head.append(nm, meta);
@@ -1276,8 +1299,11 @@ export class UI {
     const ch = card.offsetHeight || 320;
     let left = r.left + r.width / 2 - cw / 2;
     left = Math.max(8, Math.min(left, window.innerWidth - cw - 8));
+    // default: float above the row. Flip BELOW when it would go off the top of
+    // the screen OR overlap the VS (team-strength) board above the roster.
     let top = r.top - ch - 8;
-    if (top < 8) top = Math.min(window.innerHeight - ch - 8, r.bottom + 8);
+    const vbBottom = this.vsBoard ? this.vsBoard.getBoundingClientRect().bottom : 0;
+    if (top < 8 || top < vbBottom) top = Math.min(window.innerHeight - ch - 8, r.bottom + 8);
     card.style.left = `${left}px`;
     card.style.top = `${top}px`;
   }

@@ -4,10 +4,20 @@ import {
 import { COURT, RIM } from "./config";
 
 // Builds the floor (with painted markings), surrounding apron, and both hoops.
-export function buildCourt(scene: Scene): void {
+// The animatable hoop parts a made basket lights up (swish + rim flash), one
+// per end. `hoopIndex(end)` maps a rim's Z sign to its slot.
+export interface Hoops { nets: Mesh[]; rimMats: StandardMaterial[]; boardMats: StandardMaterial[]; }
+export const hoopIndex = (end: number): number => (end >= 0 ? 0 : 1);
+
+export function buildCourt(scene: Scene): Hoops {
   buildFloor(scene);
-  buildHoop(scene, +1); // +Z end (Team 0's basket)
-  buildHoop(scene, -1); // -Z end (Team 1's basket)
+  const h0 = buildHoop(scene, +1); // +Z end (Team 0's basket)
+  const h1 = buildHoop(scene, -1); // -Z end (Team 1's basket)
+  return {
+    nets: [h0.net, h1.net],
+    rimMats: [h0.rimMat, h1.rimMat],
+    boardMats: [h0.boardMat, h1.boardMat],
+  };
 }
 
 function buildFloor(scene: Scene): void {
@@ -102,8 +112,9 @@ function circle(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) 
   ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
 }
 
-// A hoop: pole, backboard, rim and a simple net, at one baseline.
-function buildHoop(scene: Scene, end: number): void {
+// A hoop: pole, backboard, rim and a simple net, at one baseline. Returns the
+// net mesh and rim material so a made basket can swish the net / flash the rim.
+function buildHoop(scene: Scene, end: number): { net: Mesh; rimMat: StandardMaterial; boardMat: StandardMaterial } {
   const rimZ = end * RIM.z;
   const boardZ = end * RIM.backboardZ;
 
@@ -139,6 +150,8 @@ function buildHoop(scene: Scene, end: number): void {
   netMat.alpha = 0.25;
   netMat.backFaceCulling = false;
   net.material = netMat;
+
+  return { net, rimMat, boardMat: white };
 }
 
 // Marker ring used to highlight which player currently holds the ball.

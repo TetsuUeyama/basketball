@@ -1,9 +1,9 @@
 import { Scene, Vector3, Mesh } from "@babylonjs/core";
 import { Player, Ball } from "./entities";
-import { makeHandlerRing } from "./court";
+import { makeHandlerRing, hoopIndex, type Hoops } from "./court";
 import {
   COURT, RIM, SHOOT_RANGE, THREE_DIST, PASS_SPEED,
-  SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS,
+  SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS, TEAM_COLORS,
 } from "./config";
 import { clamp, dist2D, dist2DTo, moveToward2D, chance, rand } from "./util";
 import { ROSTER, ROSTER_SIZE, STARTERS, TACTICS, rate, AbilityKey } from "./attributes";
@@ -120,6 +120,13 @@ export class Game {
   // dead-ball pause so the viewer can register a score / foul before the restart
   private pauseT = 0;
   private pauseNext: (() => void) | null = null;
+  // true while the ball is physically dropping+bouncing during a dead-ball
+  // pause (e.g. after a made basket it falls through the net and bounces)
+  private ballFalling = false;
+  private coastT = 0;   // brief play-on window after the buzzer (惰性で少し続く)
+  private hoops: Hoops | null = null;     // net/rim meshes to swish on a make
+  private netSwish: [number, number] = [0, 0];   // per-hoop swish timer (>0 animating)
+  private swishTeam: [number, number] = [0, 0];  // who scored (flash colour)
 
   constructor(scene: Scene) {
     for (let t = 0; t < 2; t++) {
@@ -133,6 +140,49 @@ export class Game {
     this.ball = new Ball(scene);
     this.ring = makeHandlerRing(scene);
     this.reset();
+  }
+
+  /** Wire up the hoop net/rim meshes so a made basket can swish them. */
+  attachHoops(hoops: Hoops): void { this.hoops = hoops; }
+
+  // Kick off the net swish + rim/board flash on the rim `team` just scored on.
+  private swishNet(team: number): void {
+    const i = hoopIndex(this.attackSign(team));
+    this.netSwish[i] = 1.1;         // longer, so the celebration reads clearly
+    this.swishTeam[i] = team;
+  }
+
+  // One frame of the net-swish + rim/backboard flash on a make (visual only;
+  // skipped in the headless harness where no hoops are attached). The rim and
+  // backboard flash bright in the SCORING team's colour so it's obvious who
+  // scored, and the net snaps down hard and springs back.
+  private tickSwish(dt: number): void {
+    if (!this.hoops) return;
+    const DUR = 1.1;
+    for (let i = 0; i < 2; i++) {
+      if (this.netSwish[i] <= 0) continue;
+      this.netSwish[i] = Math.max(0, this.netSwish[i] - dt);
+      const net = this.hoops.nets[i], rim = this.hoops.rimMats[i], board = this.hoops.boardMats[i];
+      const c = TEAM_COLORS[this.swishTeam[i]];
+      if (this.netSwish[i] > 0) {
+        const e = DUR - this.netSwish[i];                 // seconds elapsed
+        const damp = Math.exp(-e * 5);                    // brightness decay
+        // net snaps down hard and springs back with a decaying wobble
+        const spring = Math.exp(-e * 6);
+        net.scaling.y = 1 + 0.9 * spring;
+        const sway = Math.sin(e * 24) * 0.25 * spring;
+        net.scaling.x = 1 + sway;
+        net.scaling.z = 1 - sway;
+        // strong flash: rim & backboard glow the scoring team's colour, pulsing
+        const pulse = damp * (0.6 + 0.4 * Math.abs(Math.sin(e * 18)));
+        rim.emissiveColor.set(0.3 + c.r * 1.3 * pulse, 0.12 + c.g * 1.3 * pulse, c.b * 1.3 * pulse);
+        board.emissiveColor.set(c.r * pulse, c.g * pulse, c.b * pulse);
+      } else {                                          // settle back to rest
+        net.scaling.set(1, 1, 1);
+        rim.emissiveColor.set(0.3, 0.12, 0.0);
+        board.emissiveColor.set(0, 0, 0);
+      }
+    }
   }
 
   // ---- bench & substitutions ----------------------------------------------
@@ -703,7 +753,16 @@ export class Game {
       // the buzzer: a shot already in the air is allowed to finish (buzzer
       // beater) — resolveShot hands the period end over once it lands
       if (this.gameClock <= 0 && this.ballMode !== "shot") {
-        this.endQuarter();
+        // don't freeze the instant the horn sounds — let a live play COAST for
+        // a beat (players carry their momentum, the ball keeps rolling) before
+        // the period actually ends
+        if (this.ballMode === "held" || this.ballMode === "loose") {
+          if (this.coastT <= 0) this.coastT = 0.8;
+          this.coastT -= dt;
+          if (this.coastT <= 0) this.endQuarter();
+        } else {
+          this.endQuarter();
+        }
       }
     }
 
@@ -744,6 +803,7 @@ export class Game {
       }
     }
     this.updateFacing(dt);
+    this.tickSwish(dt);   // net swish / rim flash on a make
     this.syncAll();
   }
 
@@ -959,6 +1019,12 @@ export class Game {
   private decide(h: Player, dHoop: number, dDef: number, rimFloor: Vector3): void {
     const tac = this.tactics[h.team].offense;
     const prio = h.offPriority;
+
+    // BUZZER BEATER: almost no time on the game/shot clock and no chance to work
+    // a good look — heave it up from wherever he is, however off-balance. shoot()
+    // already floors the make% for a desperation distance, so it's a real prayer.
+    const noTime = (this.gameClock > 0 && this.gameClock < 0.9) || this.shotClock < 0.45;
+    if (noTime && dHoop > 1.8) { this.shoot(h, dHoop, dDef); return; }
 
     // change of possession: the ball has to be carried up, and that's a guard's
     // job. A PF/C who ends up with it before the frontcourt is set looks for the
@@ -2122,7 +2188,13 @@ export class Game {
     // L速度 flattens the falloff on deep threes; 特能ミドル flattens it everywhere
     let falloff = isThree ? 0.05 - rate(h.attr.threeRange) * 0.035 : 0.03;
     if (h.has("range")) falloff *= 0.65;
-    let p = baseLine + skill * 0.42 - Math.max(0, dHoop - distRef) * falloff;
+    const over = Math.max(0, dHoop - distRef);
+    // distance hurts linearly, but a far HEAVE collapses QUADRATICALLY — even a
+    // max L精度/L速度 shooter tops out ~20% from deep (≈13 m) and it drops fast
+    // beyond that (a half-court prayer is a couple of percent). L速度 flattens
+    // the collapse a little (a genuine long-range shooter holds up).
+    const heaveDrop = isThree ? over * over * 0.011 * (1 - rate(h.attr.threeRange) * 0.33) : 0;
+    let p = baseLine + skill * 0.42 - over * falloff - heaveDrop;
     // カーブ: an angled mid-range look can use the glass for a cleaner make.
     // (bank shots are a rare situation, so this stays a narrow, small bonus —
     // boosting the coefficient can't make バンク broadly impactful.)
@@ -2146,7 +2218,7 @@ export class Game {
     }
     // 精神: fatigue, a deficit and crunch time rattle a weak mind
     p -= this.clutchFactor(h) * 0.12;
-    p = clamp(p, 0.04, 0.93);
+    p = clamp(p, 0.02, 0.93);   // low floor so a long heave can be a couple %
     this.shotMade = chance(p);
 
     const blocker = this.tryBlock(h, false);
@@ -2377,6 +2449,7 @@ export class Game {
       this.score[this.ftTeam] += 1;
       this.ftShooter.stats.pts += 1;
       this.benchCheer(this.ftTeam, 1.2);   // a quicker pop for a free throw
+      this.swishNet(this.ftTeam);          // the net snaps on the make
     }
     this.ftRemaining -= 1;
     if (this.ftRemaining > 0) {
@@ -2456,6 +2529,12 @@ export class Game {
       this.setEvent(andOne ? "AND-1" : this.shotPoints === 3 ? "3 POINTS!" : "2 POINTS",
         shooter, 1.8, { scorer: sh?.name, assist: this.pendingAssist?.name });
       this.benchCheer(shooter);   // the bench is up and bouncing
+      // the ball drops through the net and bounces on the floor during the hold
+      const rim = this.attackRim(shooter);
+      this.ball.pos.set(rim.x, RIM.height - 0.15, rim.z);
+      this.ball.vel.set(rand(-0.5, 0.5), -2.4, -Math.sign(rim.z || 1) * rand(0.2, 0.8));
+      this.ballFalling = true;
+      this.swishNet(shooter);   // net snaps + rim flashes on the make
       // hold on the made basket so the viewer sees it, then subs, then inbound —
       // unless the buzzer already sounded (buzzer beater): the period ends here.
       // An AND-1 continues at the line instead: basket counts + one free throw.
@@ -2488,10 +2567,13 @@ export class Game {
   }
 
   private updatePause(dt: number): void {
-    // players hold; the ball settles to the floor
-    this.ball.pos.y = Math.max(0.3, this.ball.pos.y - 3 * dt);
+    // after a made basket the ball drops through the net and bounces on the
+    // floor; otherwise it just settles down to rest
+    if (this.ballFalling) this.stepBallFreeFlight(dt);
+    else this.ball.pos.y = Math.max(0.3, this.ball.pos.y - 3 * dt);
     this.pauseT -= dt;
     if (this.pauseT <= 0) {
+      this.ballFalling = false;
       const next = this.pauseNext;
       this.pauseNext = null;
       if (next) next();
@@ -2532,15 +2614,18 @@ export class Game {
     }
   }
 
-  private updateLoose(dt: number): void {
+  // One frame of ball free-flight: gravity, a floor bounce that keeps a little
+  // energy (so it dribbles to rest like a real basketball), and reflection off
+  // the court boundary. Shared by the loose ball and the cosmetic drop after a
+  // made basket. `restY` is the floor contact height (ball radius).
+  private stepBallFreeFlight(dt: number): void {
     const b = this.ball;
-    // free-flight under gravity
     b.vel.y -= 9.0 * dt;
     b.pos.x += b.vel.x * dt;
     b.pos.y += b.vel.y * dt;
     b.pos.z += b.vel.z * dt;
-    // bounce off the floor, losing energy
-    if (b.pos.y < 0.12) { b.pos.y = 0.12; b.vel.y = Math.abs(b.vel.y) * 0.55; b.vel.x *= 0.7; b.vel.z *= 0.7; }
+    // bounce off the floor, losing energy (a rolling-to-rest dribble)
+    if (b.pos.y < 0.12) { b.pos.y = 0.12; b.vel.y = Math.abs(b.vel.y) * 0.62; b.vel.x *= 0.72; b.vel.z *= 0.72; }
     // reflect off the court boundary so it stays in play
     const mw = COURT.halfW - 0.1, ml = COURT.halfL - 0.1;
     if (b.pos.x < -mw) { b.pos.x = -mw; b.vel.x = Math.abs(b.vel.x) * 0.6; }
@@ -2550,7 +2635,10 @@ export class Game {
     // clamp speed so a bad bounce can never send it flying (stays deterministic)
     const sp = Math.hypot(b.vel.x, b.vel.y, b.vel.z);
     if (sp > 10) { const k = 10 / sp; b.vel.x *= k; b.vel.y *= k; b.vel.z *= k; }
+  }
 
+  private updateLoose(dt: number): void {
+    this.stepBallFreeFlight(dt);
     for (const p of this.players) if (p.touchCool > 0) p.touchCool = Math.max(0, p.touchCool - dt);
 
     this.looseAge += dt;
@@ -3419,6 +3507,8 @@ export class Game {
   // fives WALK OFF to their benches, hold there a beat, and (after any subs)
   // walk back out to their spots for the next period's throw-in.
   private endQuarter(): void {
+    this.coastT = 0;
+    this.ballFalling = false;
     const leader = this.score[0] === this.score[1]
       ? this.possession
       : (this.score[0] > this.score[1] ? 0 : 1);
