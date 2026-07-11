@@ -1,6 +1,7 @@
 import { Game } from "./game";
-import { TEAM_NAMES, TEAM_COLORS } from "./config";
-import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, ATTR_META, ABILITY_META, type Attributes, type PlayerDef } from "./attributes";
+import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS } from "./config";
+import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, type Attributes, type PlayerDef } from "./attributes";
+import { PLAYER_DB, type DbPlayer } from "./playerdb";
 
 const colorOf = (team: number): string => {
   const c = TEAM_COLORS[team];
@@ -73,20 +74,37 @@ export class UI {
   private showBench: boolean[] = [false, false];
   private iconKey: string[] = ["", ""];
   private iconEl = new Map<import("./entities").Player, HTMLDivElement>(); // player → its current icon element
+  private iconStamina = new Map<import("./entities").Player, { bar: HTMLDivElement; fill: HTMLDivElement }>(); // player → its icon stamina bar
+  private staminaBtn: HTMLButtonElement | null = null;   // HUD toggle: gauge on name tag ⇄ face icon
+  private namesBtn: HTMLButtonElement | null = null;     // HUD toggle: on-court name tags on ⇄ off
   private statSnap = new Map<import("./entities").Player, number[]>();     // last-seen POP_STATS values
   private controls!: HTMLDivElement;      // speed / RESTART row
+  private menuBtn!: HTMLButtonElement;    // ☰ hamburger — rides the top edge until the scoreboard reaches it
+  private board!: HTMLDivElement;         // centred scoreboard (its width decides where the ☰ can sit)
   private iconPanels: HTMLDivElement[] = []; // the two team face-icon panels
   private layoutMode = "";                // "desktop" | "phone" — recomputed on resize
 
   private phase: Phase = "pregame";
   private playerCard!: HTMLDivElement;  // floating pregame detail card (hex chart)
   private vsBoard: HTMLDivElement | null = null;  // VS strength board (avoid overlapping it)
+  private vsPreviewActive = false;                // a swap/role preview is currently on the board
   private dragFrom: { team: number; idx: number } | null = null; // bar being carried
   private dragGhost: HTMLDivElement | null = null;               // the carried name bar
   private dragHl: HTMLElement | null = null;                     // highlighted drop row
+  // "carry" mode: an incoming DB player follows the cursor until dropped on a
+  // roster row of his team to replace that player (started from the picker).
+  private carry: { team: number; dbp: DbPlayer } | null = null;
+  private carryGhost: HTMLDivElement | null = null;
+  private carryHint: HTMLDivElement | null = null;
+  private carryHl: HTMLElement | null = null;
+  private carryCleanup: (() => void) | null = null;
   private rolePicker: HTMLDivElement | null = null;              // open 評価ロール menu
   private rolePickerCloser: ((e: PointerEvent) => void) | null = null;
   private detailModal: HTMLDivElement | null = null;             // full-ratings modal
+  private playerPicker: HTMLDivElement | null = null;            // 4000+選手データベースからの選手交代モーダル
+  // Cached, OVR-sorted view of the whole database (built once on first open):
+  // { p, ovr, lower(name) } so keystroke filtering is a plain array scan.
+  private dbIndex: { p: DbPlayer; ovr: number; lower: string }[] | null = null;
   private rosterTab = 0;         // phone: which team's roster card is shown
   private pregameMode = "";      // "phone" | "desktop" — re-render on crossing 640px
 
@@ -130,6 +148,7 @@ export class UI {
       borderRadius: "12px", padding: "10px 20px", boxShadow: "0 6px 24px rgba(0,0,0,0.4)",
     });
     this.hud.appendChild(board);
+    this.board = board;
 
     const colA = colorOf(0), colB = colorOf(1);
     board.appendChild(this.teamBlock(TEAM_NAMES[0], colA, "right"));
@@ -187,11 +206,13 @@ export class UI {
     });
     this.hud.appendChild(this.banner);
 
-    // ---- controls: a hamburger menu at the right, level with the shot clock
-    // (up at 14px it collided with the scoreboard's team name) ----
+    // ---- controls: a hamburger menu at the right. It rides the top edge (level
+    // with the scoreboard) on a wide screen, and only drops below the board when
+    // the centred scoreboard grows wide enough to reach it (see positionMenu). ----
     const menuBtn = this.button("☰");
+    this.menuBtn = menuBtn;
     Object.assign(menuBtn.style, {
-      position: "absolute", top: "92px", right: "14px", pointerEvents: "auto",
+      position: "absolute", top: "14px", right: "14px", pointerEvents: "auto",
       fontSize: "18px", lineHeight: "1", padding: "7px 12px", zIndex: "20",
     } as Partial<CSSStyleDeclaration>);
     this.hud.appendChild(menuBtn);
@@ -216,6 +237,30 @@ export class UI {
       speedRow.appendChild(b);
     }
     controls.appendChild(speedRow);
+
+    // 体力バーの表示位置トグル: 名前タグの下 ⇄ 顔アイコンの下
+    const staminaBtn = this.button("");
+    this.staminaBtn = staminaBtn;
+    this.refreshStaminaBtn();
+    staminaBtn.onclick = () => {
+      HUD_OPTS.staminaOn = HUD_OPTS.staminaOn === "name" ? "icon" : "name";
+      HUD_OPTS.rev++;                 // force every name tag to repaint
+      this.iconKey = ["", ""];        // force the icon rows to rebuild (bar shows/hides)
+      this.refreshStaminaBtn();
+    };
+    controls.appendChild(staminaBtn);
+
+    // コート上の名前タグの表示オン/オフ
+    const namesBtn = this.button("");
+    this.namesBtn = namesBtn;
+    this.refreshNamesBtn();
+    namesBtn.onclick = () => {
+      HUD_OPTS.showNames = !HUD_OPTS.showNames;
+      HUD_OPTS.rev++;                 // force every name tag to repaint (applies visibility)
+      this.refreshNamesBtn();
+    };
+    controls.appendChild(namesBtn);
+
     const restart = this.button("RESTART");
     restart.onclick = () => { this.onRestart(); controls.style.display = "none"; };
     controls.appendChild(restart);
@@ -234,6 +279,9 @@ export class UI {
     this.buildResult();
     this.refreshSpeed();
     this.setPhase("pregame");
+    // rects are only valid after the first layout pass
+    requestAnimationFrame(() => this.positionMenu());
+    window.addEventListener("resize", () => this.positionMenu());
   }
 
   // A small floating explanation shown on hover, anchored under the header.
@@ -459,6 +507,7 @@ export class UI {
     this.hidePlayerCard();
     this.closeRolePicker();
     this.closeDetailModal();
+    this.closePlayerPicker();
     const phone = window.innerWidth < 640;
     this.pregameMode = phone ? "phone" : "desktop";
     this.editorHost.replaceChildren();
@@ -661,7 +710,10 @@ export class UI {
   // is for it: the PG's passing IS the team's passing, while the C barely
   // moves that needle. Starters carry 70%, the bench rotation 30%.
   private teamAxes(team: number): number[] {
-    const r = ROSTER[team];
+    return this.teamAxesOf(ROSTER[team]);
+  }
+  // Same computation over an arbitrary roster array (used to preview a swap).
+  private teamAxesOf(r: PlayerDef[]): number[] {
     return UI.HEX_AXES.map((x, i) => {
       const grp = (from: number, to: number): number => {
         let v = 0, w = 0;
@@ -680,7 +732,9 @@ export class UI {
   // with the stronger side's number lit up.
   // A team's number for the header: the players' OVRs, starters 70% bench 30%.
   private teamOvr(team: number): number {
-    const r = ROSTER[team];
+    return this.teamOvrOf(ROSTER[team]);
+  }
+  private teamOvrOf(r: PlayerDef[]): number {
     let st = 0, bn = 0;
     for (let j = 0; j < STARTERS; j++) st += this.ovrOf(r[j]);
     for (let j = STARTERS; j < ROSTER_SIZE; j++) bn += this.ovrOf(r[j]);
@@ -691,7 +745,9 @@ export class UI {
   // each man's position/role — the C's reach is the team's size, a PG's
   // stature barely registers.
   private teamHeight(team: number): number {
-    const r = ROSTER[team];
+    return this.teamHeightOf(ROSTER[team]);
+  }
+  private teamHeightOf(r: PlayerDef[]): number {
     const grp = (from: number, to: number): number => {
       let v = 0, w = 0;
       for (let j = from; j < to; j++) {
@@ -704,9 +760,20 @@ export class UI {
     return (grp(0, STARTERS) * 0.7 + grp(STARTERS, ROSTER_SIZE) * 0.3) * 100;
   }
 
-  private buildVsBoard(): HTMLDivElement {
-    const axA = this.teamAxes(0), axB = this.teamAxes(1);
+  // Pale-green (gain) / light-red (loss) tints for the swap-preview deltas.
+  private static readonly GAIN = "rgb(120,225,140)";
+  private static readonly LOSS = "rgb(240,140,130)";
+
+  // `preview` (set while carrying an incoming DB player over a target row) shows
+  // how one team's strength bars WOULD change if the swap happened: the changed
+  // portion of each bar and a ±N number are tinted pale green / light red.
+  private buildVsBoard(preview?: { team: number; roster: PlayerDef[] }): HTMLDivElement {
+    const baseAxes = [this.teamAxes(0), this.teamAxes(1)];
+    const dispAxes = [baseAxes[0].slice(), baseAxes[1].slice()];
+    if (preview) dispAxes[preview.team] = this.teamAxesOf(preview.roster);
     const colA = colorOf(0), colB = colorOf(1);
+    // whether a given side is being previewed
+    const prev = (t: number) => (preview && preview.team === t);
 
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {
@@ -727,56 +794,160 @@ export class UI {
       d.textContent = TEAM_NAMES[t];
       return d;
     };
-    const ovrEl = (v: number, win: boolean): HTMLDivElement => {
+    const ovrEl = (v: number, win: boolean, delta: number | null): HTMLDivElement => {
       const d = document.createElement("div");
-      Object.assign(d.style, { fontSize: "22px", fontWeight: "800", color: "#fff", opacity: win ? "1" : "0.55" });
-      d.textContent = String(v);
+      Object.assign(d.style, { display: "flex", alignItems: "baseline", gap: "3px", fontSize: "22px", fontWeight: "800", color: "#fff", opacity: win ? "1" : "0.55" });
+      const n = document.createElement("span");
+      n.textContent = String(v);
+      d.appendChild(n);
+      if (delta !== null && delta !== 0) {
+        const dl = document.createElement("span");
+        Object.assign(dl.style, { fontSize: "12px", fontWeight: "800", color: delta > 0 ? UI.GAIN : UI.LOSS });
+        dl.textContent = delta > 0 ? `+${delta}` : `${delta}`;
+        d.appendChild(dl);
+      }
       return d;
     };
     const vs = document.createElement("div");
     Object.assign(vs.style, { fontSize: "13px", fontWeight: "800", opacity: "0.6", letterSpacing: "2px" });
     vs.textContent = "VS";
-    const oa = this.teamOvr(0), ob = this.teamOvr(1);
-    head.append(nameEl(0, "left"), ovrEl(oa, oa >= ob), vs, ovrEl(ob, ob >= oa), nameEl(1, "right"));
+    const baseOvr = [this.teamOvr(0), this.teamOvr(1)];
+    const dispOvr = baseOvr.slice();
+    if (preview) dispOvr[preview.team] = this.teamOvrOf(preview.roster);
+    const oa = dispOvr[0], ob = dispOvr[1];
+    head.append(
+      nameEl(0, "left"),
+      ovrEl(oa, oa >= ob, prev(0) ? oa - baseOvr[0] : null),
+      vs,
+      ovrEl(ob, ob >= oa, prev(1) ? ob - baseOvr[1] : null),
+      nameEl(1, "right"),
+    );
     wrap.appendChild(head);
 
     // comparison rows: value | ←bar | label | bar→ | value. The bar spreads a
     // declared band (ratings are compressed) — the exact numbers sit beside it.
-    const addRow = (label: string, a: number, b: number, lo: number, hi: number) => {
+    // `dA`/`dB` are the previewed team's per-row delta (else null).
+    const addRow = (label: string, a: number, b: number, lo: number, hi: number,
+                    oldA: number | null, oldB: number | null) => {
       const row = document.createElement("div");
       Object.assign(row.style, {
-        display: "grid", gridTemplateColumns: "26px 1fr 88px 1fr 26px", gap: "8px",
+        // value columns are a FIXED width whether or not a ±N is shown, so the
+        // preview never changes the board's size (no reflow / hover flicker)
+        display: "grid", gridTemplateColumns: "66px 1fr 64px 1fr 66px", gap: "8px",
         alignItems: "center",
       } as Partial<CSSStyleDeclaration>);
-      const val = (v: number, win: boolean, align: string): HTMLDivElement => {
+      const scale = (v: number) => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
+      // value cell: the number, plus a tinted ±N BESIDE it (horizontal) when
+      // previewed — kept on one line so the row height never changes.
+      const val = (v: number, win: boolean, align: string, old: number | null): HTMLDivElement => {
         const d = document.createElement("div");
-        Object.assign(d.style, { fontSize: "12px", fontWeight: "800", color: "#fff", opacity: win ? "1" : "0.5", textAlign: align });
-        d.textContent = String(Math.round(v));
+        Object.assign(d.style, {
+          display: "flex", alignItems: "baseline", gap: "3px", whiteSpace: "nowrap",
+          justifyContent: align === "right" ? "flex-end" : "flex-start",
+        } as Partial<CSSStyleDeclaration>);
+        const n = document.createElement("span");
+        Object.assign(n.style, { fontSize: "12px", fontWeight: "800", color: "#fff", opacity: win ? "1" : "0.5" });
+        n.textContent = v.toFixed(1);   // 0.1 precision so small swaps are visible
+        // TRUE change to one decimal — bench / starter⇄bench swaps move the team
+        // value by less than a whole point, so an integer delta would vanish.
+        const raw = old !== null ? v - old : 0;
+        const delta = Math.round(raw * 10) / 10;
+        const dl = document.createElement("span");
+        Object.assign(dl.style, { fontSize: "10px", fontWeight: "800", color: delta > 0 ? UI.GAIN : UI.LOSS });
+        dl.textContent = delta !== 0 ? (delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)) : "";
+        // outer side carries the number, the ±N sits toward the centre/bar
+        if (align === "right") d.append(dl, n); else d.append(n, dl);
         return d;
       };
-      const bar = (v: number, color: string, win: boolean, fromRight: boolean): HTMLDivElement => {
+      // bar: base fill in team colour; if previewed, the changed slice is tinted
+      // pale green (gain) or light red (loss), extending outward from centre.
+      const bar = (v: number, color: string, win: boolean, fromRight: boolean, old: number | null): HTMLDivElement => {
         const track = document.createElement("div");
         Object.assign(track.style, {
           height: "8px", background: "rgba(255,255,255,0.08)", borderRadius: "4px",
           overflow: "hidden", display: "flex", justifyContent: fromRight ? "flex-end" : "flex-start",
         } as Partial<CSSStyleDeclaration>);
-        const fill = document.createElement("div");
-        const w = Math.max(4, Math.min(100, ((v - lo) / (hi - lo)) * 100));
-        Object.assign(fill.style, { width: `${w}%`, height: "100%", background: color, borderRadius: "4px", opacity: win ? "1" : "0.55" });
-        track.appendChild(fill);
+        const seg = (w: number, bg: string): HTMLDivElement => {
+          const s = document.createElement("div");
+          Object.assign(s.style, { width: `${w}%`, height: "100%", background: bg, opacity: win ? "1" : "0.55" });
+          return s;
+        };
+        const sNew = scale(v);
+        if (old === null) {
+          track.appendChild(seg(Math.max(4, sNew), color));
+        } else {
+          const sOld = scale(old);
+          const baseW = Math.min(sOld, sNew), deltaW = Math.abs(sNew - sOld);
+          const gain = sNew >= sOld;
+          const baseSeg = seg(Math.max(1, baseW), color);
+          const deltaSeg = deltaW > 0.15 ? seg(deltaW, gain ? UI.GAIN : UI.LOSS) : null;
+          // outward direction: A grows leftward (delta OUTSIDE the base = before it
+          // in a flex-end row); B grows rightward (delta AFTER the base).
+          if (fromRight) { if (deltaSeg) track.appendChild(deltaSeg); track.appendChild(baseSeg); }
+          else { track.appendChild(baseSeg); if (deltaSeg) track.appendChild(deltaSeg); }
+        }
         return track;
       };
       const lab = document.createElement("div");
       Object.assign(lab.style, { fontSize: "11px", fontWeight: "700", opacity: "0.75", textAlign: "center", whiteSpace: "nowrap" });
       lab.textContent = label;
-      row.append(val(a, a >= b, "right"), bar(a, colA, a >= b, true), lab, bar(b, colB, b >= a, false), val(b, b >= a, "left"));
+      row.append(
+        val(a, a >= b, "right", oldA),
+        bar(a, colA, a >= b, true, oldA),
+        lab,
+        bar(b, colB, b >= a, false, oldB),
+        val(b, b >= a, "left", oldB),
+      );
       wrap.appendChild(row);
     };
-    for (let i = 0; i < UI.HEX_AXES.length; i++) addRow(UI.HEX_AXES[i].label, axA[i], axB[i], 40, 99);
+    for (let i = 0; i < UI.HEX_AXES.length; i++) {
+      addRow(UI.HEX_AXES[i].label, dispAxes[0][i], dispAxes[1][i], 40, 99,
+        prev(0) ? baseAxes[0][i] : null, prev(1) ? baseAxes[1][i] : null);
+    }
     // team size — responsibility-weighted height converted to a strength value
     // on the user's calibration (180cm → 70, 200cm → 100), same band as the axes
-    addRow("高さ", UI.heightValue(this.teamHeight(0)), UI.heightValue(this.teamHeight(1)), 40, 100);
+    const hBase = [UI.heightValue(this.teamHeight(0)), UI.heightValue(this.teamHeight(1))];
+    const hDisp = hBase.slice();
+    if (preview) hDisp[preview.team] = UI.heightValue(this.teamHeightOf(preview.roster));
+    addRow("高さ", hDisp[0], hDisp[1], 40, 100,
+      prev(0) ? hBase[0] : null, prev(1) ? hBase[1] : null);
     return wrap;
+  }
+
+  // Swap the live VS board element for a freshly built one (optionally a preview).
+  private replaceVsBoard(next: HTMLDivElement): void {
+    if (this.vsBoard?.parentElement) this.vsBoard.parentElement.replaceChild(next, this.vsBoard);
+    this.vsBoard = next;
+  }
+  // Show / clear the "what this swap does to team strength" preview on the board.
+  private showVsPreview(team: number, idx: number, dbp: DbPlayer): void {
+    const roster = ROSTER[team].slice();
+    roster[idx] = makeDefFromDb(dbp);
+    this.vsPreviewActive = true;
+    this.replaceVsBoard(this.buildVsBoard({ team, roster }));
+  }
+  // Preview how a 評価ロール change would move this player's team's strength bars.
+  private previewRole(def: PlayerDef, team: number, role: string): void {
+    const idx = ROSTER[team].indexOf(def);
+    if (idx < 0) return;
+    const roster = ROSTER[team].slice();
+    roster[idx] = { ...def, evalRole: role === "自動" ? undefined : role };  // attr shared (read-only)
+    this.vsPreviewActive = true;
+    this.replaceVsBoard(this.buildVsBoard({ team, roster }));
+  }
+  // Preview how EXCHANGING two of a team's roster slots (starter ⇄ bench, via
+  // drag & drop) would move its strength bars — starters count 70%, bench 30%,
+  // so moving a strong reserve into the starting five lifts the team.
+  private showSwapPreview(team: number, idxA: number, idxB: number): void {
+    const roster = ROSTER[team].slice();
+    [roster[idxA], roster[idxB]] = [roster[idxB], roster[idxA]];
+    this.vsPreviewActive = true;
+    this.replaceVsBoard(this.buildVsBoard({ team, roster }));
+  }
+  private clearVsPreview(): void {
+    if (!this.vsPreviewActive) return;
+    this.vsPreviewActive = false;
+    this.replaceVsBoard(this.buildVsBoard());
   }
 
   // One team's roster: compact rows (position / name / height / OVR), starters
@@ -791,9 +962,22 @@ export class UI {
       display: "flex", flexDirection: "column", gap: "1px", textAlign: "left",
     } as Partial<CSSStyleDeclaration>);
 
+    // header: team name + a "選手を交代" button that opens the 4000+ DB picker
     const head = document.createElement("div");
-    Object.assign(head.style, { fontSize: "15px", fontWeight: "800", color, margin: "0 0 2px" });
-    head.textContent = TEAM_NAMES[team];
+    Object.assign(head.style, {
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      gap: "8px", margin: "0 0 2px",
+    } as Partial<CSSStyleDeclaration>);
+    const teamName = document.createElement("span");
+    Object.assign(teamName.style, { fontSize: "15px", fontWeight: "800", color });
+    teamName.textContent = TEAM_NAMES[team];
+    const swapBtn = this.button("選手を交代");
+    Object.assign(swapBtn.style, {
+      fontSize: "11px", fontWeight: "800", padding: "3px 12px",
+      background: color, color: "#0d1016", border: `1px solid ${color}`,
+    } as Partial<CSSStyleDeclaration>);
+    swapBtn.onclick = () => this.openPlayerPicker(team);
+    head.append(teamName, swapBtn);
     wrap.appendChild(head);
 
     const divider = (label: string): HTMLDivElement => {
@@ -879,7 +1063,7 @@ export class UI {
 
     row.append(pos, roleSel, name, ht, num, track, det);
     row.onpointerdown = (e) => this.beginDrag(team, i, e);
-    row.onmouseenter = () => { if (!this.dragFrom && !this.rolePicker && !this.detailModal) this.showPlayerCard(def, team, row); };
+    row.onmouseenter = () => { if (!this.dragFrom && !this.carry && !this.rolePicker && !this.detailModal) this.showPlayerCard(def, team, row); };
     row.onmouseleave = () => this.hidePlayerCard();
     return row;
   }
@@ -889,10 +1073,12 @@ export class UI {
   // two roster slots. On touch a LONG-PRESS lifts the bar (a plain swipe still
   // scrolls the list).
   private beginDrag(team: number, idx: number, ev: PointerEvent): void {
+    if (this.carry) return;   // an incoming DB player is being placed — ignore row drags
     if (ev.pointerType === "mouse" && ev.button !== 0) return;
     const ox = ev.clientX, oy = ev.clientY;
     let lifted = false;
     let timer = 0;
+    let previewIdx = -1;   // roster slot whose swap is currently previewed on the VS board
     const lift = (x: number, y: number) => {
       lifted = true;
       this.hidePlayerCard();
@@ -929,6 +1115,13 @@ export class UI {
         valid.el.style.background = "rgba(90,140,255,0.22)";
         this.dragHl = valid.el;
       }
+      // preview how strength would move if these two slots were exchanged
+      const wantIdx = valid ? valid.idx : -1;
+      if (wantIdx !== previewIdx) {
+        previewIdx = wantIdx;
+        if (previewIdx >= 0) this.showSwapPreview(team, idx, previewIdx);
+        else this.clearVsPreview();
+      }
     };
     const blockTouch = (te: TouchEvent) => { if (lifted) te.preventDefault(); };
     const move = (e: PointerEvent) => {
@@ -951,6 +1144,7 @@ export class UI {
         this.dragHl.style.background = "rgba(255,255,255,0.04)";
         this.dragHl = null;
       }
+      if (previewIdx >= 0) { previewIdx = -1; this.clearVsPreview(); }   // drop the swap preview
       this.dragFrom = null;
     };
     const up = (e: PointerEvent) => {
@@ -1016,6 +1210,12 @@ export class UI {
         if (onPick) onPick();
         else this.refreshEditors();   // OVR + team bars re-evaluate
       };
+      // real-time: hovering a role previews how it would move the team's bars
+      // (only on the pregame roster, where the VS board is actually visible)
+      if (!this.detailModal) {
+        b.onmouseenter = () => this.previewRole(def, team, nm);
+        b.onmouseleave = () => this.clearVsPreview();
+      }
       cell.appendChild(b);
       // ⓘ — press (or hover) to read what the role means / what it rewards
       const tip = nm === "自動"
@@ -1086,6 +1286,7 @@ export class UI {
       window.removeEventListener("pointerdown", this.rolePickerCloser, true);
       this.rolePickerCloser = null;
     }
+    this.clearVsPreview();   // drop any role-hover preview (no-op if none active)
   }
 
   // Full-ratings modal (the 詳 button): every one of the 25 ratings with a
@@ -1237,6 +1438,256 @@ export class UI {
   private closeDetailModal(): void {
     if (this.detailModal) { this.detailModal.remove(); this.detailModal = null; }
     this.hideTip();
+  }
+
+  // Build (once) an OVR-sorted view of the whole 4000+ player database so the
+  // picker's keystroke filtering is a plain array scan over cached fields.
+  private ensureDbIndex(): { p: DbPlayer; ovr: number; lower: string }[] {
+    if (!this.dbIndex) {
+      this.dbIndex = PLAYER_DB
+        .map((p) => ({ p, ovr: this.ovrOf(makeDefFromDb(p)), lower: p[0].toLowerCase() }))
+        .sort((a, b) => b.ovr - a.ovr);
+    }
+    return this.dbIndex;
+  }
+
+  // 選手を交代: opened from the team-name header. Pick any of the 4000+ database
+  // players (search / position filter / OVR); on pick the modal closes and the
+  // player is "carried" on the cursor — drop him on a roster row of his team to
+  // replace that player (see startCarry).
+  private openPlayerPicker(team: number): void {
+    this.closeRolePicker();
+    this.hidePlayerCard();
+    this.closePlayerPicker();
+    this.cancelCarry();
+    const color = colorOf(team);
+    const all = this.ensureDbIndex();
+    const phone = window.innerWidth < 640;
+
+    const overlay = document.createElement("div");
+    Object.assign(overlay.style, {
+      position: "fixed", inset: "0", zIndex: "88", background: "rgba(0,0,0,0.6)",
+      display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "auto",
+      fontFamily: "Segoe UI, system-ui, sans-serif", color: "#fff",
+    } as Partial<CSSStyleDeclaration>);
+    overlay.onclick = (e) => { if (e.target === overlay) this.closePlayerPicker(); };
+
+    const panel = document.createElement("div");
+    Object.assign(panel.style, {
+      background: "rgba(12,15,22,0.98)", border: `1px solid ${color}`,
+      borderRadius: "14px", padding: phone ? "12px 10px" : "14px 16px",
+      boxShadow: "0 16px 48px rgba(0,0,0,0.65)",
+      width: phone ? "96vw" : "560px", maxWidth: "96vw", height: "88vh", maxHeight: "88vh",
+      boxSizing: "border-box", display: "flex", flexDirection: "column", gap: "9px", textAlign: "left",
+    } as Partial<CSSStyleDeclaration>);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+    this.playerPicker = overlay;
+
+    // pick → close the modal and start carrying this player on the cursor
+    const onPick = (dbp: DbPlayer): void => {
+      this.closePlayerPicker();
+      this.startCarry(team, dbp);
+    };
+
+    // ---- the searchable 4000+ database list ----
+    const CAP = 150;
+    let posFilter = "ALL";
+    {
+      const title = document.createElement("div");
+      Object.assign(title.style, { fontSize: "15px", fontWeight: "800", color });
+      title.textContent = `選手を選ぶ — ${TEAM_NAMES[team]}（DB ${all.length}名）`;
+
+      const search = document.createElement("input");
+      search.type = "text";
+      search.placeholder = "選手名で検索…";
+      Object.assign(search.style, {
+        width: "100%", boxSizing: "border-box", padding: "8px 10px", fontSize: "14px",
+        borderRadius: "8px", border: "1px solid rgba(255,255,255,0.25)",
+        background: "rgba(255,255,255,0.06)", color: "#fff", outline: "none",
+      } as Partial<CSSStyleDeclaration>);
+
+      const posBar = document.createElement("div");
+      Object.assign(posBar.style, { display: "flex", gap: "6px", flexWrap: "wrap" } as Partial<CSSStyleDeclaration>);
+      const note = document.createElement("div");
+      Object.assign(note.style, { fontSize: "10px", opacity: "0.6" });
+      const list = document.createElement("div");
+      Object.assign(list.style, {
+        flex: "1 1 auto", overflowY: "auto", display: "flex", flexDirection: "column", gap: "2px",
+        border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", padding: "4px", minHeight: "0",
+      } as Partial<CSSStyleDeclaration>);
+
+      const rowFor = (e: { p: DbPlayer; ovr: number; lower: string }): HTMLDivElement => {
+        const r = document.createElement("div");
+        Object.assign(r.style, {
+          display: "grid", gridTemplateColumns: "34px 1fr 40px 30px 48px", gap: "8px",
+          alignItems: "center", padding: "5px 8px", borderRadius: "6px", cursor: "pointer",
+          background: "rgba(255,255,255,0.04)",
+        } as Partial<CSSStyleDeclaration>);
+        const pos = document.createElement("span");
+        Object.assign(pos.style, { fontSize: "10px", fontWeight: "800", color, textAlign: "center", border: `1px solid ${color}`, borderRadius: "5px", padding: "1px 0" });
+        pos.textContent = e.p[1];
+        const nm = document.createElement("span");
+        Object.assign(nm.style, { fontSize: "13px", fontWeight: "700", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+        nm.textContent = e.p[0];
+        const ht = document.createElement("span");
+        Object.assign(ht.style, { fontSize: "11px", opacity: "0.6", textAlign: "right" });
+        ht.textContent = `${e.p[2]}`;
+        const ovr = document.createElement("span");
+        Object.assign(ovr.style, { fontSize: "13px", fontWeight: "800", textAlign: "right" });
+        ovr.textContent = `${e.ovr}`;
+        const pick = this.button("選ぶ");
+        Object.assign(pick.style, { fontSize: "11px", fontWeight: "800", padding: "3px 0", background: color, color: "#0d1016", border: `1px solid ${color}` });
+        pick.onclick = (ev) => { ev.stopPropagation(); onPick(e.p); };
+        r.onclick = () => onPick(e.p);
+        r.onmouseenter = () => { r.style.background = "rgba(90,140,255,0.18)"; };
+        r.onmouseleave = () => { r.style.background = "rgba(255,255,255,0.04)"; };
+        r.append(pos, nm, ht, ovr, pick);
+        return r;
+      };
+
+      const render = (): void => {
+        const q = search.value.trim().toLowerCase();
+        const rows: { p: DbPlayer; ovr: number; lower: string }[] = [];
+        for (const e of all) {
+          if (posFilter !== "ALL" && e.p[1] !== posFilter) continue;
+          if (q && !e.lower.includes(q)) continue;
+          rows.push(e);
+          if (rows.length >= CAP) break;
+        }
+        note.textContent = rows.length >= CAP
+          ? `OVR上位 ${CAP} 件を表示 — さらに名前で絞り込めます`
+          : `${rows.length} 件（OVR順）`;
+        list.replaceChildren();
+        for (const e of rows) list.appendChild(rowFor(e));
+        list.scrollTop = 0;
+      };
+
+      const posBtns: Record<string, HTMLButtonElement> = {};
+      const setFilter = (f: string): void => {
+        posFilter = f;
+        for (const [k, b] of Object.entries(posBtns)) {
+          const on = k === f;
+          b.style.background = on ? color : "rgba(20,24,34,0.9)";
+          b.style.color = on ? "#0d1016" : "rgba(255,255,255,0.6)";
+          b.style.border = on ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.18)";
+        }
+        render();
+      };
+      for (const f of ["ALL", "PG", "SG", "SF", "PF", "C"]) {
+        const b = this.button(f === "ALL" ? "全" : f);
+        Object.assign(b.style, { fontSize: "11px", fontWeight: "800", padding: "4px 12px" } as Partial<CSSStyleDeclaration>);
+        b.onclick = () => setFilter(f);
+        posBtns[f] = b;
+        posBar.appendChild(b);
+      }
+      search.oninput = () => render();
+
+      const close = this.button("閉じる");
+      Object.assign(close.style, { alignSelf: "center", fontSize: "13px", padding: "6px 24px" } as Partial<CSSStyleDeclaration>);
+      close.onclick = () => this.closePlayerPicker();
+
+      panel.append(title, search, posBar, note, list, close);
+      setFilter(posFilter);   // paint the list
+      if (!phone) search.focus();
+    }
+  }
+
+  private closePlayerPicker(): void {
+    if (this.playerPicker) { this.playerPicker.remove(); this.playerPicker = null; }
+    this.hideTip();
+  }
+
+  // Carry an incoming DB player on the cursor after the picker closes. A plain
+  // pointerdown on a roster row of his team drops him there (replacing that
+  // player); a pointerdown anywhere else, or Esc, cancels. No button is held —
+  // the picker's click already ended, so this is a click-to-place interaction.
+  private startCarry(team: number, dbp: DbPlayer): void {
+    this.cancelCarry();
+    this.carry = { team, dbp };
+    const color = colorOf(team);
+
+    const g = document.createElement("div");
+    Object.assign(g.style, {
+      position: "fixed", zIndex: "92", pointerEvents: "none", whiteSpace: "nowrap",
+      transform: "translate(-50%,-50%)", padding: "5px 12px", borderRadius: "7px",
+      background: "rgba(15,19,28,0.96)", border: `1px solid ${color}`,
+      boxShadow: "0 10px 26px rgba(0,0,0,0.6)", fontSize: "12px", fontWeight: "800", color: "#fff",
+      left: "-999px", top: "-999px",
+    } as Partial<CSSStyleDeclaration>);
+    g.innerHTML = `<span style="color:${color}">${dbp[1]}</span>　${dbp[0]}　<span style="opacity:.6">⇄</span>`;
+    document.body.appendChild(g);
+    this.carryGhost = g;
+
+    const hint = document.createElement("div");
+    Object.assign(hint.style, {
+      position: "fixed", zIndex: "92", left: "50%", top: "12px", transform: "translateX(-50%)",
+      background: "rgba(90,140,255,0.96)", color: "#0d1016", fontWeight: "800", fontSize: "12px",
+      padding: "6px 14px", borderRadius: "8px", pointerEvents: "none", boxShadow: "0 6px 20px rgba(0,0,0,0.5)",
+      whiteSpace: "nowrap", maxWidth: "94vw", overflow: "hidden", textOverflow: "ellipsis",
+    } as Partial<CSSStyleDeclaration>);
+    hint.textContent = `「${dbp[0]}」を交代させる選手の上でクリック（Escで取消）`;
+    document.body.appendChild(hint);
+    this.carryHint = hint;
+
+    let previewIdx = -1;   // roster slot currently previewed on the VS board (-1 = none)
+    const clearHl = () => {
+      if (this.carryHl) {
+        this.carryHl.style.border = "1px solid transparent";
+        this.carryHl.style.background = "rgba(255,255,255,0.04)";
+        this.carryHl = null;
+      }
+    };
+    const onMove = (e: PointerEvent) => {
+      g.style.left = `${e.clientX}px`;
+      g.style.top = `${e.clientY - 18}px`;
+      const t = this.dropTargetAt(e.clientX, e.clientY);
+      const valid = t && t.team === team ? t : null;
+      if (this.carryHl && this.carryHl !== valid?.el) clearHl();
+      if (valid && this.carryHl !== valid.el) {
+        valid.el.style.border = "1px dashed rgba(150,195,255,0.95)";
+        valid.el.style.background = "rgba(90,140,255,0.22)";
+        this.carryHl = valid.el;
+      }
+      // preview how team strength would change if dropped on this player
+      const wantIdx = valid ? valid.idx : -1;
+      if (wantIdx !== previewIdx) {
+        previewIdx = wantIdx;
+        if (previewIdx >= 0) this.showVsPreview(team, previewIdx, dbp);
+        else this.clearVsPreview();
+      }
+    };
+    const onDown = (e: PointerEvent) => {
+      const t = this.dropTargetAt(e.clientX, e.clientY);
+      if (t && t.team === team) {
+        e.preventDefault();
+        e.stopPropagation();   // beat the row's own long-press drag
+        applyDbPlayer(ROSTER[team][t.idx], dbp);
+        ROSTER[team][t.idx].evalRole = undefined;   // fresh player → 自動 evaluation
+        this.cancelCarry();
+        this.refreshEditors();
+      } else {
+        this.cancelCarry();    // dropped away from any of his roster rows → cancel
+      }
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") this.cancelCarry(); };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerdown", onDown, true);   // capture: run before row handlers
+    window.addEventListener("keydown", onKey);
+    this.carryCleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey);
+      clearHl();
+      if (previewIdx >= 0) { previewIdx = -1; this.clearVsPreview(); }   // drop the strength preview
+    };
+  }
+
+  private cancelCarry(): void {
+    if (this.carryCleanup) { this.carryCleanup(); this.carryCleanup = null; }
+    if (this.carryGhost) { this.carryGhost.remove(); this.carryGhost = null; }
+    if (this.carryHint) { this.carryHint.remove(); this.carryHint = null; }
+    this.carry = null;
   }
 
   // The hover detail card: hexagon chart of the six digests + 特殊能力 chips.
@@ -1497,6 +1948,34 @@ export class UI {
     });
   }
 
+  // Keep the ☰ on the top edge (aligned with the scoreboard) as long as the
+  // centred scoreboard doesn't reach it; drop it below the board only once its
+  // right edge would collide. Recomputed on build and on every resize.
+  private positionMenu(): void {
+    if (!this.menuBtn || !this.board) return;
+    const boardW = this.board.getBoundingClientRect().width || 320;
+    const boardRight = window.innerWidth / 2 + boardW / 2;
+    const btnW = this.menuBtn.getBoundingClientRect().width || 44;
+    const btnLeft = window.innerWidth - 14 - btnW;
+    const clears = btnLeft > boardRight + 12;   // 12px breathing room before they touch
+    this.menuBtn.style.top = clears ? "14px" : "92px";
+    // the dropdown hangs just under the button in whichever spot it landed
+    this.controls.style.top = clears ? "58px" : "132px";
+  }
+
+  // Reflect the current 体力バー position on the toggle button's label.
+  private refreshStaminaBtn(): void {
+    if (!this.staminaBtn) return;
+    this.staminaBtn.textContent = HUD_OPTS.staminaOn === "name"
+      ? "体力: 名前の下" : "体力: アイコンの下";
+  }
+
+  // Reflect the on-court name-tag on/off state on its toggle button.
+  private refreshNamesBtn(): void {
+    if (!this.namesBtn) return;
+    this.namesBtn.textContent = HUD_OPTS.showNames ? "選手名: 表示" : "選手名: 非表示";
+  }
+
   // ---- bottom player bars (face icons per team, on-court ⇄ bench tabs) ----
 
   private buildPlayerBars(): void {
@@ -1595,6 +2074,20 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
     face.appendChild(num);
     wrap.appendChild(face);
+
+    // stamina bar directly under the face — shown only in "icon" HUD mode
+    // (in "name" mode the gauge lives on the floating 3D name tag instead).
+    const bar = document.createElement("div");
+    Object.assign(bar.style, {
+      width: "42px", height: "5px", borderRadius: "3px", overflow: "hidden",
+      background: "rgba(255,255,255,0.22)",
+      display: HUD_OPTS.staminaOn === "icon" ? "block" : "none",
+    } as Partial<CSSStyleDeclaration>);
+    const fill = document.createElement("div");
+    Object.assign(fill.style, { width: "100%", height: "100%", borderRadius: "3px" } as Partial<CSSStyleDeclaration>);
+    bar.appendChild(fill);
+    wrap.appendChild(bar);
+    this.iconStamina.set(player, { bar, fill });
 
     const name = document.createElement("div");
     name.textContent = player.name;
@@ -1736,6 +2229,25 @@ export class UI {
     }
   }
 
+  // Live-update the face-icon stamina bars (only meaningful in "icon" HUD mode;
+  // the bars are hidden otherwise). Keyed by player, so it tracks whichever icon
+  // element is currently on screen for him.
+  private updateIconStamina(game: Game): void {
+    const show = HUD_OPTS.staminaOn === "icon";
+    for (const roster of game.roster) {
+      for (const p of roster) {
+        const s = this.iconStamina.get(p);
+        if (!s || !s.bar.isConnected) continue;
+        s.bar.style.display = show ? "block" : "none";
+        if (!show) continue;
+        const frac = Math.max(0, Math.min(1, 1 - p.fatigue));
+        s.fill.style.width = `${frac * 100}%`;
+        s.fill.style.background = frac > 0.5 ? "rgb(80,220,110)"
+          : frac > 0.25 ? "rgb(240,200,70)" : "rgb(235,80,60)";
+      }
+    }
+  }
+
   // Floating "＋" badges: compare each player's box score to last frame and pop a
   // badge over his icon for anything he just earned (score/assist/rebound/etc.).
   private updateStatPops(game: Game): void {
@@ -1788,6 +2300,7 @@ export class UI {
     // built then would show stale names
     if (this.phase === "playing") {
       this.refreshPlayerBars(game);
+      this.updateIconStamina(game);
       this.updateStatPops(game);
     }
     this.scoreA.textContent = String(game.score[0]);

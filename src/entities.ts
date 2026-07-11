@@ -2,7 +2,7 @@ import {
   Scene, Vector3, Quaternion, MeshBuilder, StandardMaterial, Color3, Mesh, TransformNode,
   DynamicTexture,
 } from "@babylonjs/core";
-import { TEAM_COLORS } from "./config";
+import { TEAM_COLORS, HUD_OPTS } from "./config";
 import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority, ROLE_BEHAVIOR } from "./attributes";
 import { clamp, rand } from "./util";
 
@@ -52,6 +52,7 @@ export class Player {
 
   // floating name tag, redrawn when the name changes
   private nameTex!: DynamicTexture;
+  private namePlane!: Mesh;   // floating name tag; hidden when HUD_OPTS.showNames is off
   private readonly teamRGB: { r: number; g: number; b: number };
 
   // jersey-number decals, one per Z side; the visible one is the player's back
@@ -107,7 +108,8 @@ export class Player {
   prevZ = 0;
   velX = 0;        // measured velocity (m/s) — used to lead a moving receiver
   velZ = 0;
-  private gaugeDrawn = 0;  // fatigue value last painted on the name-tag gauge
+  private gaugeDrawn = 0;   // fatigue value last painted on the name-tag gauge
+  private gaugeRev = -1;    // HUD_OPTS.rev the tag was last painted for (forces a repaint on toggle)
 
   // brief lock-out after touching a loose ball, so one tip doesn't re-trigger
   // a dozen contacts on the same frame-span
@@ -219,6 +221,7 @@ export class Player {
 
     // Floating name tag that always faces the camera, so personalities are legible.
     const namePlane = MeshBuilder.CreatePlane(`name_${team}_${idx}`, { width: 1.7, height: 0.42 }, scene);
+    this.namePlane = namePlane;
     namePlane.position.y = 2.35;
     namePlane.billboardMode = Mesh.BILLBOARDMODE_ALL;
     const nameTex = new DynamicTexture(`nametex_${team}_${idx}`, { width: 256, height: 64 }, scene, false);
@@ -505,7 +508,7 @@ export class Player {
       this.fatigue = clamp(this.fatigue + (drain - rest) * dt, 0, 1);
     }
     // keep the name-tag stamina gauge current (repaint only on visible change)
-    if (Math.abs(this.fatigue - this.gaugeDrawn) > 0.02) this.drawNameTag();
+    if (Math.abs(this.fatigue - this.gaugeDrawn) > 0.02 || this.gaugeRev !== HUD_OPTS.rev) this.drawNameTag();
   }
 
   /** Sitting on the bench: a slow, steady recovery (not an instant refill) —
@@ -513,13 +516,13 @@ export class Player {
   benchRecover(dt: number): void {
     const rec = 0.002 + rate(this.attr.stamina) * 0.004;   // ~0.0024 .. ~0.006 per sec
     this.fatigue = Math.max(0, this.fatigue - rec * dt);
-    if (Math.abs(this.fatigue - this.gaugeDrawn) > 0.02) this.drawNameTag();
+    if (Math.abs(this.fatigue - this.gaugeDrawn) > 0.02 || this.gaugeRev !== HUD_OPTS.rev) this.drawNameTag();
   }
 
   /** A one-off recovery chunk at a period break (quarter rest / halftime). */
   breakRecover(amount: number): void {
     this.fatigue = Math.max(0, this.fatigue - amount);
-    if (Math.abs(this.fatigue - this.gaugeDrawn) > 0.02) this.drawNameTag();
+    if (Math.abs(this.fatigue - this.gaugeDrawn) > 0.02 || this.gaugeRev !== HUD_OPTS.rev) this.drawNameTag();
   }
 
   /** True while following through on a pass/shot — must not initiate movement. */
@@ -617,18 +620,23 @@ export class Player {
     ctx.textBaseline = "middle";
     ctx.fillText(this.name, 128, 24);
 
-    // stamina gauge (track + fill)
-    const left = 14, top = 46, width = 228, height = 10;
-    const frac = clamp(1 - this.fatigue, 0, 1);
-    ctx.fillStyle = "rgba(255,255,255,0.22)";
-    ctx.fillRect(left, top, width, height);
-    ctx.fillStyle = frac > 0.5 ? "rgb(80,220,110)"
-      : frac > 0.25 ? "rgb(240,200,70)" : "rgb(235,80,60)";
-    ctx.fillRect(left, top, width * frac, height);
+    // stamina gauge (track + fill) — only when the HUD is set to show it on the
+    // name tag; in "icon" mode it lives under the bottom-HUD face icon instead
+    if (HUD_OPTS.staminaOn === "name") {
+      const left = 14, top = 46, width = 228, height = 10;
+      const frac = clamp(1 - this.fatigue, 0, 1);
+      ctx.fillStyle = "rgba(255,255,255,0.22)";
+      ctx.fillRect(left, top, width, height);
+      ctx.fillStyle = frac > 0.5 ? "rgb(80,220,110)"
+        : frac > 0.25 ? "rgb(240,200,70)" : "rgb(235,80,60)";
+      ctx.fillRect(left, top, width * frac, height);
+    }
     ctx.shadowBlur = 0;
 
     this.nameTex.update();
+    this.namePlane.isVisible = HUD_OPTS.showNames;   // toggle the on-court name tag
     this.gaugeDrawn = this.fatigue;
+    this.gaugeRev = HUD_OPTS.rev;
   }
 
   /** Zero this player's box score and conditioning (start of a game). */

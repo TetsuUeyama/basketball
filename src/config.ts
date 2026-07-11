@@ -36,6 +36,13 @@ export function hoopFloor(team: number) {
 export const SHOOT_RANGE = 7.6;   // max distance a player will normally shoot from
 export const THREE_DIST = 6.75;   // beyond this counts as a 3-pointer
 
+// Where the stamina gauge is shown. "name": on the floating 3D name tag above
+// each player (default). "icon": under the bottom-HUD face icon instead. `rev`
+// bumps whenever the toggle flips so the name tags force a repaint even though
+// the fatigue value itself didn't change.
+export const HUD_OPTS: { staminaOn: "name" | "icon"; showNames: boolean; rev: number } =
+  { staminaOn: "name", showNames: true, rev: 0 };
+
 export const PLAYER_SPEED = 6.2;  // offensive run speed
 export const DEF_SPEED = 6.5;     // defenders are a touch quicker so they can recover
 export const PASS_SPEED = 13;     // pass travel speed

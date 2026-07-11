@@ -254,6 +254,36 @@ const MAX = A(99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99
 // The existing PlayerDef objects are mutated in place — Player.attr holds a
 // live reference to def.attr, so per-field assignment updates entities too.
 // ---------------------------------------------------------------------------
+// Build a fresh, standalone PlayerDef from a database entry (its own natural
+// position, height, ratings, abilities, hand). Used by the pre-game player
+// picker to preview any of the 4000+ players without touching a roster slot.
+export function makeDefFromDb(p: DbPlayer): PlayerDef {
+  const [name, role, hcm, ratings, mask, extras, hand] = p;
+  const attr = {} as Attributes;
+  ATTR_META.forEach((m, k) => { attr[m.key] = clamp(ratings[k] ?? 50, 0, 100); });
+  return {
+    name, role, height: hcm / 100, attr,
+    abilities: ABILITY_META.filter((_, b) => mask & (1 << b)).map((m) => m.key),
+    hand: hand === "L" ? "L" : "R",
+    future: { stability: extras[0] ?? 0, offhandAcc: extras[1] ?? 0, offhandFreq: extras[2] ?? 0 },
+  };
+}
+
+// Copy a database entry INTO an existing roster slot, in place. Per-field attr
+// assignment is deliberate: Player.attr holds a live reference to def.attr, so
+// mutating fields (not replacing the object) updates the on-court entity too.
+export function applyDbPlayer(def: PlayerDef, p: DbPlayer): void {
+  const src = makeDefFromDb(p);
+  def.name = src.name;
+  def.role = src.role;
+  def.height = src.height;
+  def.priority = undefined;
+  ATTR_META.forEach((m) => { def.attr[m.key] = src.attr[m.key]; });
+  def.abilities = src.abilities;
+  def.hand = src.hand;
+  def.future = src.future;
+}
+
 export function randomizeRosters(): void {
   const pools: Record<string, DbPlayer[]> = { PG: [], SG: [], SF: [], PF: [], C: [] };
   for (const p of PLAYER_DB) pools[p[1]]?.push(p);
@@ -271,16 +301,8 @@ export function randomizeRosters(): void {
   const roles = ["PG", "SG", "SF", "PF", "C", ...BENCH_ROLES];
   for (let t = 0; t < 2; t++) {
     for (let i = 0; i < ROSTER_SIZE; i++) {
-      const [name, , hcm, ratings, mask, extras, hand] = draw(roles[i]);
-      const def = ROSTER[t][i];
-      def.name = name;
-      def.role = roles[i];
-      def.height = hcm / 100;
-      def.priority = undefined;
-      ATTR_META.forEach((m, k) => { def.attr[m.key] = clamp(ratings[k] ?? 50, 0, 100); });
-      def.abilities = ABILITY_META.filter((_, b) => mask & (1 << b)).map((m) => m.key);
-      def.hand = hand === "L" ? "L" : "R";
-      def.future = { stability: extras[0] ?? 0, offhandAcc: extras[1] ?? 0, offhandFreq: extras[2] ?? 0 };
+      applyDbPlayer(ROSTER[t][i], draw(roles[i]));
+      ROSTER[t][i].role = roles[i];   // pin to the slot's position (a fallback draw may differ)
     }
   }
 }

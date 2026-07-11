@@ -924,6 +924,48 @@
   16m以上=2%床。L速度50なら12mで既に2%、L精度50は10mで17%。**通常アーク/ディープ3はほぼ不変**
   （near-lineでover≈0→heaveDrop≈0）。要望「L精度L速度MAXでようやく2割」に一致。tsc✓。
 
+## 2026-07-11 (84) HUD設定トグル群 + 4000+選手DBからの選手交代
+- **体力バー位置トグル**（名前タグの下⇄顔アイコンの下）: config.ts `HUD_OPTS{staminaOn,rev}`。
+  entities.ts drawNameTagでゲージ描画を`staminaOn==="name"`時のみ+`gaugeRev!==rev`で強制再描画。
+  ui.ts 顔アイコンにバー要素追加+updateIconStaminaで毎フレーム更新。トグルはハンバーガーメニュー内。
+- **☰メニュー配置**: スコアボード（中央寄せ）と重なるまで上端(14px)、届いたら92pxへ退避。
+  positionMenu()をbuild時+resize時に実行。ドロップダウンtopも追従(58/132px)。
+- **選手名オンオフ**: HUD_OPTS.showNames。entities drawNameTagで`namePlane.isVisible`適用。
+- **選手交代（4000+DB, キャリー方式）**: attributes.ts に`makeDefFromDb(p)`(新規def生成)と
+  `applyDbPlayer(def,p)`(既存スロットをin-place更新=attr参照保持)を追加、randomizeRostersも共有化。
+  ui.ts: ロースターカードの**チーム名の横**に「選手を交代」ボタン→openPlayerPicker(team)。
+  DBリスト(名前検索+ポジション全/PG..C+OVR降順・上位150件、dbIndexは初回OVRソートしキャッシュ)。
+  選手を選ぶ→**モーダルを閉じ、その選手がカーソルに追従(startCarry)**→交代させる選手の行で
+  クリックするとapplyDbPlayer→evalRoleリセット→refreshEditors。Esc/枠外クリックで取消。
+  実装: window pointermove/pointerdown(capture,行のドラッグより先取)/keydown。beginDragは`carry`中return。
+  headless検証: makeDefFromDb正確・applyDbPlayerがattr同一性保持(true)・全4015人NaN無し。tsc/build✓。
+  ⚠ ピッカー/キャリーの見た目・操作感(特にtouchでゴースト追従)は実機未検証。
+  DB選手のnatural roleがスロットに入る(PG枠にCも可=任意編成)。
+- **交代プレビュー（戦力バー増減）**: キャリー中に交代対象の行へホバーすると、VS戦力ボードの
+  該当チーム各バーに増減を表示。teamAxes/teamHeight/teamOvrを`*Of(roster)`版に分離し、
+  buildVsBoard(preview?{team,roster})で仮ロースター(スロットをmakeDefFromDbで差替)の値と現値の差分を計算。
+  増分バー=淡緑(GAIN rgb120,225,140)/減分バー=薄赤(LOSS rgb240,140,130)、数値も±Nを同色で表示
+  (バーは中央から外側へbase色+delta色の2セグメント、値セルは数字の下に±N、ヘッダーOVRにも±N)。
+  showVsPreview/clearVsPreview/replaceVsBoardでボード要素を差し替え、onMoveでホバー対象変化時のみ更新、
+  カーソル離脱/取消/確定で元に戻す。tsc/build✓。⚠ バーの向き・見た目は実機未検証。
+- **プレビュー修正(84追補)**: ±Nを数字の**下**に出していたため行高が変わりボード伸縮→下段の控え行が
+  ずれてホバーが外れプレビュー解除(「画面が都度崩れる」「控えだと変わらない」の原因)。→±Nを**横並び**に、
+  値カラムを**固定幅52px**化してリフロー根絶。headless検証(probe-bench): 控え交代(idx8)でも各軸実際に
+  +1変化する(控えは30%ウェイトで小さいが非ゼロ)ことを確認=計算は正常、崩れが原因だった。tsc/build✓。
+- **プレビュー修正2(84追補)**: (a)控えの±が出ない件=控えは変化が1点未満で整数丸めで0になっていた→
+  増減を**1桁小数の実差分**(v-old)に変更(整数なら整数表示、端数は+0.6等)、バーのdelta閾値も0.5→0.15、
+  値カラム幅58pxに拡大。(b)**役割変更のリアルタイム戦力プレビュー**: 役割ピッカーの各ロールボタンhoverで
+  previewRole(def,team,role)=`{...def,evalRole:role}`の仮ロースターでVSボード差分表示、離脱/閉/選択で復帰。
+  vsPreviewActiveフラグでclearVsPreviewを冪等化、closeRolePickerで復帰。詳細モーダル由来のピッカーは
+  ボード非表示なのでhover無効。tsc/build✓。⚠ 見た目・小数表示の収まりは実機未検証。
+  headless実測(DOMシム+babylon-mockでbuildVsBoard直接呼び)で検証: 控え交代は増減出る(+0.6等)、
+  役割変更はteam軸±0.1〜0.7・teamOVR0・個人OVR±1と**仕組み上ほぼ動かない**(重み再配分のみ)ことを確認。
+  ユーザー選択: 役割プレビューは現状の小さな増減のまま。
+- **プレビュー修正3(84追補)**: (a)**スタメン⇔控えのドラッグ入れ替え**にも増減プレビュー追加=
+  beginDragのplace()でshowSwapPreview(team,idx,target)(2枠を入替えた仮ロースター)、teardownで復帰。
+  実測: starter idx2⇔bench idx8で軸-0.8/-0.5/+0.9・OVR-1と可視。(b)戦力数値を**0.1刻み表示**
+  (val: Math.round→toFixed(1)、増減もtoFixed(1))、値カラム幅66pxに拡大。tsc/build✓。
+
 ### 次回再開ポイント
 1. `npm run dev` で総合playtest（本セッションは大半が実機未検証: 抜き3種/守備・ブロック/選手の向き/
    スペーシング/着地硬直/踏切/顔アイコン・スタッツポップ・ホバー/スローイン/バナー/トランジション守備の戻り）
