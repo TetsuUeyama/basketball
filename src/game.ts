@@ -74,6 +74,7 @@ export class Game {
   // shot animation
   private shotFrom = new Vector3();
   private shotTarget = new Vector3();   // where the ball ACTUALLY flies — the rim on a make, an off-target point on a miss
+  private shotBigMiss = false;          // a long air-ball/heave that sails out of bounds → throw-in, not a rebound
   private shotMade = false;
   private shotWasDunk = false;   // last finish was a dunk (bigger bench celebration)
   private shotPoints = 2;
@@ -647,7 +648,9 @@ export class Game {
       t0[i].pos.set(ring0[i][0], 0, ring0[i][1]);
       t1[i].pos.set(ring1[i][0], 0, ring1[i][1]);
     }
-    for (const p of this.players) { p.cutting = false; p.offTimer = rand(0.4, 2); p.spotIdx = this.homeSpotIdx(p); }
+    // everyone on the floor stands: a starter who was seated on the bench at the
+    // end of a previous game must not tip off still in the sitting pose
+    for (const p of this.players) { p.stand(); p.cutting = false; p.offTimer = rand(0.4, 2); p.spotIdx = this.homeSpotIdx(p); }
 
     this.tipWinner = chance(0.5) ? 0 : 1;
     this.tipGuard = this.teamPlayers(this.tipWinner)[0];
@@ -2320,6 +2323,7 @@ export class Game {
       this.finishSpot.set(rimFloor.x + (dx / len) * standoff, 0, rimFloor.z + (dz / len) * standoff);
     }
     this.shotTarget.copyFrom(this.attackRim(this.possession));   // point-blank: a miss just rims out
+    this.shotBigMiss = false;
     this.ballMode = "shot";
     this.shooter = h;
     this.shooterFinishing = true;
@@ -2551,19 +2555,24 @@ export class Game {
   private aimShotTarget(dHoop: number): void {
     const rim = this.attackRim(this.possession);
     this.shotTarget.copyFrom(rim);
+    this.shotBigMiss = false;
     if (this.shotMade) return;
     const big = Math.max(0, dHoop - THREE_DIST) * 0.45;   // 0 at the arc, large on a heave
-    if (big < 0.2) return;                                 // short misses just rim out
+    if (big < 0.2) return;                                 // short misses just rim out (rebound)
+    // a long air-ball / heave misses BADLY: it sails clean OUT OF BOUNDS (never
+    // touches the rim), and resolveShot turns it into the other team's throw-in.
+    this.shotBigMiss = true;
     const zSign = Math.sign(rim.z) || 1;
-    if (chance(0.65)) {
-      // SHORT: an air-ball that never reaches the rim — lands short and low
-      this.shotTarget.z -= zSign * big;
-      this.shotTarget.x += rand(-0.7, 0.7);
-      this.shotTarget.y = Math.max(1.5, RIM.height - big * 0.6);
+    if (chance(0.6)) {
+      // LONG: overshoots past the basket, out past the baseline
+      this.shotTarget.z = zSign * (COURT.halfL + 0.6 + big * 0.3);
+      this.shotTarget.x += rand(-1.2, 1.2);
+      this.shotTarget.y = RIM.height + rand(-0.3, 0.6);
     } else {
-      // WIDE: sails past the rim to one side
-      this.shotTarget.x += (chance(0.5) ? -1 : 1) * (0.7 + big);
-      this.shotTarget.z += zSign * rand(-0.2, 0.6);
+      // WIDE: sails off past the sideline
+      this.shotTarget.x = (chance(0.5) ? -1 : 1) * (COURT.halfW + 0.5 + big * 0.3);
+      this.shotTarget.z += zSign * rand(-0.6, 1.0);
+      this.shotTarget.y = Math.max(1.6, RIM.height - rand(0, 0.8));
     }
   }
 
@@ -2611,7 +2620,11 @@ export class Game {
     } else {
       this.setEvent("MISS", shooter);
       if (this.gameClock <= 0) { this.handler = null; this.endQuarter(); }
-      else this.startRebound();
+      else if (this.shotBigMiss) {
+        // a heave / air-ball that sailed out of bounds → the other team throws in
+        this.handler = null;
+        this.pauseThen(0.7, () => this.withSubs(() => this.startInbound(1 - shooter)));
+      } else this.startRebound();
     }
     this.pendingAssist = null;
     this.pendingAndOne = null;

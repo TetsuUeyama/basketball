@@ -1,6 +1,6 @@
 import {
   Scene, Vector3, Quaternion, MeshBuilder, StandardMaterial, Color3, Mesh, TransformNode,
-  DynamicTexture,
+  DynamicTexture, VertexData,
 } from "@babylonjs/core";
 import { TEAM_COLORS, HUD_OPTS } from "./config";
 import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority, ROLE_BEHAVIOR } from "./attributes";
@@ -166,18 +166,59 @@ export class Player {
     const bodyMat = new StandardMaterial(`bmat_${team}_${idx}`, scene);
     bodyMat.diffuseColor = color;
     bodyMat.specularColor = new Color3(0.1, 0.1, 0.1);
-    const lowerBody = MeshBuilder.CreateCapsule(`lower_${team}_${idx}`, {
-      height: 0.5, radius: 0.2, capSubdivisions: 6, tessellation: 12,
-    }, scene);
-    lowerBody.position.y = 1.02;              // abdomen / pelvis
-    lowerBody.material = bodyMat;
-    lowerBody.parent = this.root;
-    const upperBody = MeshBuilder.CreateCapsule(`upper_${team}_${idx}`, {
-      height: 0.62, radius: 0.24, capSubdivisions: 6, tessellation: 12,
-    }, scene);
-    upperBody.position.y = 1.4;               // chest / shoulders
-    upperBody.material = bodyMat;
-    upperBody.parent = this.root;
+    bodyMat.backFaceCulling = false;   // torso caps/ribbon show regardless of winding
+    // Torso = two rounded-RECTANGLE prisms (rectangular cross-section with a
+    // small corner fillet R, extruded vertically). Core Babylon has no rounded
+    // box, so the rounded-rect ring is built by hand and the sides are a closed
+    // ribbon between a bottom and a top ring. The upper body is a touch bigger
+    // than the waist.
+    const rrRing = (a: number, b: number, r: number, y: number): Vector3[] => {
+      const pts: Vector3[] = [];
+      const corner = (cx: number, cz: number, a0: number) => {
+        for (let i = 0; i <= 4; i++) {
+          const t = a0 + (Math.PI / 2) * (i / 4);
+          pts.push(new Vector3(cx + Math.cos(t) * r, y, cz + Math.sin(t) * r));
+        }
+      };
+      corner(a - r, -(b - r), -Math.PI / 2);   // bottom-right → right edge
+      corner(a - r, b - r, 0);                 // top-right → top edge
+      corner(-(a - r), b - r, Math.PI / 2);    // top-left → left edge
+      corner(-(a - r), -(b - r), Math.PI);     // bottom-left → bottom edge
+      return pts;
+    };
+    // a flat cap (triangle fan from the centre to the ring) closes an end
+    const makeCap = (name: string, ring: Vector3[], y: number): void => {
+      const positions: number[] = [0, y, 0];
+      for (const p of ring) positions.push(p.x, p.y, p.z);
+      const indices: number[] = [];
+      const n = ring.length;
+      for (let i = 0; i < n; i++) indices.push(0, i + 1, ((i + 1) % n) + 1);
+      const normals: number[] = [];
+      VertexData.ComputeNormals(positions, indices, normals);
+      const vd = new VertexData();
+      vd.positions = positions; vd.indices = indices; vd.normals = normals;
+      const cap = new Mesh(name, scene);
+      vd.applyToMesh(cap);
+      cap.material = bodyMat;
+      cap.parent = this.root;
+    };
+    const roundedBox = (name: string, a: number, b: number, r: number, y0: number, y1: number): Mesh => {
+      const bot = rrRing(a, b, r, y0), top = rrRing(a, b, r, y1);
+      const m = MeshBuilder.CreateRibbon(name, {
+        pathArray: [bot, top], closePath: true, sideOrientation: Mesh.DOUBLESIDE,
+      }, scene);
+      m.material = bodyMat;
+      m.parent = this.root;
+      makeCap(`${name}_top`, top, y1);   // close the top and bottom so the torso isn't hollow
+      makeCap(`${name}_bot`, bot, y0);
+      return m;
+    };
+    // waist / pelvis, and a slightly larger chest / shoulders
+    const lowerBody = roundedBox(`lower_${team}_${idx}`, 0.21, 0.15, 0.06, 0.79, 1.21);
+    // top kept below the head (head bottom ≈ 1.61) so the head isn't buried
+    const upperBody = roundedBox(`upper_${team}_${idx}`, 0.25, 0.18, 0.07, 1.15, 1.58);
+    // the flat back the jersey number sits on (depth of the upper body)
+    const backZ = 0.18;
 
     const head = MeshBuilder.CreateSphere(`head_${team}_${idx}`, { diameter: 0.34, segments: 10 }, scene);
     head.position.y = 1.78;
@@ -216,10 +257,10 @@ export class Player {
     // on that side (default left-handed camera: +X is screen-right when
     // looking along +Z, and -X when looking along -Z).
     const makeNumberShell = (sign: number): Mesh => {
-      const R = 0.245;                    // just proud of the 0.23 body radius
-      const yTop = 1.5, yBot = 1.0;       // upper back (recentred on the slimmer torso)
+      const R = backZ + 0.012;            // just proud of the flat back — nearly flat now
+      const yTop = 1.52, yBot = 1.08;     // on the upper back, within the (lowered) torso top
       const SEG = 12;
-      const span = Math.PI * 0.55;        // ~100° of wrap around the torso
+      const span = Math.PI * 0.34;        // ~60° — a gentle wrap that hugs the (mostly flat) back
       const top: Vector3[] = [];
       const bot: Vector3[] = [];
       for (let i = 0; i <= SEG; i++) {
