@@ -66,6 +66,13 @@ export class Player {
   private numberSide = 1;   // which local Z side currently shows the number
   private sideApplied = false; // Game hasn't picked a back side yet — keep shells hidden
 
+  // Upper body carrier: chest, head, arms and the jersey number ride this and
+  // TWIST toward the play (twistToward), while the root — and with it the legs
+  // and feet — faces the direction of travel. Lets a player keep running one
+  // way with his chest turned to receive, pass, or shadow a driver.
+  private torsoNode!: TransformNode;
+  private torsoTwist = 0;   // smoothed twist (rad), clamped to ±TWIST_MAX
+
   // Both body styles exist from construction; applyModel() shows one and hides
   // the other so the style can be flipped live from the HUD menu.
   private humanNode!: TransformNode;   // rectangular torso (ribbons + caps)
@@ -113,6 +120,22 @@ export class Player {
   abilities: Set<AbilityKey>;
   // ダイレクトプレイ: window (seconds) after catching a pass for one-touch play
   quickT = 0;
+
+  // dribble carry: where the live dribble sits relative to the handler (world
+  // XZ offset). The game eases it between a fast front carry and a protected
+  // side carry at a speed set by D精度; baitT is a deliberate "shown ball"
+  // window inviting a reach-in the handler is ready to beat.
+  carryX = 0;
+  carryZ = 0;
+  baitT = 0;
+
+  // foul reaction — a brief, purely visual beat played during the dead-ball
+  // pause: "hurt" sells the contact (arms fly out, body rocks back), "and1"
+  // is the flex (fists up + a hop) before heading to the line
+  foulReactT = 0;
+  private foulReactDur = 0;
+  private foulReactKind: "hurt" | "and1" = "hurt";
+  private flinchPitch = 0;   // extra root pitch while flinching, added in sync()
 
   // --- conditioning (スタミナ/加速) ---
   // Actual speed achieved last frame (m/s), measured from displacement; the
@@ -175,10 +198,15 @@ export class Player {
 
     this.root = new TransformNode(`p_${team}_${idx}`, scene);
 
+    // the twisting upper body — everything above the hips parents here
+    const torsoNode = new TransformNode(`torsoTwist_${team}_${idx}`, scene);
+    torsoNode.parent = this.root;
+    this.torsoNode = torsoNode;
+
     // carrier for every humanoid-only torso piece, so the whole rect torso can
     // be enabled/disabled as one when the body style flips
     const humanNode = new TransformNode(`human_${team}_${idx}`, scene);
-    humanNode.parent = this.root;
+    humanNode.parent = torsoNode;
     this.humanNode = humanNode;
 
     // torso split into upper body (chest) + lower body (abdomen/pelvis) with a
@@ -249,7 +277,7 @@ export class Player {
     // Core Babylon has no one-flat-end capsule, so each piece is a lathe of
     // its profile.
     const acornNode = new TransformNode(`acorn_${team}_${idx}`, scene);
-    acornNode.parent = this.root;
+    acornNode.parent = torsoNode;   // chest + waist twist; the feet stay on the root
     this.acornNode = acornNode;
     const AR = 0.3, ACUT = Player.ACORN_CUT, ARC = 8; // chest radius / waist-chest cut height
     const WR = Player.ACORN_WAIST_R, WTIP = 0.22; // waist radius / waist bottom tip height
@@ -292,7 +320,7 @@ export class Player {
     headMat.diffuseColor = new Color3(0.86, 0.7, 0.56);
     headMat.specularColor = new Color3(0.05, 0.05, 0.05);
     head.material = headMat;
-    head.parent = this.root;
+    head.parent = torsoNode;   // the head turns with the chest
 
     // acorn penguin feet, shaped like SHOES: a long low toe box + a rounded toe
     // cap + a taller ankle shaft tucking up under the waist bottom. Built with
@@ -311,7 +339,7 @@ export class Player {
     // fans (the outline is convex).
     const makeAcornFoot = (sx: number, tag: string): TransformNode => {
       const node = new TransformNode(`acornFoot_${tag}_${team}_${idx}`, scene);
-      node.parent = acornNode;
+      node.parent = this.root;   // feet belong to the legs, not the twisting torso
       node.position.set(sx, 0, 0.07);            // z / yaw re-aimed per numberSide
       const hw = 0.15 / 2;                            // half width
       const capZ = -0.20, capR = 0.08, capH = 0.13;   // toe curve: start / bulge / height
@@ -396,7 +424,7 @@ export class Player {
         pathArray: [bot, top], sideOrientation: Mesh.DOUBLESIDE,
       }, scene);
       shell.material = numMat;
-      shell.parent = this.root;
+      shell.parent = torsoNode;   // the number is printed on the (twisting) jersey
       shell.isVisible = false;            // Game picks the back side each half
       return shell;
     };
@@ -432,7 +460,7 @@ export class Player {
     const UP = 0.25, FORE = 0.25;
     const makeArm = (sx: number, tag: string): { pivot: TransformNode; elbow: TransformNode } => {
       const pivot = new TransformNode(`arm_${tag}_${team}_${idx}`, scene);
-      pivot.parent = this.root;
+      pivot.parent = torsoNode;   // shoulders ride the twisting chest
       pivot.position.set(sx, 1.45, 0.06);          // shoulder
       const upper = MeshBuilder.CreateCylinder(`upper_${tag}_${team}_${idx}`,
         { height: UP, diameter: 0.12, tessellation: 8 }, scene);
@@ -581,6 +609,8 @@ export class Player {
     this.hipL.setEnabled(human);          // legs (thigh/shin/foot ride these pivots)
     this.hipR.setEnabled(human);
     this.acornNode.setEnabled(!human);
+    this.acornFootL.setEnabled(!human);   // shoe feet live on the root (they don't
+    this.acornFootR.setEnabled(!human);   // twist), so they toggle separately
     // the capsule is wider than the rect torso — shoulders move out to match
     const sx = human ? 0.28 : 0.34;
     this.armPivotL.position.x = -sx;
@@ -591,6 +621,35 @@ export class Player {
     if (this.seated && !human) this.foldAcornSeat();
     else this.unfoldAcornSeat();
     this.refreshScale();
+  }
+
+  // How far the chest can twist away from the hips (either way). Real torsos
+  // manage ~60-70° before the feet have to come around.
+  private static readonly TWIST_MAX = 1.15;
+
+  /** Twist the upper body so the chest aims at a world point while the root
+   *  (legs, feet) keeps its own facing — receiving on the run, shading a driver
+   *  while sprinting alongside. Clamped to TWIST_MAX and eased; aiming near the
+   *  root's own facing (or standing square) unwinds it back to zero. */
+  twistToward(x: number, z: number, dt: number): void {
+    const s = this.numberSide;
+    const fx = x - this.pos.x, fz = z - this.pos.z;
+    let want = 0;
+    if (Math.abs(fx) + Math.abs(fz) >= 0.05) {
+      let d = Math.atan2(-s * fx, -s * fz) - this.root.rotation.y;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      want = clamp(d, -Player.TWIST_MAX, Player.TWIST_MAX);
+    }
+    const step = 10 * dt;   // the chest turns quicker than the feet (faceSmooth's 8)
+    this.torsoTwist += clamp(want - this.torsoTwist, -step, step);
+    this.torsoNode.rotation.y = this.torsoTwist;
+  }
+
+  /** Square the chest back over the hips instantly (bench seat, resets). */
+  resetTwist(): void {
+    this.torsoTwist = 0;
+    this.torsoNode.rotation.y = 0;
   }
 
   /** Yaw the whole figure so the chest (the side opposite the number) points at
@@ -673,6 +732,19 @@ export class Player {
     this.root.rotation.x = this.root.rotation.z = 0;   // stand up straight, too
     this.tiltX = this.tiltZ = 0;
     this.lean = 0;
+    this.flinchPitch = 0;
+    this.resetTwist();
+  }
+
+  /** うなだれ: head dropped, shoulders slumped, arms hanging dead — the losing
+   *  side standing through the winners' party. Hold it by calling every frame;
+   *  resetFacing()/sit() stand the body back up. */
+  dejectedPose(): void {
+    this.flinchPitch = -this.numberSide * 0.3;   // slump forward, over the chest
+    this.setArmDir(this.armPivotL, -0.25, -1, -this.numberSide * 0.1);
+    this.setArmDir(this.armPivotR, 0.25, -1, -this.numberSide * 0.1);
+    this.bendElbow(this.elbowL, 0.1);
+    this.bendElbow(this.elbowR, 0.1);
   }
 
   /** Tick down the post-pass/shot recovery cooldown. */
@@ -680,6 +752,39 @@ export class Player {
     if (this.coolT > 0) this.coolT = Math.max(0, this.coolT - dt);
     if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
     if (this.quickT > 0) this.quickT = Math.max(0, this.quickT - dt);
+    if (this.baitT > 0) this.baitT = Math.max(0, this.baitT - dt);
+    if (this.foulReactT > 0) this.foulReactT = Math.max(0, this.foulReactT - dt);
+  }
+
+  /** Kick off a foul reaction (fouled player / AND-1 scorer). */
+  foulReaction(kind: "hurt" | "and1"): void {
+    this.foulReactKind = kind;
+    this.foulReactDur = this.foulReactT = kind === "and1" ? 1.1 : 0.9;
+    if (kind === "and1") this.jump(0.22, 0.4);   // the flex hop
+  }
+
+  /** One frame of the foul-reaction pose. Call AFTER runArms (it owns the
+   *  arms while it runs); ticking happens in tickCooldown. */
+  poseFoulReaction(): void {
+    if (this.foulReactT <= 0) {
+      this.flinchPitch = 0;   // reaction over (or interrupted) — stand back up
+      return;
+    }
+    const k = this.foulReactDur > 0 ? 1 - this.foulReactT / this.foulReactDur : 1;
+    const env = Math.sin(Math.min(1, k * 1.15) * Math.PI);   // swell in, ease out
+    if (this.foulReactKind === "and1") {
+      // the flex: both fists up beside the head, elbows folded hard
+      this.setArmDir(this.armPivotL, -0.7, 0.9, 0);
+      this.setArmDir(this.armPivotR, 0.7, 0.9, 0);
+      this.bendElbow(this.elbowL, 1.35);
+      this.bendElbow(this.elbowR, 1.35);
+    } else {
+      // sold contact: arms fly out low and the body rocks back off the hit
+      this.setArmDir(this.armPivotL, -1, -0.5, 0.25);
+      this.setArmDir(this.armPivotR, 1, -0.5, 0.25);
+      this.elbowL.rotation.x = this.elbowR.rotation.x = 0;
+      this.flinchPitch = this.numberSide * 0.22 * env;   // back = away from the chest
+    }
   }
 
   /**
@@ -882,6 +987,9 @@ export class Player {
   sit(): void {
     this.seated = true;
     this.handsRest();
+    this.resetTwist();   // sit square on the bench
+    this.foulReactT = 0;
+    this.flinchPitch = 0;
     this.foldSeatedLegs();   // hidden in acorn mode, but keeps the pose consistent
     if (HUD_OPTS.model === "acorn") this.foldAcornSeat();
   }
@@ -951,8 +1059,12 @@ export class Player {
       tL = Math.max(0, Math.sin(this.stridePhase)) * amp;
       tR = Math.max(0, Math.sin(this.stridePhase + Math.PI)) * amp;
       // the body rocks onto the planted foot — away from the lifted toe — which
-      // is the penguin waddle itself; the sway widens a touch with pace
-      tw = -Math.sin(this.stridePhase) * (0.07 + frac * 0.06);
+      // is the penguin waddle itself; the sway widens a touch with pace.
+      // クイックネス(敏捷性) steadies it: a nimble player barely waddles at all
+      // (99 ≈ level shoulders), a heavy-footed one rocks the full amount.
+      // Purely cosmetic — no speed or balance effect.
+      const wobble = 1 - rate(this.attr.agility);
+      tw = -Math.sin(this.stridePhase) * (0.07 + frac * 0.06) * wobble;
     } else {
       this.stridePhase = 0;
     }
@@ -1005,7 +1117,7 @@ export class Player {
     }
     this.tiltX += (tx - this.tiltX) * 0.25;
     this.tiltZ += (tz - this.tiltZ) * 0.25;
-    this.root.rotation.x = this.tiltX;
+    this.root.rotation.x = this.tiltX + this.flinchPitch;   // + the foul-flinch rock-back
     // the acorn body waddles side to side in step with the foot flaps (eased in
     // updateAcornFeet, zero when still/airborne or in human mode)
     this.root.rotation.z = this.tiltZ + (HUD_OPTS.model === "acorn" ? this.acornWaddle : 0);
@@ -1114,9 +1226,9 @@ export class Player {
     const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
     if (frac < 0.16) { this.backArms = false; this.handsRest(); return; }
     const ns = this.numberSide;
-    // measured velocity against the chest direction (local -ns·Z, yawed):
-    // clearly negative = running backwards
-    const th = this.root.rotation.y;
+    // measured velocity against the chest direction (local -ns·Z, yawed by the
+    // root AND the torso twist): clearly negative = running backwards
+    const th = this.root.rotation.y + this.torsoTwist;
     const chestX = -ns * Math.sin(th), chestZ = -ns * Math.cos(th);
     const along = this.velX * chestX + this.velZ * chestZ;   // m/s toward the chest
     this.backArms = this.backArms ? along < -0.2 : along < -0.6;
@@ -1164,7 +1276,8 @@ export class Player {
   // local frame before it becomes the arm's (local) aim. R_y(θ): local +Z →
   // (sinθ,0,cosθ), local +X → (cosθ,0,-sinθ). At θ=0 this is the old direct maths.
   private aimArm(pivot: TransformNode, world: Vector3): void {
-    const th = this.root.rotation.y;
+    // shoulders ride the twisting torso — their frame is the root yaw + twist
+    const th = this.root.rotation.y + this.torsoTwist;
     const c = Math.cos(th), s = Math.sin(th);
     const px = pivot.position.x, py = pivot.position.y * this.root.scaling.y, pz = pivot.position.z;
     // shoulder world = root + R_y(θ)·(local shoulder offset)

@@ -3,12 +3,12 @@ import { Player, Ball } from "./entities";
 import { makeHandlerRing, hoopIndex, type Hoops } from "./court";
 import {
   COURT, RIM, SHOOT_RANGE, THREE_DIST, PASS_SPEED,
-  SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS, TEAM_COLORS,
+  SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS, TEAM_COLORS, TEAM_NAMES,
 } from "./config";
 import { clamp, dist2D, dist2DTo, moveToward2D, chance, rand } from "./util";
 import { ROSTER, ROSTER_SIZE, STARTERS, TACTICS, rate, AbilityKey } from "./attributes";
 
-export type BallMode = "held" | "pass" | "shot" | "loose" | "inbound" | "tipoff" | "freethrow" | "pause" | "subs";
+export type BallMode = "held" | "pass" | "shot" | "loose" | "inbound" | "tipoff" | "freethrow" | "pause" | "subs" | "finale";
 
 // how close (metres) a defender must be to the passing lane to threaten it
 const LANE_W = 1.1;
@@ -53,6 +53,10 @@ export class Game {
   private handler: Player | null = null;
   private ballMode: BallMode = "held";
   private dribbleT = 0;   // advances while the ball is held, to bounce the dribble
+  // ジャスト・パスレシーブ: quality of the pass currently in flight (1 = right on
+  // the hands). Rolled at release from P精度 + spread; on the catch it decides
+  // how quickly the receiver can move to his next action (gather time).
+  private passQ = 1;
   // true once the ball has been established in the frontcourt this possession —
   // from then on, taking it back across halfway is a BACKCOURT violation
   private frontT = false;
@@ -415,6 +419,7 @@ export class Game {
         // face where he's HEADING (else he jogs backwards toward the bench) and
         // run the leg/arm cycle so he's not sliding along stiff
         w.p.faceToward(w.tx, w.tz);
+        w.p.twistToward(w.tx, w.tz, dt);   // unwind any twist left over from play
         w.p.curSpd = jog;
         w.p.updateLegs(dt);
         w.p.runArms();
@@ -591,6 +596,8 @@ export class Game {
       || text === "HALFTIME"
       || text === "2ND HALF"
       || text === "FINAL"
+      || text.endsWith("勝利!")            // the final-horn victory call
+      || text === "引き分け"
       || text.startsWith("END OF Q")       // ...and each period clearly ends
       || /^Q\d START$/.test(text);         // ...and clearly restarts
   }
@@ -612,6 +619,9 @@ export class Game {
     this.cheerT = [-1, -1];
     this.longShot = false;
     this.longShotHoldT = 0;
+    this.finaleT = 0;
+    this.finaleWinner = -1;
+    this.finaleWalkers = [];
     // the starting five check back in; the bench takes their seats
     for (let t = 0; t < 2; t++) {
       for (let i = 0; i < ROSTER_SIZE; i++) {
@@ -790,7 +800,8 @@ export class Game {
 
     // clocks — frozen during dead balls (jump ball, free throws, pauses, subs)
     if (this.ballMode !== "tipoff" && this.ballMode !== "freethrow"
-        && this.ballMode !== "pause" && this.ballMode !== "subs") {
+        && this.ballMode !== "pause" && this.ballMode !== "subs"
+        && this.ballMode !== "finale") {
       this.gameClock -= dt;
       for (const p of this.players) { p.stats.min += dt; p.stintT += dt; }
       if (this.ballMode === "held") {
@@ -826,11 +837,13 @@ export class Game {
       case "freethrow": this.updateFreeThrow(dt); break;
       case "pause": this.updatePause(dt); break;
       case "subs": this.updateSubs(dt); break;
+      case "finale": this.updateFinale(dt); break;
     }
 
     this.resolveCollisions();
     const resting = this.ballMode === "pause" || this.ballMode === "freethrow"
-      || this.ballMode === "tipoff" || this.ballMode === "subs";
+      || this.ballMode === "tipoff" || this.ballMode === "subs"
+      || this.ballMode === "finale";
     for (const p of this.players) {
       p.updateJump(dt);
       p.tickCooldown(dt);
@@ -840,14 +853,16 @@ export class Game {
     // the bench recovers while they sit, watching the ball with small personal
     // fidgets — unless they're celebrating (updateBenchCheer animates that) or
     // mid-walk in a substitution (they just track the ball with their eyes)
-    for (let t = 0; t < 2; t++) {
-      const cheering = this.cheerT[t] > -1.6;   // matches updateBenchCheer's settle window
-      for (const p of this.roster[t]) {
-        if (this.onCourt(p)) continue;
-        p.benchRecover(dt);
-        // walkers (to/from the bench) are animated in updateSubs; idle otherwise
-        if (!this.subWalkers.some((w) => w.p === p) && !cheering) {
-          p.benchIdle(dt, this.ball.pos.x, this.ball.pos.z);
+    if (this.ballMode !== "finale") {   // the finale owns everyone off the floor
+      for (let t = 0; t < 2; t++) {
+        const cheering = this.cheerT[t] > -1.6;   // matches updateBenchCheer's settle window
+        for (const p of this.roster[t]) {
+          if (this.onCourt(p)) continue;
+          p.benchRecover(dt);
+          // walkers (to/from the bench) are animated in updateSubs; idle otherwise
+          if (!this.subWalkers.some((w) => w.p === p) && !cheering) {
+            p.benchIdle(dt, this.ball.pos.x, this.ball.pos.z);
+          }
         }
       }
     }
@@ -863,16 +878,30 @@ export class Game {
   // bodies track rather than snap. Skipped during substitutions, where players
   // walk to set spots. Bench players aim their own gaze in benchIdle.
   private updateFacing(dt: number): void {
-    if (this.ballMode === "subs") return;
+    if (this.ballMode === "subs" || this.ballMode === "finale") return;
     const b = this.ball.pos;
     const step = 8 * dt;   // rad this frame: fast enough to follow the ball, eased enough not to snap
     for (const p of this.players) {
-      if (p === this.handler || p === this.shooter) {
-        const rim = this.attackFloor(p.team);
-        p.faceSmooth(rim.x, rim.z, step);
-      } else {
-        p.faceSmooth(b.x, b.z, step);
+      const aim = (p === this.handler || p === this.shooter) ? this.attackFloor(p.team) : b;
+      // Lower body: while running, the legs face the direction of TRAVEL and the
+      // torso twists toward the play (twistToward) — receiving on the move,
+      // shadowing a driver in stride. EXCEPT when moving away from the aim
+      // (a backpedal): then the legs hold their square-up so the player retreats
+      // chest-on (which is also what triggers the backpedal arm pose). Standing
+      // still, the whole body squares to the aim and the twist unwinds.
+      let lx = aim.x, lz = aim.z;
+      const spd = Math.hypot(p.velX, p.velZ);
+      if (spd > 1.5) {
+        const ax = aim.x - p.pos.x, az = aim.z - p.pos.z;
+        const al = Math.hypot(ax, az);
+        // > ~105° between travel and aim = a retreat, keep facing the aim
+        if (al > 0.05 && (p.velX * ax + p.velZ * az) / (spd * al) > -0.26) {
+          lx = p.pos.x + p.velX;
+          lz = p.pos.z + p.velZ;
+        }
       }
+      p.faceSmooth(lx, lz, step);
+      p.twistToward(aim.x, aim.z, dt);
     }
   }
 
@@ -892,6 +921,7 @@ export class Game {
   // passed / shot / tipped from a palm rather than floating. Everyone else rests
   // their arms at their sides.
   private poseHands(): void {
+    if (this.ballMode === "finale") return;   // updateFinale owns every pose
     for (const p of this.players) p.runArms();   // swing the arms with the run (rest if slow)
     const b = this.ball.pos;
     switch (this.ballMode) {
@@ -941,9 +971,13 @@ export class Game {
     if (this.ballMode !== "loose" && this.ballMode !== "tipoff") {
       for (const p of this.players) {
         if (!p.airborne || p === this.shooter || p === this.handler) continue;
+        if (p.foulReactT > 0) continue;   // the AND-1 flex hop keeps its fists up
         p.reach(new Vector3(p.pos.x, 6, p.pos.z), true);   // dead-vertical target
       }
     }
+
+    // foul reactions play out last so they own the arms over any rest pose
+    for (const p of this.players) p.poseFoulReaction();
   }
 
   // Players in the air (contesting a shot or crashing the glass) raise both hands
@@ -963,15 +997,40 @@ export class Game {
     if (!this.frontT && this.attackSign(h.team) * h.pos.z > 0.6) this.frontT = true;
     this.runOffense(dt, h);
     this.runDefense(dt);
-    // ball dribbles in front of the handler, toward the basket: it bounces
-    // between hand height and the floor so it reads as a live dribble (dam-dam)
+    // --- dribble CARRY position: where the live ball sits around the handler.
+    // Out FRONT (toward the rim) he can push it and run — but it's exposed to
+    // the man guarding him. Squared up against a defender it tucks to the hip
+    // on the FAR side. How fast it relocates between spots is D精度; during a
+    // bait (baitT) it's deliberately shown out front to invite the reach-in.
     const rim = this.attackFloor(h.team);
     const dx = rim.x - h.pos.x, dz = rim.z - h.pos.z;
     const len = Math.hypot(dx, dz) || 1;
+    const fx = dx / len, fz = dz / len;
+    let tx = fx * 0.5, tz = fz * 0.5;                    // default: front carry
+    const od = this.onBallDefender(h);
+    const dOn = od ? dist2D(od.pos, h.pos) : 99;
+    if (h.baitT > 0) {
+      tx = fx * 0.6; tz = fz * 0.6;                      // the shown ball
+    } else if (od && dOn < 1.7) {
+      // squared up: tuck it to the hip away from the defender, pulled back a touch
+      const side = ((od.pos.x - h.pos.x) * -fz + (od.pos.z - h.pos.z) * fx) > 0 ? -1 : 1;
+      tx = -fz * side * 0.45 - fx * 0.06;
+      tz = fx * side * 0.45 - fz * 0.06;
+    }
+    const cs = (2.0 + rate(h.attr.dribbleAcc) * 5.0) * dt;   // D精度: 持ち替えの速さ
+    h.carryX += clamp(tx - h.carryX, -cs, cs);
+    h.carryZ += clamp(tz - h.carryZ, -cs, cs);
+    // スティール誘い: walled off with the defender tight, a skilled handler
+    // flashes the ball to bait the poke he is ready to yank away from
+    if (h.baitT <= 0 && od && dOn < 1.3 && h.beatenT <= 0 && h.powerT <= 0
+        && h.jukeT <= 0 && chance(dt * (0.1 + rate(h.attr.handling) * 0.45))) {
+      h.baitT = 0.5;
+    }
+    // the carried ball bounces between hand height and the floor (dam-dam)
     this.dribbleT = (this.dribbleT + dt) % 1000;
     const bounce = Math.abs(Math.cos(Math.PI * this.dribbleT * 2.2)); // 1 = at the hand, 0 = floor
     const y = 0.18 + (1.0 - 0.18) * bounce;
-    this.ball.pos.set(h.pos.x + (dx / len) * 0.4, y, h.pos.z + (dz / len) * 0.4);
+    this.ball.pos.set(h.pos.x + h.carryX, y, h.pos.z + h.carryZ);
   }
 
   private runOffense(dt: number, h: Player): void {
@@ -991,8 +1050,13 @@ export class Game {
     }
 
     // movement: how the committed 1-on-1 move plays out. D速度 sets how much of
-    // his top speed survives while dribbling.
+    // his top speed survives while dribbling; a ball pushed out FRONT adds a
+    // little more (and a ball tucked to the hip pushes nothing).
     let mult = 0.84 + rate(h.attr.dribbleSpd) * 0.18;
+    if (dHoop > 0.5) {
+      const frontness = (h.carryX * (rimFloor.x - h.pos.x) + h.carryZ * (rimFloor.z - h.pos.z)) / dHoop;
+      mult *= 1 + clamp(frontness, 0, 0.6) * 0.1;
+    }
     if (h.jukeT > 0) {
       // executing a dribble move — the visible footwork (jab step-in, side-step,
       // or step-back) that shakes the defender before the drive resolves
@@ -1634,7 +1698,31 @@ export class Game {
           const exposed = man.jukeT > 0
             ? 1 + Math.max(0, rate(d.attr.agility) * 0.6 + rate(d.attr.reaction) * 0.4 - secure) * 2.2 : 1;
           const pPoke = Math.max(0.005, (0.03 + stl * 0.1 - resist * 0.06 + press * 0.05) * slide * exposed);
-          if (chance(pPoke * close * dt)) { this.steal(d); return; }
+          // CARRY position: a ball shown out front is there to be poked, one
+          // tucked on the far hip is out of reach (compare the defender's
+          // distance to the BALL vs to the man)
+          const dBall = dist2DTo(d.pos, this.ball.pos.x, this.ball.pos.z);
+          // a baited (deliberately shown) ball draws the poke hardest of all —
+          // that's the whole point of showing it
+          const carryMod = clamp(1 + (gap - dBall) * 1.2, 0.55, 1.6)
+            * (man.baitT > 0 ? 1.6 : 1);
+          if (chance(pPoke * close * carryMod * dt)) {
+            if (man.baitT > 0 && chance(0.35 + rate(man.attr.dribbleAcc) * 0.45)) {
+              // 誘い成立: the shown ball is yanked away, the lunging defender's
+              // weight is committed — the handler bursts past the reach
+              man.baitT = 0;
+              const bx = this.ball.pos.x - d.pos.x, bz = this.ball.pos.z - d.pos.z;
+              const bl = Math.hypot(bx, bz) || 1;
+              d.leanAxisX = bx / bl;
+              d.leanAxisZ = bz / bl;
+              d.lean = 0.9;
+              d.reactT = Math.max(d.reactT, 0.35);
+              man.beatenT = Math.max(man.beatenT, 0.2 + rate(man.attr.agility) * 0.15);
+            } else {
+              this.steal(d);
+              return;
+            }
+          }
           if (chance((0.02 + press * 0.045) * close * dt)) { this.defensiveFoul(man); return; }
         }
         continue;
@@ -2123,6 +2211,11 @@ export class Game {
     // runs out of steam, so long balls hang in the air noticeably longer
     const fade = d > 9 ? clamp(1 - (d - 9) * 0.06, 0.6, 1) : 1;
     this.passDur = Math.max(0.22, d / (zip0 * fade));
+    // パス品質: P精度が高いほど胸元へ「ジャスト」で届く — ただし常にブレ幅が
+    // あり、名手でもズレる時はズレるし、雑なパサーがドンピシャを通す時もある。
+    // ロングは収まりにくい。
+    this.passQ = clamp(0.18 + rate(h.attr.passAcc) * 0.72 + rand(-0.28, 0.28)
+      - Math.max(0, d - 9) * 0.03, 0, 1);
     this.passSteal = this.evalInterception(h, target);
     // a hanging long ball can be run down even when nobody sat squarely in the
     // lane at release (スライディング readers range the furthest)
@@ -2217,9 +2310,15 @@ export class Game {
       this.handler = receiver;
       this.passTo = null;
       this.ballMode = "held";
+      // ジャスト・レシーブ: a pass right on the hands lets the receiver flow
+      // into his next move; an off-target one costs a gather (持ち直し) beat —
+      // rooted while he corrals it. 技術 (handling) soaks up a bad delivery.
+      const gather = clamp(((1 - this.passQ) * 0.85 - rate(receiver.attr.handling) * 0.4)
+        * rand(0.75, 1.3), 0, 0.7);
       // ダイレクトプレイ: plays off the catch in one touch
-      receiver.decisionT = receiver.has("oneTouch") ? 0.08 : 0.25;
-      receiver.quickT = 0.6;
+      receiver.decisionT = (receiver.has("oneTouch") ? 0.08 : 0.25) + gather;
+      if (gather > 0.05) receiver.coolT = Math.max(receiver.coolT, gather);
+      receiver.quickT = Math.max(0.15, 0.6 - gather);   // ジャストほどワンタッチの窓が広い
       // a completed pass sets up a potential assist for whoever threw it
       this.assistFrom = this.passer;
       this.assistTo = receiver;
@@ -2447,6 +2546,7 @@ export class Game {
     this.contestJump(h);
     this.handler = null;
     this.pendingAssist = null;
+    h.foulReaction("hurt");   // sell the contact during the dead-ball beat
     this.setEvent("SHOOTING FOUL", h.team, 1.8);
     const count = this.shotPoints;
     // hold so the foul reads, then go to the line
@@ -2539,6 +2639,7 @@ export class Game {
 
   // Non-shooting (reach-in) foul: the offence keeps the ball and inbounds.
   private defensiveFoul(victim: Player): void {
+    victim.foulReaction("hurt");   // rock back off the contact while play stops
     this.setEvent("FOUL", victim.team);
     this.possession = victim.team;
     this.handler = null;
@@ -2629,7 +2730,8 @@ export class Game {
       // unless the buzzer already sounded (buzzer beater): the period ends here.
       // An AND-1 continues at the line instead: basket counts + one free throw.
       this.handler = null;
-      if (andOne) this.pauseThen(1.4, () => this.startFreeThrows(sh!, 1));
+      // AND-1: the scorer flexes over the made bucket, THEN heads to the line
+      if (andOne) { sh!.foulReaction("and1"); this.pauseThen(1.4, () => this.startFreeThrows(sh!, 1)); }
       else if (this.gameClock <= 0) this.pauseThen(1.4, () => this.endQuarter());
       else this.pauseThen(1.4, () => this.withSubs(() => this.startInbound(1 - shooter)));
     } else {
@@ -3612,15 +3714,14 @@ export class Game {
       for (let t = 0; t < 2; t++) for (const p of this.roster[t]) p.breakRecover(rest);
     }
 
+    // the FINAL horn gets its own scene: winners mob the floor, losers hang
+    // their heads (a draw celebrates both benches) — no walk-off first
+    if (ended >= QUARTERS) {
+      this.pauseThen(1.2, () => this.startFinale());
+      return;
+    }
+
     this.pauseThen(1.2, () => this.quarterWalkOff(() => {
-      if (ended >= QUARTERS) {
-        // the players have left the floor — hold, then the result screen
-        this.pauseThen(0.8, () => {
-          this.state = "final";
-          this.setEvent("FINAL", this.score[0] >= this.score[1] ? 0 : 1);
-        });
-        return;
-      }
       // a short huddle at the bench, then the next period
       this.pauseThen(1.0, () => {
         this.quarter = ended + 1;
@@ -3634,6 +3735,119 @@ export class Game {
         this.withSubs(() => this.quarterWalkOn(team));
       });
     }));
+  }
+
+  // ---- final-horn scene: victory mob / hanging heads / a shared draw ------
+  private static readonly FINALE_DUR = 6.0;
+  private finaleT = 0;
+  private finaleWinner = -1;   // 0/1 = winning team, -1 = draw
+  private finaleWalkers: { p: Player; tx: number; tz: number }[] = [];
+
+  /** The FINAL horn: the winning bench pours onto the floor to mob the five,
+   *  the losers hang their heads where they stand; a draw has both squads
+   *  celebrating in place, more politely. "○○ 勝利!" runs on the banner. */
+  private startFinale(): void {
+    const w = this.score[0] === this.score[1] ? -1 : (this.score[0] > this.score[1] ? 0 : 1);
+    this.finaleWinner = w;
+    this.finaleT = 0;
+    this.finaleWalkers = [];
+    this.handler = null;
+    this.cheerT = [-9, -9];   // the finale supersedes any running bench cheer
+    this.setEvent(w >= 0 ? `${TEAM_NAMES[w]} 勝利!` : "引き分け",
+      w >= 0 ? w : this.possession, Game.FINALE_DUR);
+    for (let t = 0; t < 2; t++) {
+      for (const p of this.roster[t]) {
+        if (this.onCourt(p)) continue;
+        if (t === w) {
+          // the winning bench rushes the floor, fanning out around the five
+          const five = this.teamPlayers(t);
+          const cx = five.reduce((s, q) => s + q.pos.x, 0) / five.length;
+          const cz = five.reduce((s, q) => s + q.pos.z, 0) / five.length;
+          p.stand();
+          p.resetFacing();
+          const ang = (this.finaleWalkers.length / 8) * Math.PI * 2;
+          this.finaleWalkers.push({
+            p,
+            tx: clamp(cx + Math.cos(ang) * 1.8, -COURT.halfW + 1, COURT.halfW - 1),
+            tz: clamp(cz + Math.sin(ang) * 1.8, -COURT.halfL + 1, COURT.halfL - 1),
+          });
+        } else if (w < 0) {
+          p.stand();     // a draw: the bench stands up and claps along in place
+          p.resetFacing();
+        } else if (!p.seated) {
+          p.sit();       // the losing bench slumps back onto its seat
+        }
+      }
+    }
+    this.ballMode = "finale";
+  }
+
+  // Hands-up bounces for a celebrating body (amp 1 = full mob, ~0.4 = polite).
+  private festivePose(p: Player, dt: number, amp: number): void {
+    p.reach(new Vector3(p.pos.x, 2.7 + amp * 0.5, p.pos.z), true);   // both arms up
+    if (!p.airborne && p.landT <= 0 && chance(dt * (1.2 + amp * 1.3))) {
+      p.jump(0.1 + amp * rand(0.15, 0.3), rand(0.3, 0.45));
+    }
+  }
+
+  private updateFinale(dt: number): void {
+    this.finaleT += dt;
+    const w = this.finaleWinner;
+    this.ball.pos.y = Math.max(0.15, this.ball.pos.y - 3 * dt);   // ball settles
+    for (let t = 0; t < 2; t++) {
+      const won = t === w, draw = w < 0;
+      for (const p of this.roster[t]) {
+        const walker = this.finaleWalkers.find((f) => f.p === p);
+        if (walker) {
+          // bench mobbing the floor: sprint in, then bounce with the group
+          if (dist2DTo(p.pos, walker.tx, walker.tz) > 0.6) {
+            const jog = p.runSpeed * 0.9;
+            moveToward2D(p.pos, walker.tx, walker.tz, jog * dt);
+            p.faceToward(walker.tx, walker.tz);
+            p.twistToward(walker.tx, walker.tz, dt);
+            p.curSpd = jog;
+            p.updateLegs(dt);
+            p.runArms();
+          } else {
+            this.festivePose(p, dt, 1);
+          }
+          p.updateJump(dt);
+          p.sync();
+          continue;
+        }
+        if (this.onCourt(p)) {
+          // on-court bodies tick/sync in the main loop — just pose them
+          if (won) this.festivePose(p, dt, 1);
+          else if (draw) this.festivePose(p, dt, 0.45);
+          else p.dejectedPose();
+        } else if (draw) {
+          // both benches share a standing, measured celebration at the seats
+          this.festivePose(p, dt, 0.4);
+          p.updateJump(dt);
+          p.sync();
+        } else {
+          p.sync();   // the losing bench sits still, heads down
+        }
+      }
+    }
+    // keep the mob from stacking into one column
+    const bodies: Player[] = [...this.players, ...this.finaleWalkers.map((f) => f.p)];
+    for (let i = 0; i < bodies.length; i++) {
+      for (let j = i + 1; j < bodies.length; j++) {
+        const a = bodies[i], b = bodies[j];
+        let dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
+        let d = Math.hypot(dx, dz);
+        if (d >= 0.62) continue;
+        if (d < 1e-4) { dx = rand(-1, 1); dz = rand(-1, 1); d = Math.hypot(dx, dz) || 1; }
+        const push = (0.62 - d) / 2;
+        a.pos.x -= (dx / d) * push; a.pos.z -= (dz / d) * push;
+        b.pos.x += (dx / d) * push; b.pos.z += (dz / d) * push;
+      }
+    }
+    if (this.finaleT >= Game.FINALE_DUR) {
+      this.state = "final";
+      this.setEvent("FINAL", this.score[0] >= this.score[1] ? 0 : 1);
+    }
   }
 
   // Everyone on the floor walks to a gathering spot in front of his own bench.
