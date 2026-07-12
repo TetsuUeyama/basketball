@@ -49,6 +49,8 @@ export class Player {
   // short arms whose hands reach out to hold/dribble/pass/shoot the ball
   private readonly armPivotL: TransformNode;
   private readonly armPivotR: TransformNode;
+  private elbowL!: TransformNode;   // upper-arm ↔ forearm joint (bent at rest, straight to reach)
+  private elbowR!: TransformNode;
 
   // floating name tag, redrawn when the name changes
   private nameTex!: DynamicTexture;
@@ -125,6 +127,18 @@ export class Player {
   private jumpDur = 0;
   private jumpHeight = 0;
 
+  // articulated legs: a hip pivot (thigh) + knee pivot (shin + foot) per side.
+  // They swing in a walk/run cycle while playing and fold into a sitting pose on
+  // the bench. Driven by updateLegs(); posed by sit()/stand().
+  seated = false;
+  private hipL!: TransformNode;
+  private hipR!: TransformNode;
+  private kneeL!: TransformNode;
+  private kneeR!: TransformNode;
+  private footL!: Mesh;
+  private footR!: Mesh;
+  private stridePhase = 0;   // accumulates with distance travelled → leg swing
+
   constructor(scene: Scene, team: number, idx: number, def: PlayerDef) {
     this.team = team;
     this.idx = idx;
@@ -147,15 +161,23 @@ export class Player {
 
     this.root = new TransformNode(`p_${team}_${idx}`, scene);
 
-    const body = MeshBuilder.CreateCapsule(`body_${team}_${idx}`, {
-      height: 1.55, radius: 0.3, capSubdivisions: 6, tessellation: 12,
-    }, scene);
-    body.position.y = 0.9;
+    // torso split into upper body (chest) + lower body (abdomen/pelvis) with a
+    // slight waist taper — the legs are separate. Slim to match the thin legs.
     const bodyMat = new StandardMaterial(`bmat_${team}_${idx}`, scene);
     bodyMat.diffuseColor = color;
     bodyMat.specularColor = new Color3(0.1, 0.1, 0.1);
-    body.material = bodyMat;
-    body.parent = this.root;
+    const lowerBody = MeshBuilder.CreateCapsule(`lower_${team}_${idx}`, {
+      height: 0.5, radius: 0.2, capSubdivisions: 6, tessellation: 12,
+    }, scene);
+    lowerBody.position.y = 1.02;              // abdomen / pelvis
+    lowerBody.material = bodyMat;
+    lowerBody.parent = this.root;
+    const upperBody = MeshBuilder.CreateCapsule(`upper_${team}_${idx}`, {
+      height: 0.62, radius: 0.24, capSubdivisions: 6, tessellation: 12,
+    }, scene);
+    upperBody.position.y = 1.4;               // chest / shoulders
+    upperBody.material = bodyMat;
+    upperBody.parent = this.root;
 
     const head = MeshBuilder.CreateSphere(`head_${team}_${idx}`, { diameter: 0.34, segments: 10 }, scene);
     head.position.y = 1.78;
@@ -194,8 +216,8 @@ export class Player {
     // on that side (default left-handed camera: +X is screen-right when
     // looking along +Z, and -X when looking along -Z).
     const makeNumberShell = (sign: number): Mesh => {
-      const R = 0.315;                    // just proud of the 0.3 body radius
-      const yTop = 1.42, yBot = 0.88;     // upper back
+      const R = 0.245;                    // just proud of the 0.23 body radius
+      const yTop = 1.5, yBot = 1.0;       // upper back (recentred on the slimmer torso)
       const SEG = 12;
       const span = Math.PI * 0.55;        // ~100° of wrap around the torso
       const top: Vector3[] = [];
@@ -237,32 +259,79 @@ export class Player {
     namePlane.material = nameMat;
     namePlane.parent = this.root;
 
-    // --- short arms + hands, used to hold / dribble / pass / shoot the ball ---
-    const ARM_LEN = 0.5;
-    const makeArm = (sx: number, tag: string): TransformNode => {
+    // --- arms: upper arm (jersey sleeve) → elbow → forearm (skin) → hand. The
+    // shoulder pivot aims the whole arm at the ball (reach); the elbow bends at
+    // rest / while running and straightens to put the palm on the ball. Total
+    // length = UP + FORE, matching the old ARM_LEN so reach maths is unchanged. ---
+    const UP = 0.25, FORE = 0.25;
+    const makeArm = (sx: number, tag: string): { pivot: TransformNode; elbow: TransformNode } => {
       const pivot = new TransformNode(`arm_${tag}_${team}_${idx}`, scene);
       pivot.parent = this.root;
       pivot.position.set(sx, 1.45, 0.06);          // shoulder
+      const upper = MeshBuilder.CreateCylinder(`upper_${tag}_${team}_${idx}`,
+        { height: UP, diameter: 0.12, tessellation: 8 }, scene);
+      upper.parent = pivot;
+      upper.position.set(0, -UP / 2, 0);           // upper arm, jersey sleeve
+      upper.material = bodyMat;
+      const elbow = new TransformNode(`elbow_${tag}_${team}_${idx}`, scene);
+      elbow.parent = pivot;
+      elbow.position.set(0, -UP, 0);               // elbow at the end of the upper arm
       const fore = MeshBuilder.CreateCylinder(`fore_${tag}_${team}_${idx}`,
-        { height: ARM_LEN, diameter: 0.12, tessellation: 8 }, scene);
-      fore.parent = pivot;
-      fore.position.set(0, -ARM_LEN / 2, 0);       // hangs straight down from the shoulder
-      fore.material = bodyMat;                      // sleeve in the jersey colour
+        { height: FORE, diameter: 0.1, tessellation: 8 }, scene);
+      fore.parent = elbow;
+      fore.position.set(0, -FORE / 2, 0);          // forearm, bare skin
+      fore.material = headMat;
       const hand = MeshBuilder.CreateSphere(`hand_${tag}_${team}_${idx}`,
         { diameter: 0.16, segments: 8 }, scene);
-      hand.parent = pivot;
-      hand.position.set(0, -ARM_LEN, 0);           // palm at the end of the arm
-      hand.material = headMat;                      // skin tone
-      return pivot;
+      hand.parent = elbow;
+      hand.position.set(0, -FORE, 0);              // palm at the end of the forearm
+      hand.material = headMat;
+      return { pivot, elbow };
     };
-    this.armPivotL = makeArm(-0.34, "L");
-    this.armPivotR = makeArm(0.34, "R");
+    const armL = makeArm(-0.28, "L");   // shoulders drawn in toward the slimmer torso
+    const armR = makeArm(0.28, "R");
+    this.armPivotL = armL.pivot; this.elbowL = armL.elbow;
+    this.armPivotR = armR.pivot; this.elbowR = armR.elbow;
     this.handsRest();
+
+    // --- articulated legs: hip pivot (thigh, jersey shorts) + knee pivot (shin,
+    // skin + a foot). At rest the leg hangs straight from the hip at y≈0.9 to the
+    // floor. updateLegs() swings the hips (and bends the knees) for a walk cycle;
+    // sit() folds them. ---
+    const HIP_Y = 0.92, THIGH = 0.46, SHIN = 0.44;
+    const makeLeg = (sx: number, tag: string): { hip: TransformNode; knee: TransformNode; foot: Mesh } => {
+      const hip = new TransformNode(`hip_${tag}_${team}_${idx}`, scene);
+      hip.parent = this.root;
+      hip.position.set(sx, HIP_Y, 0);
+      const thigh = MeshBuilder.CreateCylinder(`thigh_${tag}_${team}_${idx}`,
+        { height: THIGH, diameter: 0.21, tessellation: 8 }, scene);
+      thigh.parent = hip;
+      thigh.position.set(0, -THIGH / 2, 0);      // hangs down from the hip
+      thigh.material = bodyMat;                    // shorts in the jersey colour
+      const knee = new TransformNode(`knee_${tag}_${team}_${idx}`, scene);
+      knee.parent = hip;
+      knee.position.set(0, -THIGH, 0);            // knee at the bottom of the thigh
+      const shin = MeshBuilder.CreateCylinder(`shin_${tag}_${team}_${idx}`,
+        { height: SHIN, diameter: 0.16, tessellation: 8 }, scene);
+      shin.parent = knee;
+      shin.position.set(0, -SHIN / 2, 0);         // hangs down from the knee (skin)
+      shin.material = headMat;
+      const foot = MeshBuilder.CreateBox(`foot_${tag}_${team}_${idx}`,
+        { width: 0.16, height: 0.1, depth: 0.28 }, scene);
+      foot.parent = knee;
+      foot.position.set(0, -SHIN, 0.06);          // toe offset set per numberSide in setNumberSide
+      foot.material = headMat;
+      return { hip, knee, foot };
+    };
+    const legL = makeLeg(-0.13, "L");
+    const legR = makeLeg(0.13, "R");
+    this.hipL = legL.hip; this.kneeL = legL.knee; this.footL = legL.foot;
+    this.hipR = legR.hip; this.kneeR = legR.knee; this.footR = legR.foot;
 
     // scale the whole figure vertically to the player's height (base build ≈ 1.95 m)
     this.root.scaling.y = def.height / 1.95;
 
-    this.meshes = [body, head];
+    this.meshes = [upperBody, lowerBody, head];
   }
 
   readonly meshes: Mesh[];
@@ -312,6 +381,11 @@ export class Player {
     this.numDecalMinus.isVisible = sign < 0;
     this.armPivotL.position.z = -this.numberSide * 0.06;
     this.armPivotR.position.z = -this.numberSide * 0.06;
+    // toes point the same way as the chest/arms (front = -numberSide·Z), so the
+    // team attacking -Z doesn't read with its feet on backwards
+    this.footL.position.z = -this.numberSide * 0.1;
+    this.footR.position.z = -this.numberSide * 0.1;
+    if (this.seated) this.foldSeatedLegs();   // keep a sitting fold facing the right way
   }
 
   /** Yaw the whole figure so the chest (the side opposite the number) points at
@@ -549,7 +623,78 @@ export class Player {
   private tiltX = 0;  // smoothed visual body tilt (rad), applied in sync()
   private tiltZ = 0;
 
+  // Leg geometry / pose constants.
+  private static readonly HIP_Y = 0.92;      // hip pivot height (matches makeLeg)
+  private static readonly SEAT_HIP = 0.46;   // hips rest at the bench-seat surface when sat
+  private static readonly SIT_HIP = 1.45;    // thigh swings up to ~horizontal (forward)
+  private static readonly SIT_KNEE = -1.55;  // shin folds back down to the floor
+
+  // Bench seat / stand-up. Seated drops the whole rig so the hips meet the seat
+  // and folds the legs (thighs forward, shins down); standing returns them to
+  // the walk cycle.
+  sit(): void {
+    this.seated = true;
+    this.handsRest();
+    this.foldSeatedLegs();
+  }
+  // thighs fold toward the front (the court, since bench players face the ball),
+  // shins drop to the floor — keyed to numberSide so both benches fold FORWARD
+  // (over the seat) rather than one folding back through the bench.
+  private foldSeatedLegs(): void {
+    const ns = this.numberSide;
+    this.hipL.rotation.x = this.hipR.rotation.x = Player.SIT_HIP * ns;
+    this.kneeL.rotation.x = this.kneeR.rotation.x = Player.SIT_KNEE * ns;
+  }
+  stand(): void {
+    if (!this.seated) return;
+    this.seated = false;
+    this.root.rotation.x = 0;
+    this.hipL.rotation.x = this.hipR.rotation.x = 0;   // legs straighten
+    this.kneeL.rotation.x = this.kneeR.rotation.x = 0;
+  }
+
+  // One frame of the walk/run cycle: swing the hips fore/aft (opposite phase per
+  // leg) with a stride that grows with speed, and bend the knee on the forward
+  // swing. Below a walking pace the legs ease back to straight. Held still while
+  // seated (sit() owns the pose).
+  updateLegs(dt: number): void {
+    if (this.seated) return;
+    const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
+    if (frac < 0.04) {
+      this.stridePhase = 0;
+      const ease = Math.min(1, dt * 12);
+      this.hipL.rotation.x += -this.hipL.rotation.x * ease;
+      this.hipR.rotation.x += -this.hipR.rotation.x * ease;
+      this.kneeL.rotation.x += -this.kneeL.rotation.x * ease;
+      this.kneeR.rotation.x += -this.kneeR.rotation.x * ease;
+      return;
+    }
+    this.stridePhase += this.curSpd * dt * 3.4;   // distance-based → speed sets cadence
+    const amp = 0.32 + frac * 0.5;                // longer strides at a sprint
+    // front is local -numberSide·Z (same as the arms/toes), so the swing and the
+    // knee bend are keyed to numberSide — both teams then walk forward and bend
+    // the knee BACKWARD, whichever end they attack.
+    const ns = this.numberSide;
+    const sL = Math.sin(this.stridePhase), sR = Math.sin(this.stridePhase + Math.PI);
+    this.hipL.rotation.x = sL * amp * ns;          // + phase swings the foot to the front
+    this.hipR.rotation.x = sR * amp * ns;
+    const bend = 0.5 + frac * 0.6;
+    this.kneeL.rotation.x = -Math.max(0, sL) * bend * ns;   // shin trails back on the forward swing
+    this.kneeR.rotation.x = -Math.max(0, sR) * bend * ns;
+  }
+
   sync(): void {
+    if (this.seated) {
+      // drop the rig so the (folded) hips meet the bench seat; the folded legs
+      // reach the floor in front. rotation.y is set by benchIdle/faceToward —
+      // keep it; stay upright (no lean tilt).
+      const rootY = Player.SEAT_HIP - Player.HIP_Y * (this.height / 1.95);
+      this.root.position.set(this.pos.x, rootY + this.jumpY(), this.pos.z);
+      this.root.rotation.x = 0;
+      this.root.rotation.z = 0;
+      this.tiltX = this.tiltZ = 0;
+      return;
+    }
     this.root.position.set(this.pos.x, this.jumpY(), this.pos.z);
     // VISIBLE body lean: tip the whole figure toward the committed centre of
     // gravity. World lean vector → the yaw-local frame using the codebase's
@@ -648,25 +793,56 @@ export class Player {
     this.stintT = 0;
   }
 
-  /** Both arms hang at the sides (default pose). */
+  // elbow bend: forward (toward the chest, -numberSide·Z), matching the arm/leg
+  // convention. Straight (0) whenever the hand must reach the ball.
+  private bendElbow(node: TransformNode, amount: number): void {
+    node.rotation.x = amount * this.numberSide;
+  }
+
+  /** Both arms hang at the sides, elbows slightly bent (default pose). */
   handsRest(): void {
     this.armPivotL.rotationQuaternion = Quaternion.Identity();
     this.armPivotR.rotationQuaternion = Quaternion.Identity();
     this.armPivotL.scaling.set(1, 1, 1);
     this.armPivotR.scaling.set(1, 1, 1);
+    this.bendElbow(this.elbowL, 0.28);
+    this.bendElbow(this.elbowR, 0.28);
   }
 
-  /** Reach the right hand (or both) out so the palm meets `world` — the ball. */
+  // Arms for a player who isn't handling the ball: swung fore/aft with the run
+  // (opposite the same-side leg) with elbows carried bent, or resting at a
+  // walk/standstill. Keyed to numberSide like the legs so both teams swing
+  // forward. poseHands() calls this for everyone, then overrides ball arms.
+  runArms(): void {
+    const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
+    if (frac < 0.16) { this.handsRest(); return; }
+    const ns = this.numberSide;
+    const amp = 0.3 + frac * 0.55;
+    const aL = Math.sin(this.stridePhase + Math.PI) * amp * ns;   // left arm ↔ right leg
+    const aR = Math.sin(this.stridePhase) * amp * ns;
+    this.armPivotL.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), aL);
+    this.armPivotR.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), aR);
+    this.armPivotL.scaling.set(1, 1, 1);
+    this.armPivotR.scaling.set(1, 1, 1);
+    const carry = 0.6 + frac * 0.5;   // elbows carried bent like a runner
+    this.bendElbow(this.elbowL, carry);
+    this.bendElbow(this.elbowR, carry);
+  }
+
+  /** Reach the right hand (or both) out so the palm meets `world` — the ball.
+   *  Elbows straighten so the palm actually reaches the aimed point. */
   reach(world: Vector3, both = false): void {
     this.aimArm(this.armPivotR, world);
-    if (both) this.aimArm(this.armPivotL, world);
-    else this.armPivotL.rotationQuaternion = Quaternion.Identity();
+    this.elbowR.rotation.x = 0;
+    if (both) { this.aimArm(this.armPivotL, world); this.elbowL.rotation.x = 0; }
+    else { this.armPivotL.rotationQuaternion = Quaternion.Identity(); this.bendElbow(this.elbowL, 0.28); }
   }
 
   /** Spread both arms out wide — active hands to wall off the ball-handler. */
   armsWide(): void {
     this.setArmDir(this.armPivotL, -1, -0.35, 0.35);
     this.setArmDir(this.armPivotR, 1, -0.35, 0.35);
+    this.elbowL.rotation.x = this.elbowR.rotation.x = 0;   // arms out straight
   }
 
   // Point an arm from its shoulder toward a world point — direction only, so the

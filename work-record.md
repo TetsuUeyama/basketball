@@ -966,6 +966,60 @@
   実測: starter idx2⇔bench idx8で軸-0.8/-0.5/+0.9・OVR-1と可視。(b)戦力数値を**0.1刻み表示**
   (val: Math.round→toFixed(1)、増減もtoFixed(1))、値カラム幅66pxに拡大。tsc/build✓。
 
+## 2026-07-11 (85) ブザービーターの駆け込みペナルティ
+- ユーザー「ブザービーターが相当な確率で入る」。計測(200試合, gg.shootをラップしgameClock<0.9のシュート集計)で
+  **超ロング(13m+)は既に1〜4%と十分低い**と判明。実際に入っていたのは**近〜中距離(<7m=50%, 7-9m=37%)**で、
+  駆け込みシュートが体勢の乱れを考慮されず通常確率だったため。shotClock切れは0件=全てクォーター終了ブザー。
+- game.ts shoot(): clamp直前に`if(gameClock>0 && gameClock<1.0) p *= 0.5 + rate(shotTech)*0.2`(×0.5〜0.7)。
+  距離不問の駆け込みペナルティ、S技術で軽減。**通常シュートは gameClock<1.0 ゲートで無影響**。
+  再計測: 全体21%→14%、<7m 50%→29%、7-9m 37%→30%、13m+は1-3%維持。tsc/build✓。
+  注: リム際のレイアップ/ダンク(finishAtRim)は非ペナルティ=ノーマークの駆け込みレイアップは決まる(意図的)。
+
+## 2026-07-12 (86) ベンチ選手を"座っている"見た目に
+- 脚なしカプセルなので座り表現は「縦圧縮+ベンチ座面に着座」で表現。
+- entities.ts: Player.seated + sit()/stand()。sit=scaling.y×0.62(SEAT_SCALE)、sync時にroot.y=0.34(SEAT_Y)で
+  座面(y0.42)に体が乗る。standで身長スケール復帰。sync()にseated分岐(傾きtiltなし・直立)。
+- game.ts: seatOnBenchでsit()、substituteの入場でstand()、updateSubs完了時にベンチ到着者をsit()、
+  updateBenchCheerは歓喜中stand()+ジャンプ、収束後sit()。
+- court.ts: buildBenches()=両チームの控え列(+Xサイドライン, z=±6.3中心, len7.2)に座面box(y0.36,h0.12)+
+  背もたれ+脚。buildCourtで生成。tsc/vite build✓。
+  ⚠ **見た目は実機未検証**(headless不可)。SEAT_SCALE0.62/SEAT_Y0.34/ベンチ寸法は初期値、要目視調整。
+  カメラが+X側に回り込むと背もたれが手前に来る可能性あり。
+- **(86追補)修正**: ①「ベンチのない所に座る」=benchSeatはp.idxでz決定、交代で退くのはスタメン(idx0-4)で
+  z=±9.8〜±13とベンチprop範囲外だった→buildBenchesをzMid±8.2/len10.6に拡張し全13席(z±3〜±13)を覆う。
+  ②「短くなってるだけで座って見えない」→SEAT_SCALE0.62→0.66、sync座位で背もたれへ後傾(rotation.x=SEAT_LEAN
+  -0.34、rotation.yはbenchIdle/faceTowardのボール追従を維持)。standで後傾解除。tsc/build✓。
+  ⚠ 後傾の向き(rotation.x符号)とベンチ位置は実機目視で要確認。脚なしカプセルなので座り表現に限界あり
+  (必要なら簡易な脚メッシュ追加を検討)。
+- **(86追補2)脚追加**: ユーザー「足が無く不自然」。座位専用の脚メッシュを追加。Playerに`seatLegs`
+  TransformNode(root子)を持たせ、左右に太もも(shorts,jersey色,径0.2)+すね(skin,径0.16)のシリンダー。
+  seatLegs.scaling.y=1/rootScaleYでroot圧縮を打ち消し脚長を実寸維持。sit()で表示+torso圧縮、stand()で非表示。
+  後傾(recline)は撤去し**直立着席**(脚が傾かず自然・回転向きリスク回避)。tsc/build✓。
+  ⚠ 脚の位置/サイズ(shorts 0.09/0.2, shin -0.19/0.4)は初期値、実機で要調整。
+- **(86追補3)関節脚+歩行アニメ**: ユーザー要望「モデルに脚を付け、歩行/走行で動かす」。
+  entities.ts: bodyカプセルをheight1.55→1.05/y0.9→1.2(胴体化)。makeLegで左右にhip(TransformNode)+
+  太もも(shorts,jersey)+knee(TransformNode)+すね(skin)+足box。hipL/R,kneeL/R保持。
+  updateLegs(dt): curSpd/runSpeedからstridePhase進行、hip.rotation.xを左右逆位相sin*振幅(速いほど大)、
+  kneeは前振り時に曲げ。停止時は0へ補間。game.tsのtickMotionループでp.updateLegs(dt)呼び出し(on-courtのみ)。
+  sit()=hip前折り(SIT_HIP1.45)+knee折り(SIT_KNEE-1.55)、sync座位でroot.y=SEAT_HIP0.46-HIP_Y*scaleに下げ
+  股関節を座面へ、脚は前(コート向き)へ折れてベンチ貫通回避。stand()で脚を0復帰。旧seatLegs/圧縮方式は撤去。
+  tsc/build✓。⚠ **未検証項目多数**: スイング方向(歩行/ムーンウォーク)・膝曲げ向き・座り折り向き・胴体/番号/腕の
+  プロポーション・足が床に届くか。符号反転等の目視調整が要る前提。
+- **(86追補4)脚の向きをnumberSideに統一**: ユーザー「青の足が逆・両チーム膝が前後逆」。
+  前方向=local -numberSide·Z(腕の配置 armPivot.z=-numberSide*0.06 と同規約)と判明(Q1: 赤ns=-1/青ns=+1)。
+  → 足つま先 foot.z=-numberSide*0.1、股スイング hip.x=sin*amp*ns、膝 knee.x=-max(0,s)*bend*ns で
+  両チームをfacing基準に統一(前進歩行・膝は後ろ曲げ)。setNumberSideで足向き設定+着席中なら再フォールド。
+  sit()もfoldSeatedLegs()でSIT_HIP*ns/SIT_KNEE*ns(前=コート方向へ折れる→ベンチ貫通回避)。tsc/build✓。
+  ⚠ 両チーム統一済みだが膝の絶対向き(後ろ曲げ)がまだ逆なら knee符号1箇所反転で両方修正可。要目視。
+
+## 2026-07-12 (87) 外れシュートの弾道を距離依存で大きく外す
+- ユーザー「ブザービーターが外れてもリム付近に行き入って見える。遠距離の外れは大きく外して」。
+- 原因: updateShotがmade/missed問わず常にattackRimへの弧を描いていた。
+- 対応: shotTargetフィールド追加、updateShotはそれを使用。aimShotTarget(dHoop): madeはリム、missは
+  `big = max(0,dHoop-THREE_DIST)*0.45`のオフセット(big<0.2は通常リムアウト)。65%ショート(手前+低め=
+  エアボール)/35%ワイド。shoot()で呼び出し、finishAtRim(レイアップ)はリム固定。
+  headless検証(30試合): 完走・NaN0、外れ着弾〜リム距離 7-9m=0.6m(通常リバウンド維持)→13m+=4.2m(大外し)。
+
 ### 次回再開ポイント
 1. `npm run dev` で総合playtest（本セッションは大半が実機未検証: 抜き3種/守備・ブロック/選手の向き/
    スペーシング/着地硬直/踏切/顔アイコン・スタッツポップ・ホバー/スローイン/バナー/トランジション守備の戻り）

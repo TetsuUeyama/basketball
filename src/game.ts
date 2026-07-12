@@ -34,6 +34,7 @@ export class Game {
   // bench celebration timers per team — while positive, the bench is on its
   // feet bouncing with both arms up (a short grace period lets jumps land)
   private cheerT: [number, number] = [0, 0];
+  private cheerAmp: [number, number] = [0.5, 0.5];   // celebration intensity (bigger for dunks / threes)
   readonly ball: Ball;
   private readonly ring: Mesh;
   private readonly tactics = TACTICS; // per-team game plan
@@ -72,7 +73,9 @@ export class Game {
 
   // shot animation
   private shotFrom = new Vector3();
+  private shotTarget = new Vector3();   // where the ball ACTUALLY flies — the rim on a make, an off-target point on a miss
   private shotMade = false;
+  private shotWasDunk = false;   // last finish was a dunk (bigger bench celebration)
   private shotPoints = 2;
   private shotT = 0;
   private shotDur = 0;
@@ -206,7 +209,7 @@ export class Game {
    *  baseline (backend) and fills toward mid-court, so the two benches meet a
    *  clear gap at centre and can never overlap — whoever gets subbed out. */
   private benchSeat(p: Player): { x: number; z: number } {
-    const x = COURT.halfW + 1.3;                  // far (+X) sideline, away from the camera
+    const x = COURT.halfW + 2.3;                  // far (+X) sideline, set back off the court
     const zEnd = COURT.halfL - 1;                 // first seat just inside the baseline
     const z = (p.team === 0 ? -1 : 1) * (zEnd - p.idx * 0.8);
     return { x, z };
@@ -217,7 +220,7 @@ export class Game {
     p.pos.set(s.x, 0, s.z);
     p.cutting = false;
     p.screening = false;
-    p.handsRest();
+    p.sit();          // compress + drop onto the bench seat (sitting look)
     p.sync();
   }
 
@@ -312,6 +315,7 @@ export class Game {
     sub.beatenT = sub.powerT = sub.stalledT = sub.jukeT = sub.comboN = sub.reactT = sub.coolT = sub.landT = 0;
     out.lean = 0;        // the man coming off straightens up for the walk to the bench
     sub.resetFacing();   // court bodies carry no yaw — clear the bench gaze
+    sub.stand();         // up off the bench to jog in
     this.players[i] = sub;
     const seat = this.benchSeat(out);
     this.subWalkers.push({ p: sub, tx: cx, tz: cz });     // jogs in from his seat
@@ -324,9 +328,12 @@ export class Game {
     });
   }
 
-  /** Kick off a bench celebration for the scoring team. */
-  private benchCheer(team: number, duration = 1.8): void {
+  /** Kick off a bench celebration for the scoring team. `amp` (0..1) scales how
+   *  big it is — a dunk or three brings the whole bench up bouncing. */
+  private benchCheer(team: number, duration = 1.8, amp = 0.5): void {
+    const fresh = this.cheerT[team] <= 0;   // previous cheer already over → start anew
     this.cheerT[team] = Math.max(this.cheerT[team], duration);
+    this.cheerAmp[team] = fresh ? amp : Math.max(this.cheerAmp[team], amp);
   }
 
   // While a cheer is running, everyone on that bench bounces with both arms up;
@@ -334,22 +341,37 @@ export class Game {
   // Bench players get no per-frame updates elsewhere, so jump/sync tick here.
   private updateBenchCheer(dt: number): void {
     for (let t = 0; t < 2; t++) {
-      if (this.cheerT[t] <= -0.8) continue;     // fully settled
+      if (this.cheerT[t] <= -1.6) continue;     // fully settled (all have sat by now)
       this.cheerT[t] -= dt;
-      const winding = this.cheerT[t] <= 0;      // grace period: land & rest arms
+      const amp = this.cheerAmp[t];   // celebration intensity (dunk / three → 1.0)
       for (const p of this.roster[t]) {
         if (this.onCourt(p)) continue;
         if (this.subWalkers.some((w) => w.p === p)) continue; // mid-walk — not cheering
         p.updateJump(dt);
+        const seat = this.benchSeat(p);
+        const frontX = seat.x - (0.8 + amp * 0.7);   // a bigger celebration steps further out
+        // each reserve lingers a personal beat before dropping back — so the
+        // bench doesn't all sit down in lockstep
+        const windOff = ((p.idx * 37) % 10) * 0.08;   // 0 .. ~0.72s of extra celebrating
+        const winding = this.cheerT[t] <= -windOff;
         if (!winding) {
-          if (!p.airborne && chance(2.5 * dt)) p.jump(rand(0.25, 0.45), rand(0.35, 0.5));
+          p.stand();   // up off the seat to celebrate
+          // step out in front of the bench so they're not jumping through it
+          p.pos.x += (frontX - p.pos.x) * Math.min(1, dt * 5);
+          p.pos.z = seat.z;
+          // bigger, more frequent jumps for a dunk / three
+          if (!p.airborne && chance((1.6 + amp * 2.4) * dt)) {
+            p.jump(rand(0.2, 0.38) + amp * 0.4, rand(0.35, 0.55));
+          }
           // arms overhead, angled a touch differently per player so the bench
-          // doesn't celebrate in lockstep
+          // doesn't celebrate in lockstep; they punch higher on a big play
           const ox = ((p.idx * 37) % 11 - 5) * 0.06;
           const oy = ((p.idx * 13) % 7) * 0.08;
-          p.reach(new Vector3(p.pos.x + ox, 3.1 + oy, p.pos.z), true);
+          p.reach(new Vector3(p.pos.x + ox, 2.9 + oy + amp * 0.5, p.pos.z), true);
         } else {
-          p.handsRest();
+          // wind down: walk back to the seat, then sit once there
+          p.pos.x += (seat.x - p.pos.x) * Math.min(1, dt * 5);
+          if (!p.airborne && Math.abs(p.pos.x - seat.x) < 0.12) p.sit();
         }
         p.sync();
       }
@@ -374,6 +396,12 @@ export class Game {
         // frozen at ~0 — both walkers move together at the same steady pace
         const jog = w.p.runSpeed * 0.85 * (1 - w.p.fatigue * 0.2);
         moveToward2D(w.p.pos, w.tx, w.tz, jog * dt);
+        // face where he's HEADING (else he jogs backwards toward the bench) and
+        // run the leg/arm cycle so he's not sliding along stiff
+        w.p.faceToward(w.tx, w.tz);
+        w.p.curSpd = jog;
+        w.p.updateLegs(dt);
+        w.p.runArms();
       } else {
         w.p.pos.set(w.tx, 0, w.tz);
       }
@@ -405,6 +433,7 @@ export class Game {
         // invariant: nobody stands ON the court with a bench yaw — enforce it
         // whenever a walk phase hands players back to live play
         if (this.onCourt(w.p)) w.p.resetFacing();
+        else w.p.sit();   // the man who reached the bench sits back down
         w.p.sync();
       }
       this.subWalkers = [];
@@ -786,18 +815,18 @@ export class Game {
       p.updateJump(dt);
       p.tickCooldown(dt);
       p.tickMotion(dt, resting);   // measure real speed, drain/recover fatigue
+      p.updateLegs(dt);            // walk / run leg cycle from the measured speed
     }
     // the bench recovers while they sit, watching the ball with small personal
     // fidgets — unless they're celebrating (updateBenchCheer animates that) or
     // mid-walk in a substitution (they just track the ball with their eyes)
     for (let t = 0; t < 2; t++) {
-      const cheering = this.cheerT[t] > -0.8;
+      const cheering = this.cheerT[t] > -1.6;   // matches updateBenchCheer's settle window
       for (const p of this.roster[t]) {
         if (this.onCourt(p)) continue;
         p.benchRecover(dt);
-        if (this.subWalkers.some((w) => w.p === p)) {
-          p.faceToward(this.ball.pos.x, this.ball.pos.z);
-        } else if (!cheering) {
+        // walkers (to/from the bench) are animated in updateSubs; idle otherwise
+        if (!this.subWalkers.some((w) => w.p === p) && !cheering) {
           p.benchIdle(dt, this.ball.pos.x, this.ball.pos.z);
         }
       }
@@ -842,7 +871,7 @@ export class Game {
   // passed / shot / tipped from a palm rather than floating. Everyone else rests
   // their arms at their sides.
   private poseHands(): void {
-    for (const p of this.players) p.handsRest();
+    for (const p of this.players) p.runArms();   // swing the arms with the run (rest if slow)
     const b = this.ball.pos;
     switch (this.ballMode) {
       case "held": {
@@ -2180,6 +2209,7 @@ export class Game {
     this.pendingAssist = this.assistCreditFor(h);
     const isThree = dHoop > THREE_DIST;
     this.shotPoints = isThree ? 3 : 2;
+    this.shotWasDunk = false;   // jump shot, not a dunk
 
     // make % = the shooter's skill at this range, less distance and contest
     const skill = rate(isThree ? h.attr.threeAcc : h.attr.midAcc);
@@ -2218,6 +2248,12 @@ export class Game {
     }
     // 精神: fatigue, a deficit and crunch time rattle a weak mind
     p -= this.clutchFactor(h) * 0.12;
+    // 終了間際の駆け込み: どの距離でも体勢を作れずに放るので精度が大きく落ちる
+    // （近〜中距離の"ブザービーター"が通常確率で入りすぎるのを抑える）。S技術が
+    // 高い選手ほど崩れた態勢でも決められるので落ち込みが小さい。
+    if (this.gameClock > 0 && this.gameClock < 1.0) {
+      p *= 0.5 + rate(h.attr.shotTech) * 0.2;   // ×0.5(技術0) 〜 ×0.7(技術100)
+    }
     p = clamp(p, 0.02, 0.93);   // low floor so a long heave can be a couple %
     this.shotMade = chance(p);
 
@@ -2226,6 +2262,7 @@ export class Game {
     if (this.tryShootingFoul(h, dDef, false)) return;
 
     this.shotFrom.set(h.pos.x, 2.05, h.pos.z);
+    this.aimShotTarget(dHoop);   // rim on a make; a big off-target point on a long miss
     this.shotT = 0;
     this.shotDur = 0.85;
     this.shotApex = 2.2;
@@ -2250,6 +2287,7 @@ export class Game {
     const athletic = rate(h.attr.jump) * 0.5 + rate(h.attr.dunk) * 0.3 + rate(h.attr.balance) * 0.2;
     const lane = dDef > 1.1 || (rate(h.attr.balance) > 0.65 && dDef > 0.6);
     const dunk = lane && chance(0.06 + athletic * 0.7);
+    this.shotWasDunk = dunk;   // a dunk gets a bigger bench celebration
     // dunks convert on ヘッド, layups on S精度; S威力 finishes through contact
     let p = dunk ? 0.82 + rate(h.attr.dunk) * 0.15 : 0.5 + rate(h.attr.midAcc) * 0.35;
     // a layup finished on the WEAK side is a weak-hand finish — 逆手精度 (2..8)
@@ -2281,6 +2319,7 @@ export class Game {
       const standoff = dunk ? 0.6 : 0.9;
       this.finishSpot.set(rimFloor.x + (dx / len) * standoff, 0, rimFloor.z + (dz / len) * standoff);
     }
+    this.shotTarget.copyFrom(this.attackRim(this.possession));   // point-blank: a miss just rims out
     this.ballMode = "shot";
     this.shooter = h;
     this.shooterFinishing = true;
@@ -2504,12 +2543,36 @@ export class Game {
     return true;
   }
 
+  // Where the ball actually flies. A make heads for the rim; a miss heads for an
+  // off-target point whose size GROWS with distance past the arc — so a normal
+  // jumper still rims out (and can be rebounded), but a long/desperation heave
+  // that misses falls well short or sails wide instead of drifting to the rim
+  // and looking like it went in.
+  private aimShotTarget(dHoop: number): void {
+    const rim = this.attackRim(this.possession);
+    this.shotTarget.copyFrom(rim);
+    if (this.shotMade) return;
+    const big = Math.max(0, dHoop - THREE_DIST) * 0.45;   // 0 at the arc, large on a heave
+    if (big < 0.2) return;                                 // short misses just rim out
+    const zSign = Math.sign(rim.z) || 1;
+    if (chance(0.65)) {
+      // SHORT: an air-ball that never reaches the rim — lands short and low
+      this.shotTarget.z -= zSign * big;
+      this.shotTarget.x += rand(-0.7, 0.7);
+      this.shotTarget.y = Math.max(1.5, RIM.height - big * 0.6);
+    } else {
+      // WIDE: sails past the rim to one side
+      this.shotTarget.x += (chance(0.5) ? -1 : 1) * (0.7 + big);
+      this.shotTarget.z += zSign * rand(-0.2, 0.6);
+    }
+  }
+
   private updateShot(dt: number): void {
     this.crashBoards(dt); // everyone converges on the glass while the shot is up
 
     this.shotT += dt;
     const k = Math.min(1, this.shotT / this.shotDur);
-    const a = this.shotFrom, b = this.attackRim(this.possession);
+    const a = this.shotFrom, b = this.shotTarget;   // rim on a make, off-target on a miss
     const baseY = a.y + (b.y - a.y) * k;
     const apex = Math.sin(k * Math.PI) * this.shotApex;
     this.ball.pos.set(a.x + (b.x - a.x) * k, baseY + apex, a.z + (b.z - a.z) * k);
@@ -2528,7 +2591,10 @@ export class Game {
       if (this.pendingAssist) this.pendingAssist.stats.ast++;
       this.setEvent(andOne ? "AND-1" : this.shotPoints === 3 ? "3 POINTS!" : "2 POINTS",
         shooter, 1.8, { scorer: sh?.name, assist: this.pendingAssist?.name });
-      this.benchCheer(shooter);   // the bench is up and bouncing
+      // a dunk or a three brings the whole bench up bouncing; a routine two is a
+      // smaller pop
+      const big = this.shotPoints === 3 || this.shotWasDunk;
+      this.benchCheer(shooter, big ? 2.6 : 1.7, big ? 1.0 : 0.4);
       // the ball drops through the net and bounces on the floor during the hold
       const rim = this.attackRim(shooter);
       this.ball.pos.set(rim.x, RIM.height - 0.15, rim.z);

@@ -11,6 +11,7 @@ export const hoopIndex = (end: number): number => (end >= 0 ? 0 : 1);
 
 export function buildCourt(scene: Scene): Hoops {
   buildFloor(scene);
+  buildBenches(scene);
   const h0 = buildHoop(scene, +1); // +Z end (Team 0's basket)
   const h1 = buildHoop(scene, -1); // -Z end (Team 1's basket)
   return {
@@ -35,6 +36,41 @@ function buildFloor(scene: Scene): void {
   mat.specularColor = new Color3(0.08, 0.08, 0.08);
   floor.material = mat;
   floor.receiveShadows = true;
+}
+
+// A bench for each team's reserves, along the far (+X) sideline near mid-court —
+// a seat the players sit on plus a low backrest behind them. Purely cosmetic.
+function buildBenches(scene: Scene): void {
+  const seatMat = new StandardMaterial("benchseat", scene);
+  seatMat.diffuseColor = new Color3(0.14, 0.16, 0.2);
+  seatMat.specularColor = new Color3(0.05, 0.05, 0.05);
+  const legMat = new StandardMaterial("benchleg", scene);
+  legMat.diffuseColor = new Color3(0.08, 0.09, 0.11);
+  legMat.specularColor = new Color3(0, 0, 0);
+
+  const x = COURT.halfW + 2.3;            // same sideline the reserves sit at (set back off the court)
+  for (const end of [-1, 1]) {            // team 0 sits at -Z, team 1 at +Z
+    // seats are keyed by roster index 0..12 → z from ±3.4 (idx12) to ±13 (idx0);
+    // a subbed-OUT starter (idx 0..4) sits nearest the baseline, so the plank
+    // must span the FULL 13-seat range, not just the 8 reserves.
+    const zMid = end * 8.2;               // centre of the 13-seat row
+    const len = 10.6;                     // covers z ≈ ±2.9 .. ±13.5
+    // seat plank (players rest on top ≈ y 0.42)
+    const seat = MeshBuilder.CreateBox(`benchseat_${end}`, { width: 0.9, height: 0.12, depth: len }, scene);
+    seat.position.set(x, 0.36, zMid);
+    seat.material = seatMat;
+    seat.receiveShadows = true;
+    // backrest behind the players (away from the court, +X)
+    const back = MeshBuilder.CreateBox(`benchback_${end}`, { width: 0.1, height: 0.55, depth: len }, scene);
+    back.position.set(x + 0.5, 0.6, zMid);
+    back.material = seatMat;
+    // two end legs
+    for (const s of [-1, 1]) {
+      const leg = MeshBuilder.CreateBox(`benchleg_${end}_${s}`, { width: 0.8, height: 0.36, depth: 0.12 }, scene);
+      leg.position.set(x, 0.18, zMid + s * (len / 2 - 0.2));
+      leg.material = legMat;
+    }
+  }
 }
 
 // Draw the court markings onto a canvas texture mapped across the floor.
