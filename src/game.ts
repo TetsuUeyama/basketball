@@ -74,7 +74,6 @@ export class Game {
   // shot animation
   private shotFrom = new Vector3();
   private shotTarget = new Vector3();   // where the ball ACTUALLY flies — the rim on a make, an off-target point on a miss
-  private shotBigMiss = false;          // a long air-ball/heave that sails out of bounds → throw-in, not a rebound
   private shotMade = false;
   private shotWasDunk = false;   // last finish was a dunk (bigger bench celebration)
   private shotPoints = 2;
@@ -2323,7 +2322,6 @@ export class Game {
       this.finishSpot.set(rimFloor.x + (dx / len) * standoff, 0, rimFloor.z + (dz / len) * standoff);
     }
     this.shotTarget.copyFrom(this.attackRim(this.possession));   // point-blank: a miss just rims out
-    this.shotBigMiss = false;
     this.ballMode = "shot";
     this.shooter = h;
     this.shooterFinishing = true;
@@ -2547,33 +2545,19 @@ export class Game {
     return true;
   }
 
-  // Where the ball actually flies. A make heads for the rim; a miss heads for an
-  // off-target point whose size GROWS with distance past the arc — so a normal
-  // jumper still rims out (and can be rebounded), but a long/desperation heave
-  // that misses falls well short or sails wide instead of drifting to the rim
-  // and looking like it went in.
+  // Where the ball actually flies. A make heads for the rim centre; a miss heads
+  // for a point AROUND the rim / off the backboard — never dead-centre (that
+  // reads like a make) and never way out of bounds. A farther shot scatters a
+  // bit more, but it always stays by the basket, so it can be rebounded.
   private aimShotTarget(dHoop: number): void {
     const rim = this.attackRim(this.possession);
     this.shotTarget.copyFrom(rim);
-    this.shotBigMiss = false;
     if (this.shotMade) return;
-    const big = Math.max(0, dHoop - THREE_DIST) * 0.45;   // 0 at the arc, large on a heave
-    if (big < 0.2) return;                                 // short misses just rim out (rebound)
-    // a long air-ball / heave misses BADLY: it sails clean OUT OF BOUNDS (never
-    // touches the rim), and resolveShot turns it into the other team's throw-in.
-    this.shotBigMiss = true;
+    const scatter = 0.4 + Math.min(1, Math.max(0, dHoop - THREE_DIST) / 8) * 0.55;   // 0.4 .. ~0.95
     const zSign = Math.sign(rim.z) || 1;
-    if (chance(0.6)) {
-      // LONG: overshoots past the basket, out past the baseline
-      this.shotTarget.z = zSign * (COURT.halfL + 0.6 + big * 0.3);
-      this.shotTarget.x += rand(-1.2, 1.2);
-      this.shotTarget.y = RIM.height + rand(-0.3, 0.6);
-    } else {
-      // WIDE: sails off past the sideline
-      this.shotTarget.x = (chance(0.5) ? -1 : 1) * (COURT.halfW + 0.5 + big * 0.3);
-      this.shotTarget.z += zSign * rand(-0.6, 1.0);
-      this.shotTarget.y = Math.max(1.6, RIM.height - rand(0, 0.8));
-    }
+    this.shotTarget.x = rim.x + rand(-1, 1) * scatter;
+    this.shotTarget.z = rim.z + zSign * rand(0.05, 0.3 + scatter * 0.5);   // biased long, toward the backboard
+    this.shotTarget.y = RIM.height + rand(-0.2, 0.5);
   }
 
   private updateShot(dt: number): void {
@@ -2620,11 +2604,7 @@ export class Game {
     } else {
       this.setEvent("MISS", shooter);
       if (this.gameClock <= 0) { this.handler = null; this.endQuarter(); }
-      else if (this.shotBigMiss) {
-        // a heave / air-ball that sailed out of bounds → the other team throws in
-        this.handler = null;
-        this.pauseThen(0.7, () => this.withSubs(() => this.startInbound(1 - shooter)));
-      } else this.startRebound();
+      else this.startRebound();
     }
     this.pendingAssist = null;
     this.pendingAndOne = null;
