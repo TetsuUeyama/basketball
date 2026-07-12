@@ -8,6 +8,7 @@ export class BroadcastCamera {
   autoFollow = true;
   private targetX = 0;
   private targetZ = 0;
+  private targetY = 1.2;
 
   constructor(scene: Scene, canvas: HTMLCanvasElement) {
     this.cam = new ArcRotateCamera("cam", -Math.PI / 2, 0.95, 24, new Vector3(0, 1.2, 0), scene);
@@ -20,11 +21,22 @@ export class BroadcastCamera {
     this.cam.panningSensibility = 0;
   }
 
-  update(dt: number, ballX: number, ballZ: number): void {
+  /** `followBall` (a deep shot in flight / just landed): chase the ball itself,
+   *  lifting the aim toward its arc, so the rainbow and the rim stay in frame
+   *  and the viewer sees whether it drops. Otherwise: the broadcast wide. */
+  update(dt: number, ballX: number, ballZ: number, ballY = 1.2, followBall = false): void {
     if (!this.autoFollow) return;
-    // ease the target toward the ball; bias toward court centre so it stays wide
-    this.targetX = lerp(this.targetX, ballX * 0.5, Math.min(1, dt * 2));
-    this.targetZ = lerp(this.targetZ, ballZ * 0.85, Math.min(1, dt * 2));
-    this.cam.target.set(this.targetX, 1.2, this.targetZ);
+    if (followBall) {
+      const e = Math.min(1, dt * 5);   // snappier than the wide frame — the ball is quick
+      this.targetX = lerp(this.targetX, ballX, e);
+      this.targetZ = lerp(this.targetZ, ballZ, e);
+      this.targetY = lerp(this.targetY, Math.min(1.2 + ballY * 0.35, 4.0), e);
+    } else {
+      // ease the target toward the ball; bias toward court centre so it stays wide
+      this.targetX = lerp(this.targetX, ballX * 0.5, Math.min(1, dt * 2));
+      this.targetZ = lerp(this.targetZ, ballZ * 0.85, Math.min(1, dt * 2));
+      this.targetY = lerp(this.targetY, 1.2, Math.min(1, dt * 2));
+    }
+    this.cam.target.set(this.targetX, this.targetY, this.targetZ);
   }
 }

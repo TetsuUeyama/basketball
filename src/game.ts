@@ -83,6 +83,11 @@ export class Game {
   private shooterFinishing = false;      // true for a layup/dunk (drives toward the rim)
   private finishSpot = new Vector3();    // where the finisher gathers & rises — short of the rim, not under it
   private shotApex = 2.2;   // arc height — low for layups/dunks, high for jumpers
+  // long-shot ball cam: while a beyond-the-arc bomb is in the air (and for a
+  // beat after it lands) the broadcast camera chases the ball itself, so the
+  // viewer can follow the rainbow and see whether it drops
+  private longShot = false;     // the shot currently in flight is a deep one
+  private longShotHoldT = 0;    // keep the ball cam on through the landing
 
   // loose-ball (rebound) / inbound timers
   private looseT = 0;        // safety timeout before a loose ball is guaranteed grabbed
@@ -147,6 +152,17 @@ export class Game {
 
   /** Wire up the hoop net/rim meshes so a made basket can swish them. */
   attachHoops(hoops: Hoops): void { this.hoops = hoops; }
+
+  /** True while the camera should chase the ball itself (a deep shot's flight
+   *  plus a beat after it lands) instead of framing the broadcast wide. */
+  get camFollowBall(): boolean {
+    return (this.ballMode === "shot" && this.longShot) || this.longShotHoldT > 0;
+  }
+
+  /** モデル切替（人型 ⇄ どんぐり, HUD_OPTS.model）を全26人へ即時適用する。 */
+  applyModelAll(): void {
+    for (let t = 0; t < 2; t++) for (const p of this.roster[t]) p.applyModel();
+  }
 
   // Kick off the net swish + rim/board flash on the rim `team` just scored on.
   private swishNet(team: number): void {
@@ -594,6 +610,8 @@ export class Game {
     this.subWalkers = [];
     this.subNext = null;
     this.cheerT = [-1, -1];
+    this.longShot = false;
+    this.longShotHoldT = 0;
     // the starting five check back in; the bench takes their seats
     for (let t = 0; t < 2; t++) {
       for (let i = 0; i < ROSTER_SIZE; i++) {
@@ -834,6 +852,7 @@ export class Game {
       }
     }
     this.updateFacing(dt);
+    if (this.longShotHoldT > 0) this.longShotHoldT = Math.max(0, this.longShotHoldT - dt);
     this.tickSwish(dt);   // net swish / rim flash on a make
     this.syncAll();
   }
@@ -2266,8 +2285,15 @@ export class Game {
     this.shotFrom.set(h.pos.x, 2.05, h.pos.z);
     this.aimShotTarget(dHoop);   // rim on a make; a big off-target point on a long miss
     this.shotT = 0;
-    this.shotDur = 0.85;
-    this.shotApex = 2.2;
+    // Beyond the arc the ball is HEAVED, not flicked: the farther out, the
+    // higher and slower the rainbow (a buzzer bomb hangs in the air long enough
+    // to follow). Inside the arc nothing changes (far = 0 → the old 0.85/2.2).
+    const far = Math.min(12, Math.max(0, dHoop - THREE_DIST));
+    this.shotDur = 0.85 + far * 0.11;
+    this.shotApex = 2.2 + far * 0.45;
+    this.longShot = far > 0.5;   // deep enough that the ball cam should chase it
+    this.longShotHoldT = 0;      // a new flight owns the camera call
+
     this.ballMode = "shot";
     this.shooter = h;
     this.shooterFinishing = false;
@@ -2323,6 +2349,8 @@ export class Game {
     }
     this.shotTarget.copyFrom(this.attackRim(this.possession));   // point-blank: a miss just rims out
     this.ballMode = "shot";
+    this.longShot = false;   // a rim finish is never ball-cam material
+    this.longShotHoldT = 0;  // and it cancels a lingering long-shot hold
     this.shooter = h;
     this.shooterFinishing = true;
     this.handler = null;
@@ -2574,6 +2602,9 @@ export class Game {
   }
 
   private resolveShot(): void {
+    // a deep bomb keeps the ball cam on through the landing/bounce, so the
+    // viewer sees whether it dropped before the frame eases back out
+    if (this.longShot) { this.longShotHoldT = 1.6; this.longShot = false; }
     const shooter = this.possession;
     const sh = this.shooter;
     if (sh) sh.stats.fga++;

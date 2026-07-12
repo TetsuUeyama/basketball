@@ -44,6 +44,7 @@ const ui = new UI();
 ui.onRestart = () => game.reset();                       // restart the current game
 ui.onStart = () => { game.applyRoster(); game.reset(); }; // apply edits, then tip off
 ui.onBack = () => game.reset();                          // result → back to a clean pre-game
+ui.onModelToggle = () => game.applyModelAll();           // 人型 ⇄ どんぐり体形を全員へ即時反映
 
 engine.runRenderLoop(() => {
   // clamp dt so a stalled/refocused tab can't make the sim jump
@@ -54,7 +55,7 @@ engine.runRenderLoop(() => {
     for (let i = 0; i < ui.speed; i++) game.update(dt);
   }
   ui.update(game);
-  camera.update(dt, game.ball.pos.x, game.ball.pos.z);
+  camera.update(dt, game.ball.pos.x, game.ball.pos.z, game.ball.pos.y, game.camFollowBall);
   scene.render();
 });
 

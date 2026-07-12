@@ -55,18 +55,20 @@ function buildBenches(scene: Scene): void {
     // must span the FULL 13-seat range, not just the 8 reserves.
     const zMid = end * 8.2;               // centre of the 13-seat row
     const len = 10.6;                     // covers z ≈ ±2.9 .. ±13.5
-    // seat plank (players rest on top ≈ y 0.42)
-    const seat = MeshBuilder.CreateBox(`benchseat_${end}`, { width: 0.9, height: 0.12, depth: len }, scene);
+    // seat plank (players rest on top ≈ y 0.42) — a bench-like shallow seat,
+    // not a sofa; the players' seat spot stays at the plank centre (x)
+    const SEAT_D = 0.45;
+    const seat = MeshBuilder.CreateBox(`benchseat_${end}`, { width: SEAT_D, height: 0.12, depth: len }, scene);
     seat.position.set(x, 0.36, zMid);
     seat.material = seatMat;
     seat.receiveShadows = true;
-    // backrest behind the players (away from the court, +X)
+    // backrest right at the seat's rear edge (away from the court, +X)
     const back = MeshBuilder.CreateBox(`benchback_${end}`, { width: 0.1, height: 0.55, depth: len }, scene);
-    back.position.set(x + 0.5, 0.6, zMid);
+    back.position.set(x + SEAT_D / 2 + 0.05, 0.6, zMid);
     back.material = seatMat;
     // two end legs
     for (const s of [-1, 1]) {
-      const leg = MeshBuilder.CreateBox(`benchleg_${end}_${s}`, { width: 0.8, height: 0.36, depth: 0.12 }, scene);
+      const leg = MeshBuilder.CreateBox(`benchleg_${end}_${s}`, { width: SEAT_D - 0.07, height: 0.36, depth: 0.12 }, scene);
       leg.position.set(x, 0.18, zMid + s * (len / 2 - 0.2));
       leg.material = legMat;
     }

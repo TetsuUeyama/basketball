@@ -40,8 +40,8 @@ export const THREE_DIST = 6.75;   // beyond this counts as a 3-pointer
 // each player (default). "icon": under the bottom-HUD face icon instead. `rev`
 // bumps whenever the toggle flips so the name tags force a repaint even though
 // the fatigue value itself didn't change.
-export const HUD_OPTS: { staminaOn: "name" | "icon"; showNames: boolean; rev: number } =
-  { staminaOn: "name", showNames: true, rev: 0 };
+export const HUD_OPTS: { staminaOn: "name" | "icon"; showNames: boolean; model: "human" | "acorn"; rev: number } =
+  { staminaOn: "icon", showNames: true, model: "acorn", rev: 0 };
 
 export const PLAYER_SPEED = 6.2;  // offensive run speed
 export const DEF_SPEED = 6.5;     // defenders are a touch quicker so they can recover

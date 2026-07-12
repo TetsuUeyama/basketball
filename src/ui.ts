@@ -77,6 +77,7 @@ export class UI {
   private iconStamina = new Map<import("./entities").Player, { bar: HTMLDivElement; fill: HTMLDivElement }>(); // player → its icon stamina bar
   private staminaBtn: HTMLButtonElement | null = null;   // HUD toggle: gauge on name tag ⇄ face icon
   private namesBtn: HTMLButtonElement | null = null;     // HUD toggle: on-court name tags on ⇄ off
+  private modelBtn: HTMLButtonElement | null = null;     // HUD toggle: 人型 ⇄ どんぐり体形
   private statSnap = new Map<import("./entities").Player, number[]>();     // last-seen POP_STATS values
   private controls!: HTMLDivElement;      // speed / RESTART row
   private menuBtn!: HTMLButtonElement;    // ☰ hamburger — rides the top edge until the scoreboard reaches it
@@ -112,6 +113,7 @@ export class UI {
   onRestart: () => void = () => {};
   onStart: () => void = () => {};
   onBack: () => void = () => {};
+  onModelToggle: () => void = () => {};   // apply HUD_OPTS.model to every player
 
   get playing(): boolean {
     return this.phase === "playing";
@@ -227,6 +229,14 @@ export class UI {
     });
     this.hud.appendChild(controls);
     menuBtn.onclick = () => { controls.style.display = controls.style.display === "none" ? "flex" : "none"; };
+    // クリックがドロップダウン本体/☰ボタンの外なら閉じる（開いたまま固まる問題の解消）。
+    // ☰自体は除外 — 除外しないと pointerdown で閉じた直後に click トグルで再び開いてしまう
+    window.addEventListener("pointerdown", (e) => {
+      if (this.controls.style.display === "none") return;
+      const t = e.target as Node;
+      if (this.controls.contains(t) || this.menuBtn.contains(t)) return;
+      this.controls.style.display = "none";
+    });
 
     const speedRow = document.createElement("div");
     Object.assign(speedRow.style, { display: "flex", gap: "6px" } as Partial<CSSStyleDeclaration>);
@@ -260,6 +270,17 @@ export class UI {
       this.refreshNamesBtn();
     };
     controls.appendChild(namesBtn);
+
+    // 選手モデルの切替: 人型（関節脚つき） ⇄ どんぐり体形（カプセル）
+    const modelBtn = this.button("");
+    this.modelBtn = modelBtn;
+    this.refreshModelBtn();
+    modelBtn.onclick = () => {
+      HUD_OPTS.model = HUD_OPTS.model === "human" ? "acorn" : "human";
+      this.onModelToggle();
+      this.refreshModelBtn();
+    };
+    controls.appendChild(modelBtn);
 
     const restart = this.button("RESTART");
     restart.onclick = () => { this.onRestart(); controls.style.display = "none"; };
@@ -1974,6 +1995,12 @@ export class UI {
   private refreshNamesBtn(): void {
     if (!this.namesBtn) return;
     this.namesBtn.textContent = HUD_OPTS.showNames ? "選手名: 表示" : "選手名: 非表示";
+  }
+
+  // Reflect the current player-model style on its toggle button.
+  private refreshModelBtn(): void {
+    if (!this.modelBtn) return;
+    this.modelBtn.textContent = HUD_OPTS.model === "human" ? "モデル: 人型" : "モデル: どんぐり";
   }
 
   // ---- bottom player bars (face icons per team, on-court ⇄ bench tabs) ----

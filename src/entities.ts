@@ -57,10 +57,23 @@ export class Player {
   private namePlane!: Mesh;   // floating name tag; hidden when HUD_OPTS.showNames is off
   private readonly teamRGB: { r: number; g: number; b: number };
 
-  // jersey-number decals, one per Z side; the visible one is the player's back
-  private numDecalPlus!: Mesh;
-  private numDecalMinus!: Mesh;
+  // jersey-number decals, one per Z side and per body style; the visible one is
+  // the player's back on the currently shown body
+  private numHumanPlus!: Mesh;
+  private numHumanMinus!: Mesh;
+  private numAcornPlus!: Mesh;
+  private numAcornMinus!: Mesh;
   private numberSide = 1;   // which local Z side currently shows the number
+  private sideApplied = false; // Game hasn't picked a back side yet — keep shells hidden
+
+  // Both body styles exist from construction; applyModel() shows one and hides
+  // the other so the style can be flipped live from the HUD menu.
+  private humanNode!: TransformNode;   // rectangular torso (ribbons + caps)
+  private acornNode!: TransformNode;   // the acorn figure (chest + waist + shoe feet)
+  private acornWaistPivot!: TransformNode; // waist rides this, at the waist-chest cut —
+                                       // sitting folds it 90° forward (the lap)
+  private acornFootL!: TransformNode;  // shoe-shaped feet — asymmetric, so both the
+  private acornFootR!: TransformNode;  // position AND the yaw flip with numberSide
 
   decisionT = 0;                 // cooldown before the next AI decision
   driveTarget = new Vector3();   // where a ball-handler is heading
@@ -138,6 +151,7 @@ export class Player {
   private footL!: Mesh;
   private footR!: Mesh;
   private stridePhase = 0;   // accumulates with distance travelled → leg swing
+  private acornWaddle = 0;   // eased penguin body-roll (rad), added to root roll in sync()
 
   constructor(scene: Scene, team: number, idx: number, def: PlayerDef) {
     this.team = team;
@@ -160,6 +174,12 @@ export class Player {
     const color = new Color3(c.r, c.g, c.b);
 
     this.root = new TransformNode(`p_${team}_${idx}`, scene);
+
+    // carrier for every humanoid-only torso piece, so the whole rect torso can
+    // be enabled/disabled as one when the body style flips
+    const humanNode = new TransformNode(`human_${team}_${idx}`, scene);
+    humanNode.parent = this.root;
+    this.humanNode = humanNode;
 
     // torso split into upper body (chest) + lower body (abdomen/pelvis) with a
     // slight waist taper — the legs are separate. Slim to match the thin legs.
@@ -200,7 +220,7 @@ export class Player {
       const cap = new Mesh(name, scene);
       vd.applyToMesh(cap);
       cap.material = bodyMat;
-      cap.parent = this.root;
+      cap.parent = humanNode;
     };
     const roundedBox = (name: string, a: number, b: number, r: number, y0: number, y1: number): Mesh => {
       const bot = rrRing(a, b, r, y0), top = rrRing(a, b, r, y1);
@@ -208,7 +228,7 @@ export class Player {
         pathArray: [bot, top], closePath: true, sideOrientation: Mesh.DOUBLESIDE,
       }, scene);
       m.material = bodyMat;
-      m.parent = this.root;
+      m.parent = humanNode;
       makeCap(`${name}_top`, top, y1);   // close the top and bottom so the torso isn't hollow
       makeCap(`${name}_bot`, bot, y0);
       return m;
@@ -220,6 +240,52 @@ export class Player {
     // the flat back the jersey number sits on (depth of the upper body)
     const backZ = 0.18;
 
+    // the "acorn" figure — kept as an alternative style, toggled from the HUD
+    // menu. Three parts, all flat at the joins (no rounding at a cut face —
+    // like an acorn sawn through): a LONG chest keeping the old capsule's full
+    // r0.3 silhouette (flat bottom at the waist cut, hemisphere shoulders), a
+    // slimmer WAIST below it (flat top, hemisphere bottom hanging just above
+    // the floor), and penguin FEET — only the toe tips peeking out in front.
+    // Core Babylon has no one-flat-end capsule, so each piece is a lathe of
+    // its profile.
+    const acornNode = new TransformNode(`acorn_${team}_${idx}`, scene);
+    acornNode.parent = this.root;
+    this.acornNode = acornNode;
+    const AR = 0.3, ACUT = Player.ACORN_CUT, ARC = 8; // chest radius / waist-chest cut height
+    const WR = Player.ACORN_WAIST_R, WTIP = 0.22; // waist radius / waist bottom tip height
+    // the waist rides a pivot at the cut plane so sitting can fold it 90°
+    // forward (the lap) — its profile is built RELATIVE to the cut (y=0 at ACUT)
+    const waistPivot = new TransformNode(`acornWaist_${team}_${idx}`, scene);
+    waistPivot.parent = acornNode;
+    waistPivot.position.y = ACUT;
+    this.acornWaistPivot = waistPivot;
+    const lowerShape: Vector3[] = [];
+    for (let i = 0; i <= ARC; i++) {   // waist bottom hemisphere: axis tip out to full radius
+      const t = (i / ARC) * Math.PI / 2;
+      lowerShape.push(new Vector3(Math.sin(t) * WR, WTIP + WR - Math.cos(t) * WR - ACUT, 0));
+    }
+    lowerShape.push(new Vector3(WR, 0, 0));      // straight side up to the cut
+    lowerShape.push(new Vector3(0, 0, 0));       // flat cut face back to the axis
+    const upperShape: Vector3[] = [
+      new Vector3(0, ACUT, 0),                   // flat cut face out from the axis
+      new Vector3(AR, ACUT, 0),                  // straight side up to the shoulder
+    ];
+    for (let i = 0; i <= ARC; i++) {   // top hemisphere: full radius in to the axis tip (1.675)
+      const t = (i / ARC) * Math.PI / 2;
+      upperShape.push(new Vector3(Math.cos(t) * AR, 1.375 + Math.sin(t) * AR, 0));
+    }
+    const makeAcornPiece = (name: string, shape: Vector3[]): Mesh => {
+      const m = MeshBuilder.CreateLathe(name, {
+        shape, tessellation: 12, sideOrientation: Mesh.DOUBLESIDE,
+      }, scene);
+      m.material = bodyMat;
+      m.parent = acornNode;
+      return m;
+    };
+    const acornLower = makeAcornPiece(`acornLower_${team}_${idx}`, lowerShape);
+    acornLower.parent = waistPivot;              // folds with the sitting pivot
+    const acornUpper = makeAcornPiece(`acornUpper_${team}_${idx}`, upperShape);
+
     const head = MeshBuilder.CreateSphere(`head_${team}_${idx}`, { diameter: 0.34, segments: 10 }, scene);
     head.position.y = 1.78;
     const headMat = new StandardMaterial(`hmat_${team}_${idx}`, scene);
@@ -227,6 +293,63 @@ export class Player {
     headMat.specularColor = new Color3(0.05, 0.05, 0.05);
     head.material = headMat;
     head.parent = this.root;
+
+    // acorn penguin feet, shaped like SHOES: a long low toe box + a rounded toe
+    // cap + a taller ankle shaft tucking up under the waist bottom. Built with
+    // the toe pointing local -Z (the chest side when numberSide = +1); the shoe
+    // is front/back asymmetric, so setNumberSide flips its yaw as well as its
+    // z position at half-time.
+    const shoeMat = new StandardMaterial(`shoemat_${team}_${idx}`, scene);
+    shoeMat.diffuseColor = new Color3(0.92, 0.92, 0.92);   // white sneakers
+    shoeMat.specularColor = new Color3(0.08, 0.08, 0.08);
+    shoeMat.backFaceCulling = false;   // hand-built wedge shows regardless of winding
+    // Each shoe is ONE mesh so it reads as a single moulded piece (it used to
+    // be four primitives and every join showed): the side-view outline —
+    // sole → quarter-ellipse toe curve → straight instep diagonal → flat
+    // collar top → heel back flaring slightly out toward the sole — is swept
+    // across the full shoe width, and the two sides are closed with triangle
+    // fans (the outline is convex).
+    const makeAcornFoot = (sx: number, tag: string): TransformNode => {
+      const node = new TransformNode(`acornFoot_${tag}_${team}_${idx}`, scene);
+      node.parent = acornNode;
+      node.position.set(sx, 0, 0.07);            // z / yaw re-aimed per numberSide
+      const hw = 0.15 / 2;                            // half width
+      const capZ = -0.20, capR = 0.08, capH = 0.13;   // toe curve: start / bulge / height
+      const topY = 0.25, slopeZ = -0.08;              // collar top / instep end
+      const heelTopZ = 0.11, heelBotZ = 0.18;         // heel back: flares down-and-out to a longer heel
+      const TSEG = 6;
+      const prof: [number, number][] = [[heelBotZ, 0]]; // (z,y) closed outline, heel-bottom first
+      for (let i = 0; i <= TSEG; i++) {   // toe: sole tip up and over the quarter ellipse
+        const t = (1 - i / TSEG) * Math.PI / 2;
+        prof.push([capZ - capR * Math.sin(t), capH * Math.cos(t)]);
+      }
+      prof.push([slopeZ, topY]);          // instep diagonal up to the collar
+      prof.push([heelTopZ, topY]);        // flat collar top; loop closes down the flared heel
+      const N = prof.length;
+      const spos: number[] = [];
+      for (const [z, y] of prof) spos.push(-hw, y, z, hw, y, z);  // pair 2i / 2i+1
+      const sidx: number[] = [];
+      for (let i = 0; i < N; i++) {       // swept outline surface (incl. sole & heel back)
+        const j = (i + 1) % N;
+        const a = 2 * i, b = a + 1, c = 2 * j, d = c + 1;
+        sidx.push(a, c, b, b, c, d);
+      }
+      for (let i = 1; i < N - 1; i++) {   // flat side caps, fanned from the heel-bottom corner
+        sidx.push(0, 2 * i, 2 * (i + 1));
+        sidx.push(1, 2 * (i + 1) + 1, 2 * i + 1);
+      }
+      const snorm: number[] = [];
+      VertexData.ComputeNormals(spos, sidx, snorm);
+      const svd = new VertexData();
+      svd.positions = spos; svd.indices = sidx; svd.normals = snorm;
+      const shoe = new Mesh(`acornShoe_${tag}_${team}_${idx}`, scene);
+      svd.applyToMesh(shoe);
+      shoe.material = shoeMat;
+      shoe.parent = node;
+      return node;
+    };
+    this.acornFootL = makeAcornFoot(-0.12, "L");
+    this.acornFootR = makeAcornFoot(0.12, "R");
 
     // Jersey number, printed on the BACK of the jersey. A decal projects the
     // digits onto the capsule so they follow the body's curve instead of
@@ -256,11 +379,9 @@ export class Player {
     // chosen per side so the digits read left-to-right for a viewer standing
     // on that side (default left-handed camera: +X is screen-right when
     // looking along +Z, and -X when looking along -Z).
-    const makeNumberShell = (sign: number): Mesh => {
-      const R = backZ + 0.012;            // just proud of the flat back — nearly flat now
-      const yTop = 1.52, yBot = 1.08;     // on the upper back, within the (lowered) torso top
+    const makeNumberShell = (sign: number, tag: string, R: number,
+      yTop: number, yBot: number, span: number): Mesh => {
       const SEG = 12;
-      const span = Math.PI * 0.34;        // ~60° — a gentle wrap that hugs the (mostly flat) back
       const top: Vector3[] = [];
       const bot: Vector3[] = [];
       for (let i = 0; i <= SEG; i++) {
@@ -271,7 +392,7 @@ export class Player {
         bot.push(new Vector3(x, yBot, z));
       }
       // [bot, top] puts texture-v the right way up (confirmed on-screen)
-      const shell = MeshBuilder.CreateRibbon(`numshell_${sign}_${team}_${idx}`, {
+      const shell = MeshBuilder.CreateRibbon(`numshell_${tag}_${sign}_${team}_${idx}`, {
         pathArray: [bot, top], sideOrientation: Mesh.DOUBLESIDE,
       }, scene);
       shell.material = numMat;
@@ -279,8 +400,12 @@ export class Player {
       shell.isVisible = false;            // Game picks the back side each half
       return shell;
     };
-    this.numDecalPlus = makeNumberShell(1);
-    this.numDecalMinus = makeNumberShell(-1);
+    // human: just proud of the flat rect back (~60° gentle wrap, upper back)
+    this.numHumanPlus = makeNumberShell(1, "h", backZ + 0.012, 1.52, 1.08, Math.PI * 0.34);
+    this.numHumanMinus = makeNumberShell(-1, "h", backZ + 0.012, 1.52, 1.08, Math.PI * 0.34);
+    // acorn: just proud of the 0.3 capsule radius (~100° wrap, as it always was)
+    this.numAcornPlus = makeNumberShell(1, "a", 0.315, 1.42, 0.88, Math.PI * 0.55);
+    this.numAcornMinus = makeNumberShell(-1, "a", 0.315, 1.42, 0.88, Math.PI * 0.55);
 
     // Floating name tag that always faces the camera, so personalities are legible.
     const namePlane = MeshBuilder.CreatePlane(`name_${team}_${idx}`, { width: 1.7, height: 0.42 }, scene);
@@ -372,7 +497,8 @@ export class Player {
     // scale the whole figure vertically to the player's height (base build ≈ 1.95 m)
     this.root.scaling.y = def.height / 1.95;
 
-    this.meshes = [upperBody, lowerBody, head];
+    this.meshes = [upperBody, lowerBody, head, acornUpper, acornLower];
+    this.applyModel();   // show the currently selected body style
   }
 
   readonly meshes: Mesh[];
@@ -417,16 +543,54 @@ export class Player {
    *  (the opposite one) — otherwise the team attacking -Z reads front-to-back
    *  reversed, with its arms hung on the back. */
   setNumberSide(sign: number): void {
+    this.sideApplied = true;
     this.numberSide = sign >= 0 ? 1 : -1;
-    this.numDecalPlus.isVisible = sign > 0;
-    this.numDecalMinus.isVisible = sign < 0;
+    const human = HUD_OPTS.model === "human";
+    this.numHumanPlus.isVisible = human && sign > 0;
+    this.numHumanMinus.isVisible = human && sign < 0;
+    this.numAcornPlus.isVisible = !human && sign > 0;
+    this.numAcornMinus.isVisible = !human && sign < 0;
     this.armPivotL.position.z = -this.numberSide * 0.06;
     this.armPivotR.position.z = -this.numberSide * 0.06;
     // toes point the same way as the chest/arms (front = -numberSide·Z), so the
     // team attacking -Z doesn't read with its feet on backwards
     this.footL.position.z = -this.numberSide * 0.1;
     this.footR.position.z = -this.numberSide * 0.1;
-    if (this.seated) this.foldSeatedLegs();   // keep a sitting fold facing the right way
+    // shoe feet: same rule, but the shoe is front/back asymmetric so its yaw
+    // flips too (built toe-forward for numberSide +1). The stance sits toward
+    // the back of the body with the toes fanned outward (a slight duck stance),
+    // so each foot's yaw = facing base ± the outward splay.
+    const fns = this.numberSide;
+    this.acornFootL.position.z = -fns * Player.ACORN_FOOT_Z;
+    this.acornFootR.position.z = -fns * Player.ACORN_FOOT_Z;
+    const fBase = fns > 0 ? 0 : Math.PI;
+    this.acornFootL.rotation.y = fBase + fns * Player.ACORN_SPLAY;
+    this.acornFootR.rotation.y = fBase - fns * Player.ACORN_SPLAY;
+    if (this.seated) {
+      this.foldSeatedLegs();   // keep a sitting fold facing the right way
+      if (HUD_OPTS.model === "acorn") this.foldAcornSeat();
+    }
+  }
+
+  /** モデル切替（人型 ⇄ どんぐりカプセル）: 選択中のボディだけを表示し、腕の
+   *  肩幅・背番号シェル・着席姿勢をそのモード用に組み直す。いつ呼んでも安全
+   *  （腕/頭/名前タグは両モード共用）。 */
+  applyModel(): void {
+    const human = HUD_OPTS.model === "human";
+    this.humanNode.setEnabled(human);
+    this.hipL.setEnabled(human);          // legs (thigh/shin/foot ride these pivots)
+    this.hipR.setEnabled(human);
+    this.acornNode.setEnabled(!human);
+    // the capsule is wider than the rect torso — shoulders move out to match
+    const sx = human ? 0.28 : 0.34;
+    this.armPivotL.position.x = -sx;
+    this.armPivotR.position.x = sx;
+    if (this.sideApplied) this.setNumberSide(this.numberSide); // move the number onto this body
+    // re-pose for this mode: a seated acorn folds its waist into a lap, a
+    // seated human sits on folded legs (acorn fold cleared either way first)
+    if (this.seated && !human) this.foldAcornSeat();
+    else this.unfoldAcornSeat();
+    this.refreshScale();
   }
 
   /** Yaw the whole figure so the chest (the side opposite the number) points at
@@ -669,6 +833,48 @@ export class Player {
   private static readonly SEAT_HIP = 0.46;   // hips rest at the bench-seat surface when sat
   private static readonly SIT_HIP = 1.45;    // thigh swings up to ~horizontal (forward)
   private static readonly SIT_KNEE = -1.55;  // shin folds back down to the floor
+  // acorn sitting: the waist folds 90° forward at the waist-chest cut (it
+  // reads as the lap) and the shoes tuck under it, standing on the floor
+  private static readonly ACORN_CUT = 0.72;     // waist-chest cut height (the sit hinge)
+  private static readonly ACORN_WAIST_R = 0.25; // waist radius (constructor's WR)
+  private static readonly SEAT_SURF = 0.42;     // bench seat surface the folded waist rests on
+  private static readonly ACORN_FOOT_Z = 0.02;  // standing stance: feet sit toward the back
+  private static readonly ACORN_SPLAY = 0.30;   // standing stance: toes fan outward (~17° each)
+
+  /** Vertical scale for the player's height. */
+  private refreshScale(): void {
+    this.root.scaling.y = this.height / 1.95;
+  }
+
+  // Fold the acorn body into its sitting pose: waist swings up to horizontal
+  // toward the chest side (front = -numberSide·Z, so rotation.x = +90°·ns maps
+  // the downward waist onto -ns·Z), shoes move forward under the lap and back
+  // down to the floor (the root is dropped by sync() while seated).
+  private foldAcornSeat(): void {
+    const ns = this.numberSide;
+    this.acornWaistPivot.rotation.x = (Math.PI / 2) * ns;
+    const s = this.height / 1.95;
+    // The feet grow out of the waist's BOTTOM — which, folded, faces forward at
+    // the lap's end — so they sit under that end, pitched toe-down: the collar
+    // aims up-and-back into the lap's underside, the toe rests on the floor,
+    // as if the same sprout point just changed its angle.
+    const TILT = 0.45;                     // toe-down pitch (local heel-up is -x for both sides)
+    const toeDrop = 0.28 * Math.sin(TILT); // the pitched toe (z -0.28) dips this far below the node
+    // `lift` cancels the seated root drop (see sync) so the lowest point — the
+    // pitched toe — lands exactly on the floor
+    const lift = (Player.ACORN_CUT - Player.ACORN_WAIST_R) - Player.SEAT_SURF / s + toeDrop;
+    this.acornFootL.rotation.x = this.acornFootR.rotation.x = -TILT;
+    this.acornFootL.position.y = this.acornFootR.position.y = lift;
+    this.acornFootL.position.z = this.acornFootR.position.z = -ns * 0.42;
+  }
+  // Back to the standing arrangement (also safe to call in human mode).
+  private unfoldAcornSeat(): void {
+    this.acornWaistPivot.rotation.x = 0;
+    this.acornFootL.rotation.x = this.acornFootR.rotation.x = 0;
+    this.acornFootL.position.y = this.acornFootR.position.y = 0;
+    this.acornFootL.position.z = this.acornFootR.position.z =
+      -this.numberSide * Player.ACORN_FOOT_Z;
+  }
 
   // Bench seat / stand-up. Seated drops the whole rig so the hips meet the seat
   // and folds the legs (thighs forward, shins down); standing returns them to
@@ -676,7 +882,8 @@ export class Player {
   sit(): void {
     this.seated = true;
     this.handsRest();
-    this.foldSeatedLegs();
+    this.foldSeatedLegs();   // hidden in acorn mode, but keeps the pose consistent
+    if (HUD_OPTS.model === "acorn") this.foldAcornSeat();
   }
   // thighs fold toward the front (the court, since bench players face the ball),
   // shins drop to the floor — keyed to numberSide so both benches fold FORWARD
@@ -692,6 +899,7 @@ export class Player {
     this.root.rotation.x = 0;
     this.hipL.rotation.x = this.hipR.rotation.x = 0;   // legs straighten
     this.kneeL.rotation.x = this.kneeR.rotation.x = 0;
+    this.unfoldAcornSeat();  // waist back down, shoes back to the standing stance
   }
 
   // One frame of the walk/run cycle: swing the hips fore/aft (opposite phase per
@@ -700,6 +908,7 @@ export class Player {
   // seated (sit() owns the pose).
   updateLegs(dt: number): void {
     if (this.seated) return;
+    if (HUD_OPTS.model !== "human") { this.updateAcornFeet(dt); return; }
     const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
     if (frac < 0.04) {
       this.stridePhase = 0;
@@ -724,12 +933,53 @@ export class Player {
     this.kneeR.rotation.x = -Math.max(0, sR) * bend * ns;
   }
 
+  // Penguin patter for the acorn shoes: while moving, the feet alternate quick
+  // toe-up flaps (pivoting at the sole, so the heel stays planted — a pata-pata
+  // waddle whose cadence and lift grow with speed); while airborne both toes
+  // point down as if dangling; at rest they ease back flat. The shared
+  // stridePhase means a mode switch mid-run stays in step.
+  private updateAcornFeet(dt: number): void {
+    const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
+    let tL = 0, tR = 0, tw = 0;
+    if (this.airborne) {
+      tL = tR = -0.55;                              // toes point down off the floor
+    } else if (frac >= 0.04) {
+      // cadence ~3 steps/s at a sprint — any quicker and the easing below blurs
+      // the two feet into flapping together instead of alternating
+      this.stridePhase += this.curSpd * dt * 3.0;
+      const amp = 0.35 + frac * 0.4;
+      tL = Math.max(0, Math.sin(this.stridePhase)) * amp;
+      tR = Math.max(0, Math.sin(this.stridePhase + Math.PI)) * amp;
+      // the body rocks onto the planted foot — away from the lifted toe — which
+      // is the penguin waddle itself; the sway widens a touch with pace
+      tw = -Math.sin(this.stridePhase) * (0.07 + frac * 0.06);
+    } else {
+      this.stridePhase = 0;
+    }
+    const ease = Math.min(1, dt * 22);
+    this.acornFootL.rotation.x += (tL - this.acornFootL.rotation.x) * ease;
+    this.acornFootR.rotation.x += (tR - this.acornFootR.rotation.x) * ease;
+    this.acornWaddle += (tw - this.acornWaddle) * ease;
+    // Flap around the HEEL, not the node origin: a toe-up pitch alone swings the
+    // heel's back corner (local z = heelBotZ 0.18) down through the floor, so
+    // the node rises by exactly that sunk depth — the toe slaps while the heel
+    // stays planted. Toe-down (airborne) needs no lift: the root is in the air.
+    this.acornFootL.position.y = Math.max(0, Math.sin(this.acornFootL.rotation.x)) * 0.18;
+    this.acornFootR.position.y = Math.max(0, Math.sin(this.acornFootR.rotation.x)) * 0.18;
+  }
+
   sync(): void {
     if (this.seated) {
       // drop the rig so the (folded) hips meet the bench seat; the folded legs
       // reach the floor in front. rotation.y is set by benchIdle/faceToward —
-      // keep it; stay upright (no lean tilt).
-      const rootY = Player.SEAT_HIP - Player.HIP_Y * (this.height / 1.95);
+      // keep it; stay upright (no lean tilt). The acorn body drops until the
+      // UNDERSIDE of its folded waist (hinge minus the waist radius) rests on
+      // the seat surface — the chest rides above the lap, and the shoes are
+      // lifted back onto the floor by foldAcornSeat.
+      const s = this.height / 1.95;
+      const rootY = HUD_OPTS.model === "acorn"
+        ? Player.SEAT_SURF - (Player.ACORN_CUT - Player.ACORN_WAIST_R) * s
+        : Player.SEAT_HIP - Player.HIP_Y * s;
       this.root.position.set(this.pos.x, rootY + this.jumpY(), this.pos.z);
       this.root.rotation.x = 0;
       this.root.rotation.z = 0;
@@ -756,7 +1006,9 @@ export class Player {
     this.tiltX += (tx - this.tiltX) * 0.25;
     this.tiltZ += (tz - this.tiltZ) * 0.25;
     this.root.rotation.x = this.tiltX;
-    this.root.rotation.z = this.tiltZ;
+    // the acorn body waddles side to side in step with the foot flaps (eased in
+    // updateAcornFeet, zero when still/airborne or in human mode)
+    this.root.rotation.z = this.tiltZ + (HUD_OPTS.model === "acorn" ? this.acornWaddle : 0);
   }
 
   /** Re-read name / height / role / priority / derived values from a (possibly
@@ -784,7 +1036,7 @@ export class Player {
     if (def.name !== this.name) { this.name = def.name; this.drawNameTag(); }
     if (def.height !== this.height) {
       this.height = def.height;
-      this.root.scaling.y = def.height / 1.95;   // rescale the figure to the new height
+      this.refreshScale();   // rescale the figure to the new height (keeps a seated squash)
     }
   }
 
@@ -850,22 +1102,41 @@ export class Player {
     this.bendElbow(this.elbowR, 0.28);
   }
 
-  // Arms for a player who isn't handling the ball: swung fore/aft with the run
-  // (opposite the same-side leg) with elbows carried bent, or resting at a
-  // walk/standstill. Keyed to numberSide like the legs so both teams swing
-  // forward. poseHands() calls this for everyone, then overrides ball arms.
+  // Arms for a player who isn't handling the ball. Running forward they pump
+  // fore/aft with the stride (opposite the same-side leg, elbows carried bent) —
+  // the acorn body pumps too, just about half as far (stubby penguin arms).
+  // BACKPEDALLING (moving against the chest direction — a retreating defender)
+  // swaps to a balance pose: both arms out low and a touch forward, fluttering
+  // in step with the feet. Rests at a walk/standstill. poseHands() calls this
+  // for everyone, then overrides ball arms.
+  private backArms = false;   // hysteresis so the style doesn't flicker at the threshold
   runArms(): void {
     const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
-    if (frac < 0.16) { this.handsRest(); return; }
+    if (frac < 0.16) { this.backArms = false; this.handsRest(); return; }
     const ns = this.numberSide;
-    const amp = 0.3 + frac * 0.55;
+    // measured velocity against the chest direction (local -ns·Z, yawed):
+    // clearly negative = running backwards
+    const th = this.root.rotation.y;
+    const chestX = -ns * Math.sin(th), chestZ = -ns * Math.cos(th);
+    const along = this.velX * chestX + this.velZ * chestZ;   // m/s toward the chest
+    this.backArms = this.backArms ? along < -0.2 : along < -0.6;
+    this.armPivotL.scaling.set(1, 1, 1);
+    this.armPivotR.scaling.set(1, 1, 1);
+    if (this.backArms) {
+      const fl = Math.sin(this.stridePhase) * 0.2;   // small alternating flutter
+      this.setArmDir(this.armPivotL, -0.6, -0.85 + fl, -ns * 0.3);
+      this.setArmDir(this.armPivotR, 0.6, -0.85 - fl, -ns * 0.3);
+      this.bendElbow(this.elbowL, 0.2);              // near-straight, hands ready
+      this.bendElbow(this.elbowR, 0.2);
+      return;
+    }
+    const human = HUD_OPTS.model === "human";
+    const amp = (0.3 + frac * 0.55) * (human ? 1 : 0.5);
     const aL = Math.sin(this.stridePhase + Math.PI) * amp * ns;   // left arm ↔ right leg
     const aR = Math.sin(this.stridePhase) * amp * ns;
     this.armPivotL.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), aL);
     this.armPivotR.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), aR);
-    this.armPivotL.scaling.set(1, 1, 1);
-    this.armPivotR.scaling.set(1, 1, 1);
-    const carry = 0.6 + frac * 0.5;   // elbows carried bent like a runner
+    const carry = (0.6 + frac * 0.5) * (human ? 1 : 0.6);   // elbows carried bent like a runner
     this.bendElbow(this.elbowL, carry);
     this.bendElbow(this.elbowR, carry);
   }
