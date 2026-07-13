@@ -120,6 +120,14 @@ export class Player {
   abilities: Set<AbilityKey>;
   // ダイレクトプレイ: window (seconds) after catching a pass for one-touch play
   quickT = 0;
+  // ピック&ロール: this screener rolled into space the defence gave up (a hedge/
+  // switch left his man behind) — a live pocket-pass window worth feeding
+  openRollT = 0;
+  // お膳立て: caught in rhythm off a good pass — a catch-and-shoot window during
+  // which his next shot gets `setupBonus` (a great passer CREATES a makeable
+  // look for a limited scorer; a fast pass keeps the window open longer).
+  setupT = 0;
+  setupBonus = 0;
 
   // dribble carry: where the live dribble sits relative to the handler (world
   // XZ offset). The game eases it between a fast front carry and a protected
@@ -128,6 +136,11 @@ export class Player {
   carryX = 0;
   carryZ = 0;
   baitT = 0;
+  // dribble cadence phase (per-handler): advances faster for a high-D精度
+  // handler, so a poor one pounds it slowly and the ball spends longer away from
+  // his hand (exposed to a poke, and he can only start his next action when it's
+  // back in his hand).
+  dribblePhase = 0;
 
   // foul reaction — a brief, purely visual beat played during the dead-ball
   // pause: "hurt" sells the contact (arms fly out, body rocks back), "and1"
@@ -287,12 +300,20 @@ export class Player {
     waistPivot.parent = acornNode;
     waistPivot.position.y = ACUT;
     this.acornWaistPivot = waistPivot;
+    // the waist widens at the very top to meet the chest FLUSH (WTOP ≈ the chest
+    // radius AR), so the wider chest no longer overhangs the narrower waist —
+    // that overhanging lip at the join was the big "R" at the upper-body side.
+    // A small fillet (RF) softens the top outer edge just a touch.
+    const WTOP = AR, RF = 0.03;
     const lowerShape: Vector3[] = [];
     for (let i = 0; i <= ARC; i++) {   // waist bottom hemisphere: axis tip out to full radius
       const t = (i / ARC) * Math.PI / 2;
       lowerShape.push(new Vector3(Math.sin(t) * WR, WTIP + WR - Math.cos(t) * WR - ACUT, 0));
     }
-    lowerShape.push(new Vector3(WR, 0, 0));      // straight side up to the cut
+    for (let i = 0; i <= 4; i++) {     // flare up to the chest width + a small rounded top edge
+      const a = (i / 4) * Math.PI / 2;
+      lowerShape.push(new Vector3(WTOP - RF + Math.cos(a) * RF, -RF + Math.sin(a) * RF, 0));
+    }
     lowerShape.push(new Vector3(0, 0, 0));       // flat cut face back to the axis
     const upperShape: Vector3[] = [
       new Vector3(0, ACUT, 0),                   // flat cut face out from the axis
@@ -526,6 +547,7 @@ export class Player {
     this.root.scaling.y = def.height / 1.95;
 
     this.meshes = [upperBody, lowerBody, head, acornUpper, acornLower];
+    this.refreshBodyDepth();   // thin the torso front-to-back per ボディバランス
     this.applyModel();   // show the currently selected body style
   }
 
@@ -650,6 +672,9 @@ export class Player {
   resetTwist(): void {
     this.torsoTwist = 0;
     this.torsoNode.rotation.y = 0;
+    this.torsoNode.rotation.x = 0;   // clear any dejected forward hunch
+    this.torsoNode.position.set(0, 0, 0);   // and the dejected waist-hinge offset
+    if (!this.seated) this.acornWaistPivot.rotation.x = 0;   // waist back to vertical
   }
 
   /** Yaw the whole figure so the chest (the side opposite the number) points at
@@ -736,15 +761,28 @@ export class Player {
     this.resetTwist();
   }
 
-  /** うなだれ: head dropped, shoulders slumped, arms hanging dead — the losing
-   *  side standing through the winners' party. Hold it by calling every frame;
-   *  resetFacing()/sit() stand the body back up. */
+  /** うなだれ: hips and legs stay upright — only the UPPER BODY hunches forward
+   *  (torso pitch) with the arms hanging dead. Trudging back to the bench keeps
+   *  this posture (the legs still walk underneath). Hold it by calling every
+   *  frame; resetTwist()/sit()/resetFacing() straighten the body back up. */
   dejectedPose(): void {
-    this.flinchPitch = -this.numberSide * 0.3;   // slump forward, over the chest
-    this.setArmDir(this.armPivotL, -0.25, -1, -this.numberSide * 0.1);
-    this.setArmDir(this.armPivotR, 0.25, -1, -this.numberSide * 0.1);
-    this.bendElbow(this.elbowL, 0.1);
-    this.bendElbow(this.elbowR, 0.1);
+    const Pt = -this.numberSide * 0.42;                    // chest tips forward
+    const cut = Player.ACORN_CUT;
+    this.torsoNode.rotation.x = Pt;
+    this.torsoNode.rotation.y = 0;                         // no play-twist while slumped
+    this.torsoTwist = 0;
+    // hinge the lean at the WAIST cut (not the feet): offset the torso so the
+    // point at the waist stays put and only the upper body leans over it — the
+    // waist and hips stay straight instead of the whole torso slanting.
+    this.torsoNode.position.set(0, cut * (1 - Math.cos(Pt)), -cut * Math.sin(Pt));
+    this.flinchPitch = 0;                                  // root (hips/legs) stays upright
+    // keep the acorn waist itself vertical under the leaning chest
+    this.acornWaistPivot.rotation.x = -Pt;
+    // arms hang straight DOWN in world despite the torso lean (compensate the pitch)
+    this.setArmDir(this.armPivotL, -0.14, -Math.cos(Pt), Math.sin(Pt));
+    this.setArmDir(this.armPivotR, 0.14, -Math.cos(Pt), Math.sin(Pt));
+    this.bendElbow(this.elbowL, 0.05);
+    this.bendElbow(this.elbowR, 0.05);
   }
 
   /** Tick down the post-pass/shot recovery cooldown. */
@@ -753,6 +791,8 @@ export class Player {
     if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
     if (this.quickT > 0) this.quickT = Math.max(0, this.quickT - dt);
     if (this.baitT > 0) this.baitT = Math.max(0, this.baitT - dt);
+    if (this.openRollT > 0) this.openRollT = Math.max(0, this.openRollT - dt);
+    if (this.setupT > 0) this.setupT = Math.max(0, this.setupT - dt);
     if (this.foulReactT > 0) this.foulReactT = Math.max(0, this.foulReactT - dt);
   }
 
@@ -949,6 +989,22 @@ export class Player {
   /** Vertical scale for the player's height. */
   private refreshScale(): void {
     this.root.scaling.y = this.height / 1.95;
+  }
+
+  /** ボディバランス(フィジカル) sets the torso's front-to-back thickness (the Z
+   *  depth): a poised, strong 99 keeps the full build; 65 and below thin down to
+   *  two-thirds (the common minimum), linear in between. The chest, waist and
+   *  their jersey-number shells all compress together so the number stays on the
+   *  (now shallower) back. Head, arms and legs keep their depth. Purely visual. */
+  private refreshBodyDepth(): void {
+    const t = clamp((this.attr.balance - 65) / (99 - 65), 0, 1);
+    const z = 2 / 3 + t * (1 / 3);   // 0.667 (≤65) .. 1.0 (99)
+    this.acornNode.scaling.z = z;
+    this.humanNode.scaling.z = z;
+    this.numAcornPlus.scaling.z = z;
+    this.numAcornMinus.scaling.z = z;
+    this.numHumanPlus.scaling.z = z;
+    this.numHumanMinus.scaling.z = z;
   }
 
   // Fold the acorn body into its sitting pose: waist swings up to horizontal
@@ -1150,6 +1206,7 @@ export class Player {
       this.height = def.height;
       this.refreshScale();   // rescale the figure to the new height (keeps a seated squash)
     }
+    this.refreshBodyDepth();   // a swapped-in player's ボディバランス sets his torso depth
   }
 
   // Paint the floating name tag plus the stamina gauge underneath. The jersey

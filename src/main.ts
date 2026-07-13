@@ -13,14 +13,23 @@ const engine = new Engine(canvas, true, { preserveDrawingBuffer: true, stencil: 
 const scene = new Scene(engine);
 scene.clearColor = new Color4(0.04, 0.05, 0.07, 1);
 
-// lighting
+// lighting. The sky hemisphere lights up-facing surfaces; groundColor is the
+// AMBIENT that reaches DOWN-facing surfaces (the nook under the head, the
+// undersides of the shoes) — kept low it leaves those faces near-black, so it's
+// lifted here so no surface goes fully dark.
 const hemi = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
-hemi.intensity = 0.75;
-hemi.groundColor = new Color3(0.2, 0.18, 0.16);
+hemi.intensity = 0.8;
+hemi.groundColor = new Color3(0.42, 0.4, 0.38);
 
 const sun = new DirectionalLight("sun", new Vector3(-0.4, -1, 0.3), scene);
 sun.position = new Vector3(8, 18, -6);
 sun.intensity = 0.9;
+
+// a soft FILL light from the low front (no shadows) so faces turned away from
+// the sun — and any hand-built model face whose normal points off-axis — still
+// catch some light instead of reading as unlit.
+const fill = new DirectionalLight("fill", new Vector3(0.3, 0.35, -1), scene);
+fill.intensity = 0.35;
 
 const camera = new BroadcastCamera(scene, canvas);
 

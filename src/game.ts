@@ -52,7 +52,21 @@ export class Game {
   possession = 0;
   private handler: Player | null = null;
   private ballMode: BallMode = "held";
-  private dribbleT = 0;   // advances while the ball is held, to bounce the dribble
+  // ---- pick-and-roll defensive coverage (set when a ball screen connects) ----
+  // The screener's defender picks how to guard the screen; the two involved
+  // defenders then move by that scheme for a short window, and the offensive
+  // outcome (blow-by / pull-up / roll / mismatch) follows from the choice.
+  private pnrCov: "" | "drop" | "show" | "switch" = "";
+  private pnrT = 0;                       // seconds the coverage window is live
+  private pnrHandlerDef: Player | null = null;   // handler's man (trails / switches to roller)
+  private pnrScreenerDef: Player | null = null;  // screener's man (drops / hedges / switches to ball)
+  private pnrScreener: Player | null = null;     // the roller
+
+  // ---- team defensive scheme for the current possession (picked at resetMotion)
+  // The DEFENDING team commits to a half-court look and whether to press the
+  // bring-up. "" = straight man-to-man (the pnr coverage above applies then).
+  private zoneScheme: "" | "2-3" | "3-2" = "";
+  private pressOn = false;
   // ジャスト・パスレシーブ: quality of the pass currently in flight (1 = right on
   // the hands). Rolled at release from P精度 + spread; on the catch it decides
   // how quickly the receiver can move to his next action (gather time).
@@ -497,6 +511,22 @@ export class Game {
     const s = this.attackSign(team);
     const hz = s * RIM.z;
     const dir = -s; // toward mid-court
+    // ZONE BREAK: against a set zone the offence reshapes into a 1-3-1-style
+    // alignment that sits players in the GAPS between the zone defenders, with a
+    // man flashing to the HIGH POST (the free-throw line) — a touch there forces
+    // the zone's back line to step up and cracks the paint open. The two "block"
+    // spots become the high post + the dunker under the rim.
+    if (team === this.possession && this.zoneScheme) {
+      return [
+        new Vector3(0, 0, hz + dir * 8.5),     // 0 point, above the top of the zone
+        new Vector3(-5.9, 0, hz + dir * 5.6),  // 1 left wing gap
+        new Vector3(5.9, 0, hz + dir * 5.6),   // 2 right wing gap
+        new Vector3(-6.5, 0, hz + dir * 1.1),  // 3 left short corner (behind the zone)
+        new Vector3(6.5, 0, hz + dir * 1.1),   // 4 right short corner
+        new Vector3(0, 0, hz + dir * 4.3),     // 5 HIGH POST — the zone-buster flash
+        new Vector3(0, 0, hz + dir * 0.9),     // 6 dunker under the rim
+      ];
+    }
     return [
       new Vector3(0, 0, hz + dir * 7.5),     // top
       new Vector3(-5, 0, hz + dir * 6),      // left wing
@@ -622,6 +652,8 @@ export class Game {
     this.finaleT = 0;
     this.finaleWinner = -1;
     this.finaleWalkers = [];
+    this.finaleTrudge = [];
+    this.clearPnr();
     // the starting five check back in; the bench takes their seats
     for (let t = 0; t < 2; t++) {
       for (let i = 0; i < ROSTER_SIZE; i++) {
@@ -990,13 +1022,58 @@ export class Game {
 
   // ---- live play (ball is held) -----------------------------------------
 
+  // RELATIVE ball-security duel: a defender's hands (反応/敏捷/守備) vs the
+  // handler's control (D精度/技術 + ドリブルキープ). >0 means the defender is
+  // winning the battle for the ball — a poor handler vs quick hands loses it, a
+  // great handler vs weak hands never does. Everything about the strip scales
+  // off THIS difference, so the same handler is safe vs a weak man and in
+  // trouble vs a strong one.
+  private stripEdge(d: Player, h: Player): number {
+    const hands = rate(d.attr.reaction) * 0.45 + rate(d.attr.agility) * 0.35 + rate(d.attr.defense) * 0.2
+      + (d.has("interceptor") ? 0.15 : 0);
+    const secure = rate(h.attr.dribbleAcc) * 0.62 + rate(h.attr.handling) * 0.38
+      + (h.has("keepDribble") ? 0.28 : 0);
+    return hands - secure;
+  }
+
+  // True when the dribble is up near the hand (secure); false while it's down at
+  // the floor (exposed). The cadence — how often it's in the hand — is D精度.
+  private ballInHand(h: Player): boolean {
+    return Math.abs(Math.cos(Math.PI * h.dribblePhase)) > 0.5;
+  }
+
+  // Off-ball defenders who have collapsed onto the ball-handler ALSO dig at it,
+  // so being swarmed by 2-3 is genuinely dangerous for a poor handler and barely
+  // a bother for a great one (the on-ball defender's own poke is in runDefense).
+  // Easier to strip while the ball is down at the floor between dribbles.
+  private swarmStrips(dt: number): void {
+    const h = this.handler;
+    if (!h || this.ballMode !== "held") return;
+    const onBall = this.onBallDefender(h);
+    const exposed = this.ballInHand(h) ? 0.55 : 1.5;
+    for (const d of this.teamPlayers(1 - h.team)) {
+      if (d === onBall || d.airborne) continue;
+      const gap = dist2D(d.pos, h.pos);
+      if (gap > 1.5) continue;
+      const close = 1 - gap / 1.5;
+      const p = Math.max(0, 0.02 + this.stripEdge(d, h) * 0.55);
+      if (chance(p * close * exposed * dt)) { this.steal(d); return; }
+    }
+  }
+
   private updateLive(dt: number): void {
     const h = this.handler!;
     if (this.pushT > 0) this.pushT = Math.max(0, this.pushT - dt);
+    // advance the dribble cadence FIRST so ball-in-hand gating is current this
+    // frame: D精度 sets the pound rate (a poor handler dribbles slowly, the ball
+    // away from his hand longer)
+    h.dribblePhase += dt * (1.6 + rate(h.attr.dribbleAcc) * 1.4);   // 1.6 .. 3.0 Hz
     // ball clearly past halfway → frontcourt established for this possession
     if (!this.frontT && this.attackSign(h.team) * h.pos.z > 0.6) this.frontT = true;
     this.runOffense(dt, h);
     this.runDefense(dt);
+    this.swarmStrips(dt);
+    if (this.ballMode !== "held") return;   // a strip this frame ended the dribble
     // --- dribble CARRY position: where the live ball sits around the handler.
     // Out FRONT (toward the rim) he can push it and run — but it's exposed to
     // the man guarding him. Squared up against a defender it tucks to the hip
@@ -1027,8 +1104,7 @@ export class Game {
       h.baitT = 0.5;
     }
     // the carried ball bounces between hand height and the floor (dam-dam)
-    this.dribbleT = (this.dribbleT + dt) % 1000;
-    const bounce = Math.abs(Math.cos(Math.PI * this.dribbleT * 2.2)); // 1 = at the hand, 0 = floor
+    const bounce = Math.abs(Math.cos(Math.PI * h.dribblePhase)); // 1 = at the hand, 0 = floor
     const y = 0.18 + (1.0 - 0.18) * bounce;
     this.ball.pos.set(h.pos.x + h.carryX, y, h.pos.z + h.carryZ);
   }
@@ -1045,8 +1121,17 @@ export class Game {
     // handler decision — a high offensive IQ reads the floor faster
     h.decisionT -= dt;
     if (h.decisionT <= 0) {
-      h.decisionT = rand(0.25, 0.45) * (1.35 - rate(h.attr.offense) * 0.7);
-      this.decide(h, dHoop, dDef, rimFloor);
+      // the next action can only START when the ball is back in his hand. A poor
+      // handler's slow dribble (see dribblePhase cadence) leaves the ball on the
+      // floor longer, so he waits — a beat of sluggishness a quick handler never
+      // has. (A committed move / dead clock is exempt — the ball's already up.)
+      const committed = h.beatenT > 0 || h.powerT > 0 || h.jukeT > 0;
+      if (!committed && !this.ballInHand(h) && this.shotClock > 1) {
+        h.decisionT = 0.02;   // hold — re-check almost immediately, act when it's up
+      } else {
+        h.decisionT = rand(0.25, 0.45) * (1.35 - rate(h.attr.offense) * 0.7);
+        this.decide(h, dHoop, dDef, rimFloor);
+      }
     }
 
     // movement: how the committed 1-on-1 move plays out. D速度 sets how much of
@@ -1214,6 +1299,23 @@ export class Game {
           this.setDriveSide(h);
           return;
         }
+      }
+    }
+
+    // SWARMED + can't secure it: a poor ball-handler collapsed on by 2+ close
+    // defenders GIVES IT UP — passes out to be released rather than dribble into
+    // a strip. How readily he panics is RELATIVE: a secure handler (D精度/技術/
+    // ドリブルキープ) vs weak hands keeps his poise; a poor one vs quick hands
+    // gets rid of it fast. This is the smart read that keeps a bad handler from
+    // trying to keep his dribble in a crowd.
+    {
+      let near = 0, edge = 0;
+      for (const dn of this.teamPlayers(1 - h.team)) {
+        if (dist2D(dn.pos, h.pos) < 2.0) { near++; edge += this.stripEdge(dn, h); }
+      }
+      if (near >= 2) {
+        const panic = clamp((near - 1) * 0.32 + (edge / near) * 0.85, 0, 0.9);
+        if (chance(panic) && this.pass(h)) return;
       }
     }
 
@@ -1423,16 +1525,19 @@ export class Game {
     // NOTE: the defender's containment weighs MORE than the handler's creation,
     // so a quick, high-IQ defender wins the neutral matchup — good on-ball defence
     // actually stops penetration instead of every drive being a coin flip.
+    // The defender's containment weighs MORE than the handler's creation (see
+    // below); a good on-ball defender should genuinely stop penetration.
     const speedEdge = rate(h.attr.handling) * 0.45 + rate(h.attr.agility) * 0.35
       + rate(h.attr.dribbleAcc) * 0.2 + (h.has("driver") ? 0.1 : 0)
-      - (rate(d.attr.agility) * 0.55 + rate(d.attr.reaction) * 0.35
-        + rate(d.attr.defense) * 0.35 + (d.has("manMark") ? 0.12 : 0));
-    // POWER is a physical battle: the defender resists mostly with ボディバランス
-    // (raw strength), and only secondarily with 守判断 — so a strong-bodied
-    // defender walls off a bull drive even if his defensive IQ is ordinary.
-    const powerEdge = rate(h.attr.balance) * 0.6 + rate(h.attr.aggression) * 0.25
-      + rate(h.attr.dribbleAcc) * 0.15 + (h.has("post") ? 0.15 : 0)
-      - (rate(d.attr.balance) * 1.0 + rate(d.attr.defense) * 0.35);
+      - (rate(d.attr.agility) * 0.62 + rate(d.attr.reaction) * 0.4
+        + rate(d.attr.defense) * 0.42 + (d.has("manMark") ? 0.12 : 0));
+    // POWER is a physical battle — but it still takes HANDLE to keep the ball on
+    // a string while bulling in; a strong but clumsy player (a defender-type big
+    // with low 技術/D精度) can't just steamroll to the rim. The defender resists
+    // mostly with ボディバランス (raw strength) plus 守判断.
+    const powerEdge = rate(h.attr.balance) * 0.55 + rate(h.attr.aggression) * 0.2
+      + rate(h.attr.dribbleAcc) * 0.2 + rate(h.attr.handling) * 0.15 + (h.has("post") ? 0.15 : 0)
+      - (rate(d.attr.balance) * 1.05 + rate(d.attr.defense) * 0.45);
 
     // a player's OWN tools set his style first: a strong, physical player (high
     // ボディバランス, aggressive) bullies his way in; a quick, high-handle player
@@ -1447,7 +1552,7 @@ export class Game {
       // POWER: shoulder into the defender. Win the strength battle and he drives
       // the man back to the rim; lose it and he's walled off and must reset.
       h.driveSide = d.shadeSide !== 0 ? -d.shadeSide : this.pickSide(h);
-      const pPower = clamp(0.52 + powerEdge * 0.96, 0.04, 0.9);
+      const pPower = clamp(0.40 + powerEdge * 1.25, 0.03, 0.9);
       if (chance(pPower)) {
         h.powerT = rand(0.55, 0.9) * (1 + Math.max(0, powerEdge) * 0.4);
         d.lean = clamp(d.lean * 0.4, -1, 1);             // knocked off his base
@@ -1541,7 +1646,7 @@ export class Game {
     // (base lowered when the GO move learned to read the lean — keeps the
     // overall blow-by rate at the previously tuned level)
     const wrongWay = clamp(-d.lean * go, 0, 1);
-    const pBeat = clamp(0.46 + speedEdge * 0.95 + wrongWay * 0.45, 0.02, 0.95);
+    const pBeat = clamp(0.38 + speedEdge * 1.2 + wrongWay * 0.45, 0.02, 0.95);
     if (chance(pBeat)) {
       // the burst carries ALL THE WAY to the rim — a blow-by that dies at the
       // free-throw line isn't a blow-by. Time is scaled to the ground the
@@ -1651,6 +1756,24 @@ export class Game {
     const defenders = this.teamPlayers(defTeam);
     const offense = this.teamPlayers(this.possession);
 
+    // commit to a defensive look once per possession
+    if (this.possession !== this.schemePoss) { this.schemePoss = this.possession; this.pickDefScheme(); }
+
+    // full-court press: trap the bring-up in the backcourt before the offence
+    // gets it into its set. Ends the moment the ball is established up front.
+    if (this.pressOn && !this.frontT && this.handler) { this.runPress(dt); return; }
+
+    // a half-court zone is a different animal — no man-matching, no pick-and-roll
+    // switching; defenders guard AREAS and the ball
+    if (this.zoneScheme) { this.runZoneDefense(dt); return; }
+
+    // pick-and-roll coverage window: while it is live the two involved defenders
+    // move by the chosen scheme (drop / show / switch) instead of plain man
+    if (this.pnrT > 0) {
+      this.pnrT -= dt;
+      if (this.pnrT <= 0) this.pnrCov = "";
+    }
+
     // ONE rim protector at a time: when the handler is driving, only the big
     // best placed to meet him drops — the rest stay pinned to their men. (All
     // bigs collapsing at once is what made every drive hit a 3-5 man wall,
@@ -1671,6 +1794,12 @@ export class Game {
       // off the ball any lingering lean (from a duel that just ended, a switch,
       // a kick-out) eases back to square at the player's quickness
       if (!isOnBall) d.decayLean(dt);
+
+      // pick-and-roll: the screen's two defenders play the coverage scheme
+      if (this.pnrCov && (d === this.pnrScreenerDef || d === this.pnrHandlerDef)) {
+        this.defendScreenCoverage(dt, d, protect);
+        continue;
+      }
 
       if (isOnBall) {
         this.defendOnBall(dt, d, man, protect);
@@ -1895,6 +2024,178 @@ export class Game {
     this.clampCourt(d.pos);
   }
 
+  // ---- half-court zone defence (2-3 / 3-2) ------------------------------
+  // Zone home spots for each defender, before the ball-side shift: the guards
+  // (low slots) man the top row, the bigs man the back row across the paint.
+  // 2-3 keeps three across the baseline (paint locked, arc soft); 3-2 puts
+  // three up on the perimeter (arc guarded, low blocks softer).
+  private zoneHomes(defTeam: number, s: number): Map<Player, { x: number; z: number }> {
+    const ds = this.teamPlayers(defTeam);
+    const rimZ = s * RIM.z;
+    const dir = -s;                              // toward mid-court
+    const topN = this.zoneScheme === "3-2" ? 3 : 2;
+    const order = [...ds].sort((a, b) => a.slot - b.slot);  // guards first
+    const top = order.slice(0, topN);
+    const back = order.slice(topN);
+    const topXs = topN === 3 ? [-4.4, 0, 4.4] : [-2.9, 2.9];
+    const backXs = back.length === 3 ? [-3.5, 0, 3.5] : [-2.9, 2.9];
+    const topDepth = 6.9;
+    const m = new Map<Player, { x: number; z: number }>();
+    // keep left-to-right order stable so defenders don't cross over each other
+    top.sort((a, b) => a.pos.x - b.pos.x).forEach((d, i) =>
+      m.set(d, { x: topXs[i], z: rimZ + dir * topDepth }));
+    back.sort((a, b) => a.pos.x - b.pos.x).forEach((d, i) => {
+      const mid = back.length === 3 && i === 1;   // the middle back man sits on the rim
+      m.set(d, { x: backXs[i], z: rimZ + dir * (mid ? 1.1 : 2.1) });
+    });
+    return m;
+  }
+
+  private runZoneDefense(dt: number): void {
+    const defTeam = 1 - this.possession;
+    const s = this.attackSign(this.possession);
+    const rim = this.attackFloor(this.possession);
+    const defenders = this.teamPlayers(defTeam);
+    const offense = this.teamPlayers(this.possession);
+    const h = this.handler;
+    const b = this.ball.pos;
+    const homes = this.zoneHomes(defTeam, s);
+    const shiftX = clamp(b.x * 0.4, -2.8, 2.8);        // the whole zone slides ball-side
+
+    // the defender whose area the ball sits in steps up to pressure it
+    let ballDef: Player | null = null;
+    if (h) {
+      let best = Infinity;
+      for (const d of defenders) {
+        const dd = dist2D(d.pos, h.pos);
+        if (dd < best) { best = dd; ballDef = d; }
+      }
+    }
+
+    for (const d of defenders) {
+      if (this.getBackOnDefense(dt, d, offense[d.slot])) continue;   // transition first
+      d.decayLean(dt);
+
+      if (d === ballDef && h) {
+        // pressure the ball inside the zone (a soft man-up), and poke from the top
+        this.defendOnBall(dt, d, h, rim);
+        const gap = dist2D(d.pos, h.pos);
+        if (gap < 1.4) {
+          const close = 1 - gap / 1.4;
+          const stl = rate(d.attr.reaction) * 0.4 + rate(d.attr.agility) * 0.3 + rate(d.attr.defense) * 0.3;
+          const resist = rate(h.attr.dribbleAcc) * 0.6 + rate(h.attr.handling) * 0.4;
+          if (chance(Math.max(0.004, 0.025 + stl * 0.08 - resist * 0.06) * close * dt)) { this.steal(d); return; }
+        }
+        continue;
+      }
+
+      const home = homes.get(d)!;
+      let tx = home.x + shiftX, tz = home.z;
+      // MATCH-UP flavour: an offensive player sitting in this defender's area gets
+      // picked up (bumped) — but the back-line bigs never chase out past the arc,
+      // which is exactly what leaves a perimeter shooter open (the zone's price)
+      const reach = this.isBig(d) ? 3.0 : 3.8;
+      let claim: Player | null = null;
+      let bestD = reach;
+      for (const o of offense) {
+        if (o === h) continue;
+        const dd = Math.hypot(o.pos.x - (home.x + shiftX), o.pos.z - home.z);
+        if (dd < bestD) { bestD = dd; claim = o; }
+      }
+      if (claim) {
+        // close out toward the man in the area, but hold zone depth (don't vacate
+        // the paint to fly at a non-threat)
+        tx = claim.pos.x * 0.6 + (home.x + shiftX) * 0.4;
+        tz = claim.pos.z * 0.45 + home.z * 0.55;
+      }
+      // help the rim when the ball is driving into the paint
+      if (h && (h.beatenT > 0 || h.powerT > 0) && this.isBig(d) && dist2D(h.pos, rim) < 6) {
+        tx = (tx + rim.x) / 2; tz = (tz + rim.z) / 2;
+      }
+      const effort = this.defEffort(d, rim);
+      moveToward2D(d.pos, tx, tz, d.accelToward(dt, tx, tz, effort) * dt);
+      this.clampCourt(d.pos);
+    }
+  }
+
+  // ---- full-court press / trap ------------------------------------------
+  // A pressing team hounds the bring-up: the ball-handler's man harasses him,
+  // a second man races over to TRAP (double), the rest deny the outlet passes,
+  // and one safety hangs back to stop the layup if the ball is thrown over the
+  // top. High turnover reward, high risk if it's split — the classic gamble.
+  private runPress(dt: number): void {
+    const defTeam = 1 - this.possession;
+    const defenders = this.teamPlayers(defTeam);
+    const offense = this.teamPlayers(this.possession);
+    const h = this.handler!;
+    const protect = this.attackFloor(this.possession);   // rim the defence guards
+    // primary on-ball harasser = the handler's own man
+    const primary = this.onBallDefender(h) ?? defenders[0];
+    // trapper = the nearest OTHER defender; safety = the one deepest back (nearest
+    // to the defended rim); the remaining two deny their men's outlet lanes
+    const others = defenders.filter((d) => d !== primary);
+    let trapper = others[0], tBest = Infinity;
+    for (const d of others) { const dd = dist2D(d.pos, h.pos); if (dd < tBest) { tBest = dd; trapper = d; } }
+    const rest = others.filter((d) => d !== trapper);
+    // safety = the rest-man closest to our own rim (the last line of defence)
+    const safety = rest.reduce((a, b) => (dist2D(a.pos, protect) <= dist2D(b.pos, protect) ? a : b));
+    const deny = rest.filter((d) => d !== safety);
+
+    // handler → rim direction, and the lateral axis to sandwich him
+    const dx = protect.x - h.pos.x, dz = protect.z - h.pos.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const ux = dx / len, uz = dz / len;          // toward the rim (down-court)
+    const lx = -uz, lz = ux;                     // sideways
+
+    // PRIMARY: body up ball-side, turn him / cut off the middle (full effort — no
+    // backing off in the backcourt during a press)
+    {
+      const side = h.pos.x >= 0 ? 1 : -1;        // push him toward the near sideline
+      const tx = h.pos.x + ux * 0.55 - lx * 0.5 * side;
+      const tz = h.pos.z + uz * 0.55 - lz * 0.5 * side;
+      moveToward2D(primary.pos, tx, tz, primary.accelToward(dt, tx, tz, 1.1) * dt);
+      this.clampCourt(primary.pos);
+    }
+    // TRAPPER: pincer from the OTHER side of the handler
+    {
+      const side = h.pos.x >= 0 ? 1 : -1;
+      const tx = h.pos.x + ux * 0.4 + lx * 0.55 * side;
+      const tz = h.pos.z + uz * 0.4 + lz * 0.55 * side;
+      moveToward2D(trapper.pos, tx, tz, trapper.accelToward(dt, tx, tz, 1.15) * dt);
+      this.clampCourt(trapper.pos);
+    }
+    // DENY: stand in the passing lane between the ball and your man (ball-side),
+    // so a pass out of the trap has to go through you
+    for (const d of deny) {
+      const man = offense[d.slot];
+      const tx = man.pos.x * 0.55 + h.pos.x * 0.45 + (h.pos.x - man.pos.x) * 0.05;
+      const tz = man.pos.z * 0.55 + h.pos.z * 0.45;
+      moveToward2D(d.pos, tx, tz, d.accelToward(dt, tx, tz, 1.05) * dt);
+      d.decayLean(dt);
+      this.clampCourt(d.pos);
+    }
+    // SAFETY: retreat toward our rim, centred, to stop the layup over the top
+    {
+      const tx = 0, tz = protect.z - Math.sign(protect.z || 1) * 6;
+      moveToward2D(safety.pos, tx, tz, safety.accelToward(dt, tx, tz, 1.0) * dt);
+      this.clampCourt(safety.pos);
+    }
+
+    // the TRAP forces the ball out: with both trappers draped on him, quick hands
+    // (反応/敏捷性) rip it or force the wild pass. A secure handler (技術/D精度)
+    // and a キープ specialist splits it more often.
+    const trapped = dist2D(primary.pos, h.pos) < 1.6 && dist2D(trapper.pos, h.pos) < 1.9;
+    if (trapped) {
+      const hands = rate(primary.attr.reaction) * 0.25 + rate(primary.attr.agility) * 0.2
+        + rate(trapper.attr.reaction) * 0.25 + rate(trapper.attr.agility) * 0.2;
+      const secure = rate(h.attr.dribbleAcc) * 0.5 + rate(h.attr.handling) * 0.4
+        + (h.has("keepDribble") ? 0.2 : 0);
+      const p = Math.max(0.01, 0.06 + hands * 0.12 - secure * 0.14);
+      const taker = dist2D(primary.pos, h.pos) < dist2D(trapper.pos, h.pos) ? primary : trapper;
+      if (chance(p * dt * 6)) { this.steal(taker); return; }
+    }
+  }
+
   // TRANSITION — GET BACK FIRST: when possession flips, a defender caught
   // up-court (he was crashing the glass or posting up a moment ago) sprints
   // home before worrying about his man. Bigs give the rim absolute priority —
@@ -1963,7 +2264,8 @@ export class Game {
     // during a substitution/walk-off exchange, when players legitimately cross
     // the sideline; and during dead-ball pauses (nobody moves, and the quarter
     // break holds everyone gathered at the bench, outside the court)
-    if (this.ballMode === "subs" || this.ballMode === "pause") return;
+    if (this.ballMode === "subs" || this.ballMode === "pause"
+        || this.ballMode === "finale") return;   // losers walk off to the bench
     // the inbounder stands out of bounds to throw, and stays there through the
     // throw's flight (he steps in only once his follow-through is done) — so
     // don't yank him onto the court. Normal in-bounds passers are unaffected.
@@ -2005,9 +2307,13 @@ export class Game {
     const urgency = this.shotClock < 6 ? (6 - this.shotClock) / 6 : 0; // 0..1
     // even in a hurry, nobody deliberately throws into a covered lane — the
     // tolerance caps well below "obvious turnover" territory
+    // against a zone the ball has to MOVE — swing and skip it side to side to
+    // beat the defenders' shifts, so the handler threads slightly tighter windows
+    const vsZone = this.zoneScheme !== "";
     const riskTolerance = clamp(
       0.12 + rate(h.attr.passAcc) * 0.2 + rate(h.attr.offense) * 0.1
       + (h.has("outside") ? 0.08 : 0)   // アウトサイド: trusts the tough angle
+      + (vsZone ? 0.08 : 0)             // skip passes vs the zone
       + tac.ballMovement * 0.15 * this.twWeight(h) + urgency * 0.35,
       0.10, 0.55);
 
@@ -2039,6 +2345,20 @@ export class Game {
       let value = open + progress * 3 + rand(-1, 1) * (1 - rate(h.attr.offense)) * 0.8;
       if (p.cutting) value += 1.5;            // reward feeding a cutter
       if (atRimCutter) value += 1.5;          // ...especially one open at the rim
+      if (p.openRollT > 0) value += 2.0;      // the pocket pass to a rolling screener the D left open
+      // お膳立て: a good passer HUNTS the open shooter — the better his vision
+      // (P精度), the more he prioritises hitting a free man in range with a
+      // catch-and-shoot, so his teammates' looks come created rather than forced.
+      if (open > 1.8 && dist2D(p.pos, rimFloor) <= this.shootRangeOf(p) + 0.3) {
+        value += (0.5 + rate(h.attr.passAcc) * 1.3) * clamp((open - 1.8) / 2, 0, 1);
+      }
+      // INSIDE-OUT vs zone: swing to the open man the zone can't rotate to (an
+      // open perimeter shooter), and reward the high-post touch that collapses it
+      if (vsZone) {
+        const dRim = dist2D(p.pos, rimFloor);
+        if (open > 1.6 && dRim > 5.5) value += 1.4;      // kick to the open shooter in the gap
+        else if (dRim > 3.5 && dRim < 5.5) value += 1.0; // feed the high post / short corner
+      }
       // スルーパス: lives for the killer feed to a cutter
       if (h.has("throughPass") && p.cutting) value += 1.5;
       // don't just toss it straight back to the man who fed you — unless he's
@@ -2095,7 +2415,7 @@ export class Game {
       + rate(block.def.attr.agility) * 0.2
       + (block.def.has("interceptor") ? 0.18 : 0);                // スライディング
     const skill = rate(from.attr.passAcc);
-    const zip = 1.08 - rate(from.attr.passSpd) * 0.25;            // fast pass = harder to cut
+    const zip = 1.18 - rate(from.attr.passSpd) * 0.45;            // fast pass = much harder to cut
     const angle = from.has("outside") ? 0.8 : 1;                  // アウトサイド: odd angles
     let p = inLane * (0.45 + hawk * 0.6) * distFactor * zip * angle - skill * 0.3;
     p += Math.max(0, d - 10) * 0.06;   // a long ball hangs — anyone can jump it
@@ -2319,6 +2639,19 @@ export class Game {
       receiver.decisionT = (receiver.has("oneTouch") ? 0.08 : 0.25) + gather;
       if (gather > 0.05) receiver.coolT = Math.max(receiver.coolT, gather);
       receiver.quickT = Math.max(0.15, 0.6 - gather);   // ジャストほどワンタッチの窓が広い
+      // お膳立て: a good passer hits an OPEN man in rhythm — ready to shoot with
+      // nothing to do but rise. The better the passer's vision/accuracy and the
+      // more open the catch, the bigger the catch-and-shoot boost his next shot
+      // gets (this is how a playmaker CREATES points for a limited scorer). A
+      // FAST pass (P速度) keeps the window open longer — it beat the closeout.
+      const passer = this.passer;
+      if (passer) {
+        const openAtCatch = this.nearestDefenderDist(receiver);
+        const vision = rate(passer.attr.passAcc) * 0.6 + rate(passer.attr.offense) * 0.4;
+        receiver.setupBonus = clamp((vision - 0.4) * 0.36
+          + clamp(openAtCatch - 1.3, 0, 2) * 0.05, 0, 0.22) * this.passQ;
+        receiver.setupT = 0.8 + rate(passer.attr.passSpd) * 0.9;   // fast pass = longer open window
+      }
       // a completed pass sets up a potential assist for whoever threw it
       this.assistFrom = this.passer;
       this.assistTo = receiver;
@@ -2353,6 +2686,9 @@ export class Game {
     }
     // ダイレクトプレイ: the catch-and-shoot rhythm is his shot
     if (h.quickT > 0 && h.has("oneTouch")) p += 0.05;
+    // お膳立て: caught open in rhythm off a good pass — a set-up look even a
+    // limited scorer converts (the assist created the make)
+    if (h.setupT > 0) p += h.setupBonus;
     // contest — S威力 shoots through the contact; a 1対1シュート specialist
     // barely feels a single defender (only real help bothers him)
     // S威力: shooting through contact. The coefficient (0.78) and the penalty
@@ -2422,9 +2758,25 @@ export class Game {
     if (!dunk && h.driveSide === -h.strongSide()) {
       p -= (1 - h.offhandAcc / 8) * 0.1;
     }
-    p -= clamp(1.0 - dDef, 0, 1.0) * 0.35 * (1 - rate(h.attr.shotStrength) * 0.85);
+    // CONTEST at the rim. The nearest defender's contest is softened by S威力
+    // (finishing through contact) — but only the FIRST man. Driving into a
+    // CROWD (a second/third body at the rim) is low-percentage no matter how
+    // strong you are, so extra help barely feels S威力: this is what stops a
+    // physical player from bulling through 2-3 defenders for an easy dunk. An
+    // OPEN catch-and-finish (nobody near) keeps its high percentage.
+    const strong = rate(h.attr.shotStrength);
+    p -= clamp(1.1 - dDef, 0, 1.0) * 0.42 * (1 - strong * 0.7);
+    // EACH additional body at the rim is a wall — driving into a crowd is a
+    // low-percentage prayer that S威力 barely helps. This is what stops a
+    // physical player bulling through 2-3 defenders for an easy bucket while
+    // leaving the OPEN catch-and-finish (crowd = 0/1) at its high percentage.
+    let crowd = 0;
+    for (const d of this.teamPlayers(1 - h.team)) {
+      if (dist2D(d.pos, h.pos) < 2.4) crowd++;
+    }
+    if (crowd >= 2) p -= (crowd - 1) * 0.23 * (1 - strong * 0.2);
     p -= this.clutchFactor(h) * 0.1;
-    this.shotMade = chance(clamp(p, 0.2, 0.97));
+    this.shotMade = chance(clamp(p, 0.05, 0.97));
 
     const blocker = this.tryBlock(h, true);
     if (blocker) { this.swatShot(h, blocker); return; }
@@ -3362,26 +3714,135 @@ export class Game {
 
     const set = dist2DTo(p.pos, tx, tz) < 0.5;
     if (set && dist2D(p.pos, d.pos) < 0.95) {
-      h.beatenT = Math.max(h.beatenT, rand(0.45, 0.7)); // handler turns the corner
-      d.reactT = Math.max(d.reactT, 0.5);               // defender stuck on the pick
-      h.decisionT = Math.max(h.decisionT, 0.25);
-      this.setDriveSide(h);                             // aim the handler at the rim
-      this.endScreen(p, true);                          // roll to the basket
+      // the pick connects — the DEFENCE now chooses how to guard it, and the
+      // handler's outcome (blow-by / pull-up / walled off) follows from that
+      this.resolveScreenCoverage(h, p, d);
+      this.endScreen(p, true);                          // screener rolls
       return;
     }
     if (p.screenT <= 0) this.endScreen(p, false);       // pick unused — pop out
   }
 
-  private endScreen(p: Player, roll: boolean): void {
+  // The two defenders in a ball screen and how the screener's man plays it.
+  // Called the instant the pick connects. Sets a coverage window (pnrT) that
+  // runDefense reads to move both defenders by the scheme, and applies the
+  // matching consequence to the offence.
+  private resolveScreenCoverage(handler: Player, screener: Player, hDef: Player): void {
+    const defTeam = 1 - handler.team;
+    const sDef = this.teamPlayers(defTeam)[screener.slot];
+    const cov = this.chooseScreenCoverage(hDef, sDef);
+    this.pnrCov = cov;
+    this.pnrT = 1.3;
+    this.pnrHandlerDef = hDef;
+    this.pnrScreenerDef = sDef;
+    this.pnrScreener = screener;
+    handler.decisionT = Math.max(handler.decisionT, 0.2);
+    this.setDriveSide(handler);
+    if (cov === "drop") {
+      // the big sits back and protects the rim — the handler gets a STEP for a
+      // pull-up (not a rim blow-by), and the roll is covered
+      handler.beatenT = Math.max(handler.beatenT, rand(0.18, 0.32));
+      hDef.reactT = Math.max(hDef.reactT, 0.35);   // handler's man trails over the top
+    } else if (cov === "show") {
+      // the big jumps out to stop the ball — the handler is walled off for a
+      // beat, but the SCREENER rolls into the space his man vacated
+      handler.stalledT = Math.max(handler.stalledT, rand(0.35, 0.55));
+      hDef.reactT = Math.max(hDef.reactT, 0.45);
+      screener.openRollT = 0.9;
+    } else {
+      // SWITCH: the men swap. No easy corner — but if the big switched onto the
+      // guard is a step slow, the handler attacks that mismatch (a delayed
+      // blow-by scaled by the quickness gap); the roller, now on a smaller man,
+      // gets an open lane too
+      const agiGap = rate(handler.attr.agility) - rate(sDef.attr.agility);
+      handler.beatenT = Math.max(handler.beatenT, clamp(agiGap, 0, 0.45) * 1.3);
+      hDef.reactT = Math.max(hDef.reactT, 0.3);
+      if (screener.height - hDef.height > 0.06) screener.openRollT = 0.7;   // size mismatch on the roll
+    }
+  }
+
+  // Which coverage the screener's defender plays: a slow-footed big drops to
+  // protect the rim; an aggressive game plan (or a quick big) hedges out to
+  // blow up the ball; comparable, switchable defenders just swap men. Weighted
+  // so a team varies its looks rather than always doing one thing.
+  private chooseScreenCoverage(hDef: Player, sDef: Player): "drop" | "show" | "switch" {
+    const press = this.tactics[sDef.team].defense.pressure;
+    const sAgi = rate(sDef.attr.agility);
+    // a slow big can't step out on a quick guard — he drops
+    const wDrop = (this.isBig(sDef) ? 0.5 : 0.2) + (1 - sAgi) * 0.7 + (1 - press) * 0.3;
+    // aggressive, quick defenders hedge/show to disrupt the handler
+    const wShow = 0.15 + press * 0.7 + sAgi * 0.25;
+    // switch when the two are close in size (a big gap = a bad switch to avoid)
+    const sizeGap = Math.abs(sDef.height - hDef.height);
+    const wSwitch = 0.15 + sAgi * 0.4 + clamp(1 - sizeGap * 2.5, 0, 1) * 0.5
+      + (this.teamHas(sDef.team, "manMark") ? 0.15 : 0);   // ロックダウン-type teams switch confidently
+    const total = wDrop + wShow + wSwitch;
+    let r = rand(0, total);
+    if ((r -= wDrop) < 0) return "drop";
+    if ((r -= wShow) < 0) return "show";
+    return "switch";
+  }
+
+  // Move the two ball-screen defenders by the chosen coverage for the window.
+  private defendScreenCoverage(dt: number, d: Player, protect: Vector3): void {
+    const h = this.handler;
+    const screener = this.pnrScreener;
+    if (!h || !screener) return;
+    const effort = this.defEffort(d, protect);
+    if (d === this.pnrScreenerDef) {
+      if (this.pnrCov === "drop") {
+        // sag between the ball and the rim, deep — wall the paint and meet the
+        // roller (this is what takes the rim finish / roll away)
+        const tx = h.pos.x + (protect.x - h.pos.x) * 0.62;
+        const tz = h.pos.z + (protect.z - h.pos.z) * 0.62;
+        moveToward2D(d.pos, tx, tz, d.accelToward(dt, tx, tz, 1.05 * effort) * dt);
+      } else if (this.pnrCov === "show") {
+        // hedge hard at the ball early, then sprint back to recover the roller
+        const early = this.pnrT > 0.75;
+        const t = early ? h : screener;
+        const gx = t.pos.x + (protect.x - t.pos.x) * 0.35;
+        const gz = t.pos.z + (protect.z - t.pos.z) * 0.35;
+        moveToward2D(d.pos, gx, gz, d.accelToward(dt, gx, gz, 1.15 * effort) * dt);
+      } else {
+        this.defendOnBall(dt, d, h, protect);   // switch: he now guards the ball
+      }
+    } else {   // d === this.pnrHandlerDef
+      if (this.pnrCov === "switch") {
+        // pick up the roller, goal-side
+        const gx = screener.pos.x + (protect.x - screener.pos.x) * 0.3;
+        const gz = screener.pos.z + (protect.z - screener.pos.z) * 0.3;
+        moveToward2D(d.pos, gx, gz, d.accelToward(dt, gx, gz, 1.1 * effort) * dt);
+      } else {
+        // drop / show: chase the handler over the top of the pick to recover
+        const gx = h.pos.x + (protect.x - h.pos.x) * 0.2;
+        const gz = h.pos.z + (protect.z - h.pos.z) * 0.2;
+        moveToward2D(d.pos, gx, gz, d.accelToward(dt, gx, gz, 1.12 * effort) * dt);
+      }
+    }
+    this.clampCourt(d.pos);
+  }
+
+  private endScreen(p: Player, connected: boolean): void {
     p.screening = false;
     p.screenT = 0;
-    if (roll) {
-      const rim = this.attackFloor(p.team);
-      p.cutting = true;
-      p.offTimer = rand(1.5, 2.5);
-      p.offTarget.set(rim.x + rand(-0.6, 0.6), 0, rim.z - Math.sign(rim.z) * 0.4);
-    } else {
+    if (!connected) {
       p.spotIdx = this.bestOpenSpot(p.team, this.formationSpots(p.team), p);
+      return;
+    }
+    const rim = this.attackFloor(p.team);
+    // PICK-AND-POP vs PICK-AND-ROLL: a stretch-shooting screener POPS back out to
+    // the arc for a catch-and-shoot three instead of rolling to the rim. A rim
+    // runner (or a non-shooter) rolls hard as before.
+    const canPop = rate(p.attr.threeAcc) > 0.68 || p.has("range") || p.evalRole === "ストレッチ";
+    p.cutting = true;
+    p.offTimer = rand(1.5, 2.5);
+    if (canPop && chance(0.6)) {
+      const dir = -this.attackSign(p.team);           // toward mid-court
+      const px = clamp(p.pos.x + p.screenSide * 1.5, -6.5, 6.5);
+      p.offTarget.set(px, 0, rim.z + dir * 7.2);       // out to three-point range
+      p.openRollT = 2.0;                               // stays a feed target through the pop-out travel
+    } else {
+      p.offTarget.set(rim.x + rand(-0.6, 0.6), 0, rim.z - Math.sign(rim.z) * 0.4);   // roll to the rim
     }
   }
 
@@ -3605,12 +4066,41 @@ export class Game {
       p.touchCool = 0;
       p.screening = false;
       p.screenT = 0;
+      p.openRollT = 0;
     }
     // a change of possession ends any pending assist, and the ball has to be
     // brought up / established in the frontcourt afresh
     this.assistFrom = this.assistTo = null;
     this.frontT = false;
     this.pushT = 0;   // a fresh possession clears any prior fast-break window
+    this.clearPnr();  // any live pick-and-roll coverage ends with the possession
+  }
+
+  // Drop any live pick-and-roll coverage window.
+  private clearPnr(): void {
+    this.pnrCov = "";
+    this.pnrT = 0;
+    this.pnrHandlerDef = this.pnrScreenerDef = this.pnrScreener = null;
+  }
+
+  // The defending team commits to a look for THIS possession: press the
+  // bring-up? sit in a half-court zone (2-3 packs the paint, 3-2 guards the
+  // perimeter)? or straight man (where the pick-and-roll coverage applies).
+  private schemePoss = -1;
+  private pickDefScheme(): void {
+    const defTeam = 1 - this.possession;
+    const tac = this.tactics[defTeam].defense;
+    this.pressOn = chance(tac.press);
+    // a pressing possession still falls into man once the ball is up; only a
+    // NON-pressing possession commits to a set half-court zone
+    if (!this.pressOn && chance(tac.zone)) {
+      const bigs = this.teamPlayers(defTeam).filter((p) => this.isBig(p));
+      const tall = bigs.length ? bigs.reduce((s, p) => s + p.height, 0) / bigs.length : 2;
+      // a tall front line packs a 2-3; otherwise a 3-2 sometimes guards the arc
+      this.zoneScheme = (tall > 2.02 || chance(0.6)) ? "2-3" : "3-2";
+    } else {
+      this.zoneScheme = "";
+    }
   }
 
   // 飛び出し: on a live-ball turnover, leak-out runners on the NEW offence take
@@ -3741,28 +4231,33 @@ export class Game {
   private static readonly FINALE_DUR = 6.0;
   private finaleT = 0;
   private finaleWinner = -1;   // 0/1 = winning team, -1 = draw
-  private finaleWalkers: { p: Player; tx: number; tz: number }[] = [];
+  private finaleWalkers: { p: Player; tx: number; tz: number }[] = [];   // winners mobbing the floor
+  private finaleTrudge: { p: Player; tx: number; tz: number }[] = [];    // losers walking off dejected
 
   /** The FINAL horn: the winning bench pours onto the floor to mob the five,
-   *  the losers hang their heads where they stand; a draw has both squads
-   *  celebrating in place, more politely. "○○ 勝利!" runs on the banner. */
+   *  the losing five trudge off to their bench heads-down (the losing bench is
+   *  already seated); a draw has both squads celebrating in place, more
+   *  politely. "○○ 勝利!" runs on the banner. */
   private startFinale(): void {
     const w = this.score[0] === this.score[1] ? -1 : (this.score[0] > this.score[1] ? 0 : 1);
     this.finaleWinner = w;
     this.finaleT = 0;
     this.finaleWalkers = [];
+    this.finaleTrudge = [];
     this.handler = null;
     this.cheerT = [-9, -9];   // the finale supersedes any running bench cheer
     this.setEvent(w >= 0 ? `${TEAM_NAMES[w]} 勝利!` : "引き分け",
       w >= 0 ? w : this.possession, Game.FINALE_DUR);
+    // centre of the winning five, so the bench can fan out around them
+    const winFive = w >= 0 ? this.teamPlayers(w) : [];
+    const cx = winFive.length ? winFive.reduce((s, q) => s + q.pos.x, 0) / winFive.length : 0;
+    const cz = winFive.length ? winFive.reduce((s, q) => s + q.pos.z, 0) / winFive.length : 0;
     for (let t = 0; t < 2; t++) {
       for (const p of this.roster[t]) {
-        if (this.onCourt(p)) continue;
+        const onCourt = this.onCourt(p);
         if (t === w) {
+          if (onCourt) continue;   // on-court winners celebrate in place (updateFinale)
           // the winning bench rushes the floor, fanning out around the five
-          const five = this.teamPlayers(t);
-          const cx = five.reduce((s, q) => s + q.pos.x, 0) / five.length;
-          const cz = five.reduce((s, q) => s + q.pos.z, 0) / five.length;
           p.stand();
           p.resetFacing();
           const ang = (this.finaleWalkers.length / 8) * Math.PI * 2;
@@ -3772,10 +4267,17 @@ export class Game {
             tz: clamp(cz + Math.sin(ang) * 1.8, -COURT.halfL + 1, COURT.halfL - 1),
           });
         } else if (w < 0) {
-          p.stand();     // a draw: the bench stands up and claps along in place
+          if (onCourt) continue;   // draw: on-court players celebrate in place
+          p.stand();               // the bench stands up and claps along
           p.resetFacing();
+        } else if (onCourt) {
+          // the losing five trudge off toward the front of their own bench,
+          // heads down (the deep seat can be a full court away — the gather
+          // spot in front of the bench is a reachable target)
+          const dir = t === 0 ? -1 : 1;
+          this.finaleTrudge.push({ p, tx: COURT.halfW + 0.6, tz: dir * (8 + p.slot * 0.9) });
         } else if (!p.seated) {
-          p.sit();       // the losing bench slumps back onto its seat
+          p.sit();       // the losing bench is already sitting, heads low
         }
       }
     }
@@ -3813,6 +4315,19 @@ export class Game {
           }
           p.updateJump(dt);
           p.sync();
+          continue;
+        }
+        const trudger = this.finaleTrudge.find((f) => f.p === p);
+        if (trudger) {
+          // the losing five walk off toward the bench, upper body hunched the
+          // whole way — and keep standing there dejected once they arrive. They
+          // are in this.players, so the main loop measures speed / runs the leg
+          // cycle / syncs; here we only steer + hold the pose.
+          if (dist2DTo(p.pos, trudger.tx, trudger.tz) > 0.4) {
+            moveToward2D(p.pos, trudger.tx, trudger.tz, p.runSpeed * 0.6 * dt);   // heavy walk
+            p.faceToward(trudger.tx, trudger.tz);
+          }
+          p.dejectedPose();                     // hunched forward, arms limp, all the way
           continue;
         }
         if (this.onCourt(p)) {
