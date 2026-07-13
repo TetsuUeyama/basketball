@@ -531,8 +531,11 @@ export class Game {
       new Vector3(0, 0, hz + dir * 7.5),     // top
       new Vector3(-5, 0, hz + dir * 6),      // left wing
       new Vector3(5, 0, hz + dir * 6),       // right wing
-      new Vector3(-6.3, 0, hz + dir * 2.5),  // left corner
-      new Vector3(6.3, 0, hz + dir * 2.5),   // right corner
+      // DEEP corners: down on the corner three near the baseline (where the
+      // 3&D / spot-up shooters wait), stretching the floor wider than the old
+      // 2.5 m-out spot and keeping them a comfortable three
+      new Vector3(-6.7, 0, hz + dir * 1.5),  // left corner
+      new Vector3(6.7, 0, hz + dir * 1.5),   // right corner
       // low blocks, just outside the lane line — the post big's home. Guards
       // and genuine stretch bigs never claim these (see bestOpenSpot).
       new Vector3(-2.8, 0, hz + dir * 1.4),  // left low block
@@ -3944,11 +3947,11 @@ export class Game {
         .filter((q) => q !== h && this.isBig(q) && this.prefersPost(q));
       return bigs.indexOf(p) <= 0
         ? { x: -hs * 4.9, z: hz + dir * 0.9 }
-        : { x: hs * 6.4, z: hz + dir * 2.0 };
+        : { x: hs * 6.7, z: hz + dir * 1.5 };     // deep corner three
     }
     const spots = [
-      { x: -hs * 6.4, z: hz + dir * 2.0 },       // weak corner
-      { x: hs * 6.4, z: hz + dir * 2.0 },        // strong corner
+      { x: -hs * 6.7, z: hz + dir * 1.5 },       // weak corner (deep, on the three)
+      { x: hs * 6.7, z: hz + dir * 1.5 },        // strong corner (deep, on the three)
       { x: -hs * 6.0, z: hz + dir * 7.0 },       // weak deep wing
       { x: hs * 6.2, z: hz + dir * 7.5 },        // strong deep wing
     ];
