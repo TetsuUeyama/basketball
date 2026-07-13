@@ -1409,6 +1409,67 @@ TACTICS: BLAZE=zone0.35/press0.10、WAVE=zone0.12/press0.40。
 - 対応: `preserveDrawingBuffer` を外し `{ stencil: true }` のみに。tsc/vite build✓。
   ⚠ スマホ実機で再確認要。まだ残る場合は次候補: アンチエイリアス(第2引数)をfalse/影のExpShadowMap。
 
+## 2026-07-14 (106) リザルト表の改善: 名前1段省略/左固定・FG/3P/FT本数・チーム比較（ユーザー要望）
+
+- entities.ts Stats に `tpm/tpa/ftm/fta`(3P・FT成功/試投)追加、initializer/resetStats更新。
+- game.ts 集計: resolveShot で `shotPoints===3` 時 tpa/tpm、swatShot(被ブロック)も tpa、
+  updateFreeThrow で毎試投 fta・成功 ftm。headless検証: PTS=2×(FG-3P)+3×3P+FT 完全一致・
+  makes≤attempts・0違反。
+- ui.ts リザルト表:
+  - **名前を1段に省略**: cell に `white-space:nowrap/overflow:hidden/text-overflow:ellipsis`＝
+    長い名前は「…」で1行に収まる。
+  - **名前列を左固定(sticky)**: `stickyCell`(position:sticky/left:0/不透明背景#0c0f16/右に細線)＝
+    横スクロールしても誰の行か分かる。ヘッダ空セルも固定。
+  - **列を FG/3P/FT の 成功/試投 表示に**: BOX_COLS = MIN/PTS/FG(m/a)/3P(m/a)/FT(m/a)/REB/AST/STL/BLK/TO。
+    旧 STAT_COLS/fmtStat は削除。
+  - **チーム比較を追加**: `teamCompare` = 両チーム合計を [team0(右寄せ) | 項目 | team1(左寄せ)] で
+    並記(PTS/FG%/3P/FT/REB/AST/STL/BLK/TO)。リザルト先頭に表示。
+- tsc/vite build✓。⚠ 見た目(sticky/省略/比較レイアウト)は実機未検証=要目視。
+
+## 2026-07-14 (107) リザルトをタブ切替に（チームスタッツ/青チーム/赤チーム）（ユーザー要望）
+
+- ui.ts showResult: 3枚縦積み→**タブ切替**。`resultTabBar`(チームスタッツ / TEAM_NAMES[1]=青 / TEAM_NAMES[0]=赤、
+  青赤はチーム色で着色)＋`resultContent`＋`renderResultTab`(team→teamCompare / blue→statsTable(1) /
+  red→statsTable(0)、アクティブタブをハイライト)。既定「チームスタッツ」。
+- tsc/vite build✓。⚠ 実機未検証。タブ名を文字通り「青チーム/赤チーム」にしたい場合は label 変更で可。
+
+## 2026-07-14 (108) カーブ→「弾道高さ」に転用（3P/ミドル/FTの弾道の高さ＝ブロック耐性）（ユーザー要望）
+
+- 旧`bank`(カーブ、角度ありミドルで+0.07の小ボーナスのみ＝ほぼ死に能力)を**弾道高さ**へ転用。
+  attributes: ATTR_META label"BNK"→"ARC"/name"カーブ"→"弾道高さ"、Attributes注釈更新(キーbankは維持=DB不変)。
+- game.ts:
+  - shoot(): 旧の角度ミドル精度ボーナス削除。ジャンパーの `shotApex = (1.6+弾道高さ×1.2) + far×0.45`
+    (低1.6..高2.8、旧2.2中心)。
+  - tryBlock(): ジャンパー(非フィニッシュ)のブロック確率 `×clamp(1.5 - 弾道高さ, 0.5, 1.5)`
+    =低いほど被ブロック(1.35×)・高いほど回避(0.55×)。リムフィニッシュは対象外。
+  - updateFreeThrow(): FTの弧の高さ `1.2 + 弾道高さ×1.2`(FTは非コンテスト＝見た目のみ)。
+- 検証(headless): フラット(bank15)vs高弾道(bank95)同条件20試合＝ジャンパー被ブロック率 **61.6%対41.7%**、
+  平均apex **2.92対3.62**、得点15.3対20.8。極端値6/6・スタッツ整合0違反・現実スコアはレンジ内・build✓。
+- ⚠ 実機未検証(弧の見た目・体感)。効き調整ノブ: apex係数1.2/base1.6、block係数(1.5-rate)、FT弧1.2。
+
+## 2026-07-14 (109) トランジションのボール運びを中央一辺倒→サイドレーンへ（ユーザー: 中央で渋滞）
+
+- 原因: 運びのフォールバックが `setDrive(h, rimFloor=中央, 4.5)`、大男の advanceSafely も中央狙い＝
+  常に中央を上がり渋滞。
+- 対応(game.ts): `bringUpLane(h)` 新設＝バックコート運び中(!frontT)は**サイドライン寄りを目標**に。
+  `openSide(h)`(味方が少ない側)で寄せ、|x|>1.5で side を固定(スティッキー)。中央付近(|x|<4)は
+  z+1.8の横優先で"まず横に開く"→以降サイドラインを上がる。decide末尾の運びフォールバックと
+  advanceSafely を !frontT 時に bringUpLane へ差し替え(フロントコートは従来のリセット/probe)。
+- 実測(現実12試合, 運び中サンプル): ハンドラーの平均|x| **0.97→1.76m**、サイド(|x|>3.5m) **2%→21%**、
+  中央(|x|<2m) **85%→68%**。極端値6/6・press/pnr回帰PASS・現実スコアレンジ内・NaN0・build✓。
+- ⚠ 実機未検証。残り中央寄りは**アウトレット/インバウンドの捕球位置が中央**のため。もっとサイドに寄せたい
+  場合は次段階でアウトレット受け位置をウィングに（今回は運び経路のみ調整、渋滞の主因は緩和）。
+  調整ノブ: bringUpLane の side*5.5 / ahead 1.8/5.0 / |x|<4 閾値。
+
+## 2026-07-14 (110) ドリブルで手が体を貫通する件: ボールのある側の手で持つ（ユーザー報告）
+
+- 症状: ボールを腰横(守備の逆サイド)に保持する時、常に右手で取りに行き**右腕が体を横切って左へ貫通**。
+- 対応(entities.ts): `dribbleWithRight(world)`=ボールのローカルx符号(aimArmと同じ yaw+twist フレーム)で
+  右/左を判定(+x=右=armPivotR側、構造上ズレない)。`reachDribble(world,useRight)`=**その側の手で持ち、
+  逆手は下ろす**。game.ts poseHands の held を reach→reachDribble に差替。
+- tsc/vite build✓。⚠ 見た目は実機未検証だが、判定は腕リグ(aimArm)と同一フレーム由来なので
+  「持つ手＝ボールのある側」が構造的に保証。万一左右逆なら dribbleWithRight の返り値反転1箇所で対応。
+
 ### 次回再開ポイント
 1. `npm run dev` で総合playtest（本セッションは大半が実機未検証: 抜き3種/守備・ブロック/選手の向き/
    スペーシング/着地硬直/踏切/顔アイコン・スタッツポップ・ホバー/スローイン/バナー/トランジション守備の戻り）

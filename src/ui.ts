@@ -19,19 +19,6 @@ const INFO: Record<string, string> = {
 };
 for (const m of ATTR_META) INFO[m.label] = `【${m.name}】${m.tip}`;
 for (const m of ABILITY_META) INFO[m.label] = `【特殊能力】${m.tip}`;
-const STAT_COLS: { key: keyof import("./entities").Stats; label: string }[] = [
-  { key: "min", label: "MIN" },
-  { key: "pts", label: "PTS" },
-  { key: "reb", label: "REB" },
-  { key: "ast", label: "AST" },
-  { key: "stl", label: "STL" },
-  { key: "blk", label: "BLK" },
-  { key: "tov", label: "TO" },
-];
-// `min` is stored in game-clock seconds — show it as minutes with one decimal.
-const fmtStat = (key: string, v: number): string =>
-  key === "min" ? (v / 60).toFixed(1) : String(v);
-
 // Stats that pop a floating "＋" badge over a player's icon the moment he earns
 // them (score / assist / rebound / steal / block / turnover).
 const POP_STATS: { key: keyof import("./entities").Stats; label: string; color: string }[] = [
@@ -54,6 +41,11 @@ export class UI {
   private resultScore!: HTMLDivElement;
   private resultWinner!: HTMLDivElement;
   private resultStats!: HTMLDivElement;
+  // result-screen tabs: team comparison ⇄ each team's box score
+  private resultGame: Game | null = null;
+  private resultTab: "team" | "blue" | "red" = "team";
+  private resultContent: HTMLDivElement | null = null;
+  private resultTabBtns: { key: "team" | "blue" | "red"; el: HTMLButtonElement }[] = [];
   private tooltip!: HTMLDivElement;
   private tipHideT = 0;   // pending grace-period hide (see scheduleHideTip)
   private tipTitle!: HTMLDivElement;
@@ -1851,7 +1843,12 @@ export class UI {
     Object.assign(this.resultWinner.style, { fontSize: "20px", fontWeight: "800", letterSpacing: "1px" });
 
     this.resultStats = document.createElement("div");
-    Object.assign(this.resultStats.style, { display: "flex", flexDirection: "column", gap: "12px", width: "100%" });
+    // FIXED width = the full box-score table (name 128 + 10 columns + gaps ≈ 544),
+    // capped on small screens; so the modal keeps ONE size across all three tabs
+    // instead of shrinking on the narrower team-comparison view.
+    Object.assign(this.resultStats.style, {
+      display: "flex", flexDirection: "column", gap: "12px", width: "min(560px, 90vw)",
+    } as Partial<CSSStyleDeclaration>);
 
     const back = this.button("← BACK");
     Object.assign(back.style, { fontSize: "16px", padding: "10px 26px", marginTop: "4px" });
@@ -1885,10 +1882,72 @@ export class UI {
       this.resultWinner.style.color = colorOf(w);
     }
 
+    // tabbed view: チームスタッツ / 青チーム / 赤チーム
+    this.resultGame = game;
+    this.resultTab = "team";                 // default to the team comparison
     this.resultStats.replaceChildren();
-    for (let t = 0; t < 2; t++) this.resultStats.appendChild(this.statsTable(game, t));
+    this.resultStats.appendChild(this.resultTabBar());
+    this.resultContent = document.createElement("div");
+    // a min-height that comfortably fits a 13-man box score, so the modal height
+    // stays put when switching to the shorter team-comparison tab too
+    Object.assign(this.resultContent.style, { width: "100%", minHeight: "clamp(230px, 44vh, 360px)" } as Partial<CSSStyleDeclaration>);
+    this.resultStats.appendChild(this.resultContent);
+    this.renderResultTab();
     this.setPhase("result");
   }
+
+  // The three result tabs. Blue = team 1 (WAVE), red = team 0 (BLAZE); each tab
+  // is tinted its team colour so it reads as the blue / red team.
+  private resultTabBar(): HTMLDivElement {
+    const bar = document.createElement("div");
+    Object.assign(bar.style, {
+      display: "flex", gap: "6px", justifyContent: "center", flexWrap: "wrap", marginBottom: "6px",
+    } as Partial<CSSStyleDeclaration>);
+    const tabs: { key: "team" | "blue" | "red"; label: string }[] = [
+      { key: "team", label: "チームスタッツ" },
+      { key: "blue", label: TEAM_NAMES[1] },   // 青チーム
+      { key: "red", label: TEAM_NAMES[0] },    // 赤チーム
+    ];
+    this.resultTabBtns = [];
+    for (const t of tabs) {
+      const b = this.button(t.label);
+      if (t.key === "blue") b.style.color = colorOf(1);
+      else if (t.key === "red") b.style.color = colorOf(0);
+      b.onclick = () => { this.resultTab = t.key; this.renderResultTab(); };
+      this.resultTabBtns.push({ key: t.key, el: b });
+      bar.appendChild(b);
+    }
+    return bar;
+  }
+
+  private renderResultTab(): void {
+    if (!this.resultGame || !this.resultContent) return;
+    for (const { key, el } of this.resultTabBtns) {
+      const active = key === this.resultTab;
+      el.style.background = active ? "rgba(255,255,255,0.16)" : "rgba(20,24,34,0.9)";
+      el.style.borderColor = active ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.18)";
+      el.style.opacity = active ? "1" : "0.65";
+    }
+    this.resultContent.replaceChildren();
+    if (this.resultTab === "team") this.resultContent.appendChild(this.teamCompare(this.resultGame));
+    else if (this.resultTab === "blue") this.resultContent.appendChild(this.statsTable(this.resultGame, 1));
+    else this.resultContent.appendChild(this.statsTable(this.resultGame, 0));
+  }
+
+  // The box-score columns. FG / 3P / FT show makes ● of attempts ● ("3/8").
+  private static readonly BOX_COLS: { label: string; w: number; get: (s: import("./entities").Stats) => string }[] = [
+    { label: "MIN", w: 40, get: (s) => (s.min / 60).toFixed(1) },
+    { label: "PTS", w: 34, get: (s) => String(s.pts) },
+    { label: "FG", w: 48, get: (s) => `${s.fgm}/${s.fga}` },
+    { label: "3P", w: 44, get: (s) => `${s.tpm}/${s.tpa}` },
+    { label: "FT", w: 44, get: (s) => `${s.ftm}/${s.fta}` },
+    { label: "REB", w: 34, get: (s) => String(s.reb) },
+    { label: "AST", w: 34, get: (s) => String(s.ast) },
+    { label: "STL", w: 34, get: (s) => String(s.stl) },
+    { label: "BLK", w: 34, get: (s) => String(s.blk) },
+    { label: "TO", w: 30, get: (s) => String(s.tov) },
+  ];
+  private static readonly NAME_W = 128;
 
   private statsTable(game: Game, team: number): HTMLDivElement {
     const wrap = document.createElement("div");
@@ -1906,19 +1965,18 @@ export class UI {
 
     const cols = document.createElement("div");
     Object.assign(cols.style, { display: "flex", gap: "4px", fontSize: "10px", opacity: "0.6", margin: "1px 0" });
-    cols.appendChild(this.cell("", 130));   // must match the name-cell width below
-    for (const c of STAT_COLS) cols.appendChild(this.cell(c.label, 38, "center"));
+    const hc = this.stickyCell("", UI.NAME_W); hc.style.opacity = "0.6";
+    cols.appendChild(hc);
+    for (const c of UI.BOX_COLS) cols.appendChild(this.cell(c.label, c.w, "center"));
     table.appendChild(cols);
 
     for (const pl of game.allPlayers(team)) {
       const row = document.createElement("div");
       Object.assign(row.style, { display: "flex", gap: "4px", fontSize: "12px", margin: "1px 0" });
-      const nm = this.cell(`${pl.role} ${pl.name}`, 130);
+      const nm = this.stickyCell(`${pl.role} ${pl.name}`, UI.NAME_W);
       nm.style.opacity = pl.idx < STARTERS ? "0.95" : "0.7"; // bench slightly dimmed
       row.appendChild(nm);
-      for (const c of STAT_COLS) {
-        row.appendChild(this.cell(fmtStat(c.key, pl.stats[c.key]), 38, "center"));
-      }
+      for (const c of UI.BOX_COLS) row.appendChild(this.cell(c.get(pl.stats), c.w, "center"));
       table.appendChild(row);
     }
     scroller.appendChild(table);
@@ -1926,12 +1984,81 @@ export class UI {
     return wrap;
   }
 
+  // Team-vs-team comparison: totals side by side (team0 on the left, team1 on
+  // the right, the stat name between) so the two squads read against each other.
+  private teamCompare(game: Game): HTMLDivElement {
+    type S = import("./entities").Stats;
+    const total = (t: number): S => {
+      const a = { pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, min: 0 };
+      for (const pl of game.allPlayers(t)) for (const k in a) (a as any)[k] += (pl.stats as any)[k];
+      return a;
+    };
+    const t0 = total(0), t1 = total(1);
+    const pct = (m: number, at: number) => at ? ` (${Math.round(100 * m / at)}%)` : "";
+    const rows: { label: string; a: string; b: string }[] = [
+      { label: "PTS", a: `${t0.pts}`, b: `${t1.pts}` },
+      { label: "FG", a: `${t0.fgm}/${t0.fga}${pct(t0.fgm, t0.fga)}`, b: `${t1.fgm}/${t1.fga}${pct(t1.fgm, t1.fga)}` },
+      { label: "3P", a: `${t0.tpm}/${t0.tpa}${pct(t0.tpm, t0.tpa)}`, b: `${t1.tpm}/${t1.tpa}${pct(t1.tpm, t1.tpa)}` },
+      { label: "FT", a: `${t0.ftm}/${t0.fta}${pct(t0.ftm, t0.fta)}`, b: `${t1.ftm}/${t1.fta}${pct(t1.ftm, t1.fta)}` },
+      { label: "REB", a: `${t0.reb}`, b: `${t1.reb}` },
+      { label: "AST", a: `${t0.ast}`, b: `${t1.ast}` },
+      { label: "STL", a: `${t0.stl}`, b: `${t1.stl}` },
+      { label: "BLK", a: `${t0.blk}`, b: `${t1.blk}` },
+      { label: "TO", a: `${t0.tov}`, b: `${t1.tov}` },
+    ];
+
+    const wrap = document.createElement("div");
+    Object.assign(wrap.style, {
+      width: "100%", background: "rgba(255,255,255,0.04)", borderRadius: "8px",
+      padding: "6px 8px", boxSizing: "border-box",
+    } as Partial<CSSStyleDeclaration>);
+    const title = document.createElement("div");
+    Object.assign(title.style, { display: "flex", justifyContent: "space-between", fontSize: "13px", fontWeight: "800", marginBottom: "3px" });
+    const n0 = document.createElement("span"); n0.textContent = TEAM_NAMES[0]; n0.style.color = colorOf(0);
+    const n1 = document.createElement("span"); n1.textContent = TEAM_NAMES[1]; n1.style.color = colorOf(1);
+    title.append(n0, n1);
+    wrap.appendChild(title);
+
+    for (const r of rows) {
+      const row = document.createElement("div");
+      Object.assign(row.style, { display: "flex", alignItems: "center", fontSize: "12px", margin: "1px 0" });
+      const a = document.createElement("span");
+      Object.assign(a.style, { flex: "1", textAlign: "right", color: colorOf(0), fontWeight: "700" });
+      a.textContent = r.a;
+      const lab = document.createElement("span");
+      Object.assign(lab.style, { width: "44px", textAlign: "center", opacity: "0.6", fontSize: "10px" });
+      lab.textContent = r.label;
+      const b = document.createElement("span");
+      Object.assign(b.style, { flex: "1", textAlign: "left", color: colorOf(1), fontWeight: "700" });
+      b.textContent = r.b;
+      row.append(a, lab, b);
+      wrap.appendChild(row);
+    }
+    return wrap;
+  }
+
   // ---- small builders ----------------------------------------------------
 
   private cell(text: string, width: number, align: string = "left"): HTMLSpanElement {
     const el = document.createElement("span");
-    Object.assign(el.style, { width: `${width}px`, flexShrink: "0", textAlign: align, display: "inline-block" } as Partial<CSSStyleDeclaration>);
+    Object.assign(el.style, {
+      width: `${width}px`, flexShrink: "0", textAlign: align, display: "inline-block",
+      // keep every cell to ONE line; a too-long name is clipped with an ellipsis
+      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+    } as Partial<CSSStyleDeclaration>);
     el.textContent = text;
+    return el;
+  }
+
+  // A left-frozen cell: it stays pinned while the stat columns scroll sideways,
+  // so you can always tell whose row it is. Opaque background so scrolled
+  // numbers don't show through, with a hairline edge to read as a frozen column.
+  private stickyCell(text: string, width: number): HTMLSpanElement {
+    const el = this.cell(text, width);
+    Object.assign(el.style, {
+      position: "sticky", left: "0", zIndex: "1", background: "#0c0f16",
+      boxShadow: "1px 0 0 rgba(255,255,255,0.12)",
+    } as Partial<CSSStyleDeclaration>);
     return el;
   }
 

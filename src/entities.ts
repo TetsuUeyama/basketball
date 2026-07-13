@@ -8,7 +8,13 @@ import { clamp, rand } from "./util";
 
 // A player's box-score line for the current game. `min` is time on court in
 // game-clock seconds (shown as minutes in the result screen).
-export interface Stats { pts: number; reb: number; ast: number; stl: number; blk: number; tov: number; fgm: number; fga: number; min: number; }
+export interface Stats {
+  pts: number; reb: number; ast: number; stl: number; blk: number; tov: number;
+  fgm: number; fga: number;   // field goals made / attempted (all shots incl. threes)
+  tpm: number; tpa: number;   // three-pointers made / attempted
+  ftm: number; fta: number;   // free throws made / attempted
+  min: number;
+}
 
 // Quaternion rotating the default down-pointing arm (0,-1,0) onto a unit vector.
 function aimDownTo(vx: number, vy: number, vz: number): Quaternion {
@@ -42,7 +48,7 @@ export class Player {
   playmaking: number;            // 0..1 ball-bringing / playmaking role (PG = high)
 
   // box-score stats accumulated over the current game
-  readonly stats: Stats = { pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, min: 0 };
+  readonly stats: Stats = { pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, min: 0 };
   readonly pos = new Vector3();  // logical position (feet)
   readonly root: TransformNode;
 
@@ -1250,6 +1256,7 @@ export class Player {
   resetStats(): void {
     const s = this.stats;
     s.pts = s.reb = s.ast = s.stl = s.blk = s.tov = s.fgm = s.fga = s.min = 0;
+    s.tpm = s.tpa = s.ftm = s.fta = 0;
     this.fatigue = 0;
     this.curSpd = 0;
     this.stintT = 0;
@@ -1317,6 +1324,30 @@ export class Player {
     this.elbowR.rotation.x = 0;
     if (both) { this.aimArm(this.armPivotL, world); this.elbowL.rotation.x = 0; }
     else { this.armPivotL.rotationQuaternion = Quaternion.Identity(); this.bendElbow(this.elbowL, 0.28); }
+  }
+
+  /** Which side of the body a world point sits on — +x local = the body's RIGHT
+   *  (armPivotR side). Uses the SAME yaw+twist frame as aimArm, so it can never
+   *  disagree with where the arm actually points. */
+  dribbleWithRight(world: Vector3): boolean {
+    const th = this.root.rotation.y + this.torsoTwist;
+    const wx = world.x - this.root.position.x, wz = world.z - this.root.position.z;
+    const localX = Math.cos(th) * wx - Math.sin(th) * wz;
+    return localX >= 0;
+  }
+
+  /** Dribble/hold the ball with the hand on the SAME side it sits — so a ball
+   *  carried to the left hip is held with the LEFT hand instead of reaching the
+   *  right arm across (through) the body, and vice-versa. */
+  reachDribble(world: Vector3, useRight: boolean): void {
+    const near = useRight ? this.armPivotR : this.armPivotL;
+    const nearElbow = useRight ? this.elbowR : this.elbowL;
+    const far = useRight ? this.armPivotL : this.armPivotR;
+    const farElbow = useRight ? this.elbowL : this.elbowR;
+    this.aimArm(near, world);
+    nearElbow.rotation.x = 0;
+    far.rotationQuaternion = Quaternion.Identity();
+    this.bendElbow(farElbow, 0.28);
   }
 
   /** Spread both arms out wide — active hands to wall off the ball-handler. */

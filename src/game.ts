@@ -959,8 +959,11 @@ export class Game {
     switch (this.ballMode) {
       case "held": {
         if (this.handler) {
-          // hand hovers at dribble height while the ball bounces below it
-          this.handler.reach(new Vector3(b.x, 0.95, b.z));
+          // hand hovers at dribble height while the ball bounces below it —
+          // dribbled with the hand on the SAME side the ball is carried (a hip
+          // carry uses the near hand, not the far arm reaching across the body)
+          const bw = new Vector3(b.x, 0.95, b.z);
+          this.handler.reachDribble(bw, this.handler.dribbleWithRight(bw));
           // the man guarding him plays active hands; right on top, he stabs at it
           const d = this.onBallDefender(this.handler);
           if (d) {
@@ -1402,7 +1405,34 @@ export class Game {
     }
     const passUrge = clamp(passDesire * 0.6 + (dDef < 1.3 ? 0.2 : 0), 0, 0.85);
     if (chance(passUrge) && this.pass(h)) return;
-    this.setDrive(h, rimFloor, 4.5); // reset / probe
+    // still bringing it up (backcourt) → carry it up a SIDE lane, not the gut;
+    // in the frontcourt it's just a reset probe toward the rim
+    if (!this.frontT) this.bringUpLane(h);
+    else this.setDrive(h, rimFloor, 4.5);
+  }
+
+  // The side (−1 left / +1 right) with more room — fewer team-mates on it — so
+  // the ball comes up away from the crowd and the floor stays spread.
+  private openSide(h: Player): number {
+    let l = 0, r = 0;
+    for (const p of this.teamPlayers(h.team)) {
+      if (p === h) continue;
+      if (p.pos.x < -0.5) l++; else if (p.pos.x > 0.5) r++;
+    }
+    return l <= r ? -1 : 1;
+  }
+
+  // Bring the ball up a WING lane into the frontcourt rather than straight up the
+  // middle (which jams the paint and kills the passing angles). Once he's off
+  // centre he keeps his side; from dead centre he picks the open side.
+  private bringUpLane(h: Player): void {
+    const s = this.attackSign(h.team);
+    const side = Math.abs(h.pos.x) > 1.5 ? Math.sign(h.pos.x) : this.openSide(h);
+    // BREAK to the sideline first (mostly lateral) while still central, THEN
+    // carry it up hugging that side — keeps the middle clear and opens the
+    // left/right passing angles instead of jamming straight up the gut.
+    const ahead = Math.abs(h.pos.x) < 4 ? 1.8 : 5.0;
+    h.driveTarget.set(side * 5.5, 0, h.pos.z + s * ahead);
   }
 
   // A teammate who is a clearly higher scoring option, is open, and can be
@@ -1451,7 +1481,9 @@ export class Game {
   // still hands off the instant a guard comes free; if none ever does, he brings it
   // up himself rather than getting stuck.
   private advanceSafely(h: Player): void {
-    this.setDrive(h, this.attackFloor(h.team), 8);   // ~top of the key, in the frontcourt
+    // a big who ends up bringing it up also uses a side lane, not the middle
+    if (!this.frontT) this.bringUpLane(h);
+    else this.setDrive(h, this.attackFloor(h.team), 8);   // ~top of the key, in the frontcourt
   }
 
   // Open a fast-break window after a live-ball change of possession, if the
@@ -2678,12 +2710,8 @@ export class Game {
     // the collapse a little (a genuine long-range shooter holds up).
     const heaveDrop = isThree ? over * over * 0.011 * (1 - rate(h.attr.threeRange) * 0.33) : 0;
     let p = baseLine + skill * 0.42 - over * falloff - heaveDrop;
-    // カーブ: an angled mid-range look can use the glass for a cleaner make.
-    // (bank shots are a rare situation, so this stays a narrow, small bonus —
-    // boosting the coefficient can't make バンク broadly impactful.)
-    if (!isThree && Math.abs(h.pos.x) > 1.5 && dHoop < 6.5) {
-      p += rate(h.attr.bank) * 0.07;
-    }
+    // 弾道高さ (旧カーブ) no longer changes the make% directly — it now sets the
+    // ARC of the shot (higher = harder to block); see shotApex + tryBlock below.
     // ダイレクトプレイ: the catch-and-shoot rhythm is his shot
     if (h.quickT > 0 && h.has("oneTouch")) p += 0.05;
     // お膳立て: caught open in rhythm off a good pass — a set-up look even a
@@ -2725,7 +2753,10 @@ export class Game {
     // to follow). Inside the arc nothing changes (far = 0 → the old 0.85/2.2).
     const far = Math.min(12, Math.max(0, dHoop - THREE_DIST));
     this.shotDur = 0.85 + far * 0.11;
-    this.shotApex = 2.2 + far * 0.45;
+    // 弾道高さ: the jumper's arc rises with the rating (≈1.6 low .. 2.8 high,
+    // centred on the old 2.2), plus the deep-heave lift. A higher arc reads as a
+    // rainbow and is harder to block (tryBlock reads the same rating).
+    this.shotApex = (1.6 + rate(h.attr.bank) * 1.2) + far * 0.45;
     this.longShot = far > 0.5;   // deep enough that the ball cam should chase it
     this.longShotHoldT = 0;      // a new flight owns the camera call
 
@@ -2855,6 +2886,9 @@ export class Game {
       // ...but a man who jumped TOO early is coming down / regathering as the
       // shot releases — barely a contest at all (the gamble's other edge)
       else if (d.landT > 0) p *= 0.3;
+      // 弾道高さ: a high, rainbowing jumper sails over the contest; a flat one is
+      // there to be swatted. (Rim finishes are a different motion — arc n/a.)
+      if (!isFinish) p *= clamp(1.5 - rate(shooter.attr.bank), 0.5, 1.5);
       p = clamp(p, 0, 0.7);
       if (p > bestP) { bestP = p; best = d; }
     }
@@ -2865,6 +2899,7 @@ export class Game {
   private swatShot(shooter: Player, blocker: Player): void {
     blocker.stats.blk++;
     shooter.stats.fga++;             // a blocked shot is a missed attempt
+    if (this.shotPoints === 3) shooter.stats.tpa++;
     this.pendingAssist = null;
     blocker.jump(0.9, 0.6);
     this.setEvent("BLOCK!", blocker.team);
@@ -2961,14 +2996,19 @@ export class Game {
       const k = (this.ftT - setup) / shotDur;
       const a = this.ftShooter.pos, b = this.attackRim(this.ftTeam);
       const baseY = 2.0 + (b.y - 2.0) * k;
-      this.ball.pos.set(a.x + (b.x - a.x) * k, baseY + Math.sin(k * Math.PI) * 1.8, a.z + (b.z - a.z) * k);
+      // 弾道高さ: the free-throw arc rises with the rating too (uncontested, so
+      // it's the visual — a flat vs a high, soft trajectory)
+      const ftArc = 1.2 + rate(this.ftShooter.attr.bank) * 1.2;
+      this.ball.pos.set(a.x + (b.x - a.x) * k, baseY + Math.sin(k * Math.PI) * ftArc, a.z + (b.z - a.z) * k);
       return;
     }
 
     // resolve this attempt
+    this.ftShooter.stats.fta++;
     if (this.ftMade) {
       this.score[this.ftTeam] += 1;
       this.ftShooter.stats.pts += 1;
+      this.ftShooter.stats.ftm++;
       this.benchCheer(this.ftTeam, 1.2);   // a quicker pop for a free throw
       this.swishNet(this.ftTeam);          // the net snaps on the make
     }
@@ -3060,11 +3100,14 @@ export class Game {
     if (this.longShot) { this.longShotHoldT = 1.6; this.longShot = false; }
     const shooter = this.possession;
     const sh = this.shooter;
-    if (sh) sh.stats.fga++;
+    if (sh) { sh.stats.fga++; if (this.shotPoints === 3) sh.stats.tpa++; }
     const andOne = this.shotMade && sh !== null && this.pendingAndOne === sh;
     if (this.shotMade) {
       this.score[shooter] += this.shotPoints;
-      if (sh) { sh.stats.pts += this.shotPoints; sh.stats.fgm++; }
+      if (sh) {
+        sh.stats.pts += this.shotPoints; sh.stats.fgm++;
+        if (this.shotPoints === 3) sh.stats.tpm++;
+      }
       if (this.pendingAssist) this.pendingAssist.stats.ast++;
       this.setEvent(andOne ? "AND-1" : this.shotPoints === 3 ? "3 POINTS!" : "2 POINTS",
         shooter, 1.8, { scorer: sh?.name, assist: this.pendingAssist?.name });

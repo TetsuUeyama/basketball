@@ -25,7 +25,7 @@ export interface Attributes {
   shotStrength: number; // S威力 — ブロッカーの接触があっても精度を落とさない度合い
   shotTech: number;     // S技術 — 態勢が崩れていても精度よく打てる度合い
   freeThrow: number;    // FK — フリースローの精度
-  bank: number;         // カーブ — バンクシュートのうまさ
+  bank: number;         // 弾道高さ — 3P/ミドル/FTの弾道の高さ。高いほどブロックされにくい（旧カーブを転用）
   dunk: number;         // ヘッド — ダンクのうまさとそれをブロックするうまさ
   jump: number;         // ジャンプ — ジャンプ力
   handling: number;     // 技術 — ボールハンドリングのうまさ
@@ -73,8 +73,8 @@ export const ATTR_META: { key: keyof Attributes; label: string; name: string; ti
     tip: "態勢が崩れていても（ドライブ中・走りながらでも）精度よくシュートを打てる度合い。" },
   { key: "freeThrow", label: "FTS", name: "FK",
     tip: "フリースローの精度。" },
-  { key: "bank", label: "BNK", name: "カーブ",
-    tip: "バンクシュート（ボードに当てるシュート）のうまさ。角度のあるミドルシュートで精度が上がる。" },
+  { key: "bank", label: "ARC", name: "弾道高さ",
+    tip: "シュートの弾道の高さ（3P・ミドル・フリースロー）。高いほど山なりでブロックされにくく、低いほどブロックのリスクが上がる。高いほど良い。" },
   { key: "dunk", label: "DNK", name: "ヘッド",
     tip: "ダンクのうまさと、相手のダンク/リム付近のフィニッシュをブロックするうまさ。" },
   { key: "jump", label: "JMP", name: "ジャンプ",
