@@ -8,7 +8,12 @@ import { Game } from "./game";
 import { UI } from "./ui";
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
-const engine = new Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
+// NOTE: preserveDrawingBuffer is intentionally OFF — keeping the WebGL drawing
+// buffer around between frames disables the browser's compositor optimisations
+// and, with antialiasing, makes mobile GPUs occasionally show a stale/uncleared
+// frame (a flicker / weak flash). It's only needed for canvas screenshots, which
+// this app doesn't do. Re-enable only if a screenshot feature is added.
+const engine = new Engine(canvas, true, { stencil: true });
 
 const scene = new Scene(engine);
 scene.clearColor = new Color4(0.04, 0.05, 0.07, 1);
