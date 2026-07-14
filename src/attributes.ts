@@ -164,6 +164,9 @@ export interface Tactics {
     help: number;         // how much off-ball defenders sag to protect the paint
     zone: number;         // 0 = always man, 1 = always a half-court zone (2-3/3-2)
     press: number;        // 0 = never, 1 = full-court press the bring-up every time
+    deny: number;         // 0..1 — late in the shot clock, DENY the shot (crawl in
+                          // on-ball + deny outlets) to force a shot-clock violation.
+                          // Risk: the overplay is beatable → gives up rim finishes.
   };
 }
 
@@ -172,11 +175,11 @@ export const TACTICS: Tactics[] = [
   // Team 0 — BLAZE: deliberate, attack inside, conservative help defence; packs
   // the paint with a 2-3 zone a fair amount, rarely presses
   { offense: { pace: 0.35, threeBias: 0.30, driveBias: 0.65, ballMovement: 0.55 },
-    defense: { pressure: 0.40, help: 0.70, zone: 0.35, press: 0.10 } },
+    defense: { pressure: 0.40, help: 0.70, zone: 0.35, press: 0.10, deny: 0.25 } },
   // Team 1 — WAVE: fast pace, three-happy, aggressive; gets up and presses,
   // mostly man in the half court
   { offense: { pace: 0.80, threeBias: 0.75, driveBias: 0.45, ballMovement: 0.65 },
-    defense: { pressure: 0.80, help: 0.40, zone: 0.12, press: 0.40 } },
+    defense: { pressure: 0.80, help: 0.40, zone: 0.12, press: 0.40, deny: 0.35 } },
 ];
 
 /** Map a 0..100 rating to a 0..1 factor. */

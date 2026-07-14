@@ -46,11 +46,11 @@ export const HUD_OPTS: { staminaOn: "name" | "icon"; showNames: boolean; model: 
 export const PLAYER_SPEED = 6.2;  // offensive run speed
 export const DEF_SPEED = 6.5;     // defenders are a touch quicker so they can recover
 export const PASS_SPEED = 13;     // pass travel speed
-// Shot clock scaled to the compressed quarter (60s vs the NBA's 720s): a full
-// 24 would almost never bind, so 14 keeps real urgency. Partial resets (after
-// a foul / offensive rebound) keep the NBA's 14/24 proportion → 8.
-export const SHOT_CLOCK = 14;
-export const SHOT_CLOCK_PARTIAL = 8;
+// Shot clock scaled to the compressed quarter (60s vs the NBA's 720s) AND the
+// fast pace: 14/10 rarely bit, so 7 makes it a genuine pressure. Partial resets
+// (after a foul / offensive rebound) → 5.
+export const SHOT_CLOCK = 7;
+export const SHOT_CLOCK_PARTIAL = 5;
 export const QUARTER_TIME = 60;   // game-seconds per quarter (shown on the clock)
 export const QUARTERS = 4;
 

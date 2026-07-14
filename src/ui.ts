@@ -57,6 +57,7 @@ export class UI {
   private clock: HTMLSpanElement;
   private quarter: HTMLSpanElement;
   private shot: HTMLSpanElement;
+  private shotBox!: HTMLDivElement;   // shot-clock container — flashes in the last 3s
   private banner: HTMLDivElement;
   private bannerKey = "";           // current banner content, to avoid rebuilding each frame
   private subFeed!: HTMLDivElement;
@@ -172,6 +173,7 @@ export class UI {
     this.shot = document.createElement("span");
     sc.appendChild(this.shot);
     this.hud.appendChild(sc);
+    this.shotBox = sc;
 
     // ---- substitution feed (メンバーチェンジ) ----
     // centre of the screen, just below the main event banner (FOUL etc.), so a
@@ -2631,7 +2633,32 @@ export class UI {
     const s = Math.floor(t % 60);
     this.clock.textContent = `${m}:${s.toString().padStart(2, "0")}`;
     this.quarter.textContent = game.state === "final" ? "FINAL" : `Q${game.quarter}`;
-    this.shot.textContent = String(Math.max(0, Math.ceil(game.shotClock)));
+    const scLeft = Math.max(0, game.shotClock);
+    this.shot.textContent = String(Math.ceil(scLeft));
+    // flashy countdown in the last 3 seconds: the box swells and PUNCHES on each
+    // tick, glows, and shifts red → hot yellow as it runs out. Only while the
+    // clock is actually running (not frozen on a dead ball).
+    const frozen = game.mode === "tipoff" || game.mode === "freethrow"
+      || game.mode === "pause" || game.mode === "subs" || game.mode === "finale";
+    const box = this.shotBox;
+    if (scLeft > 0 && scLeft <= 3 && !frozen) {
+      const frac = scLeft - Math.floor(scLeft);                 // 1→0 within each second
+      const pop = 1 + 0.55 * frac;                              // punch right after each tick
+      const heat = Math.min(1, Math.max(0, (3 - scLeft) / 2.5)); // 0 at 3s .. 1 near 0
+      box.style.transform = `translateX(-50%) scale(${(1.15 + 0.4 * heat) * pop})`;
+      box.style.fontSize = "20px";
+      box.style.fontWeight = "900";
+      box.style.background = `rgba(230,${Math.round(40 + 150 * heat)},20,0.95)`;
+      box.style.color = heat > 0.5 ? "#fff2a8" : "#ffffff";
+      box.style.boxShadow = `0 0 ${Math.round(8 + 20 * heat * frac)}px rgba(255,${Math.round(120 + 100 * heat)},40,${(0.55 + 0.45 * frac).toFixed(2)})`;
+    } else {
+      box.style.transform = "translateX(-50%) scale(1)";
+      box.style.fontSize = "16px";
+      box.style.fontWeight = "700";
+      box.style.background = "rgba(180,40,20,0.9)";
+      box.style.color = "";
+      box.style.boxShadow = "";
+    }
 
     if (game.lastEvent) {
       const ev = game.lastEvent;

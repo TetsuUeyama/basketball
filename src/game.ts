@@ -675,6 +675,7 @@ export class Game {
       || text === "2 POINTS"
       || text === "3 POINTS!"
       || text === "BACKCOURT"              // over-and-back violation
+      || text === "ショットクロック違反"    // shot-clock violation (offence)
       || text === "TIP-OFF"                // the game clearly begins...
       || text === "HALFTIME"
       || text === "2ND HALF"
@@ -920,7 +921,7 @@ export class Game {
       if (this.ballMode === "held") {
         this.shotClock -= dt;
         if (this.shotClock <= 0) {
-          this.turnover(this.handler!, "SHOT CLOCK");
+          this.shotClockViolation();
         }
       }
       // the buzzer: a shot already in the air is allowed to finish (buzzer
@@ -1314,8 +1315,13 @@ export class Game {
     // BUZZER BEATER: almost no time on the game/shot clock and no chance to work
     // a good look — heave it up from wherever he is, however off-balance. shoot()
     // already floors the make% for a desperation distance, so it's a real prayer.
-    const noTime = (this.gameClock > 0 && this.gameClock < 0.9) || this.shotClock < 0.45;
-    if (noTime && dHoop > 1.8) { this.shoot(h, dHoop, dDef); return; }
+    // game buzzer → always heave. Shot-clock buzzer → heave UNLESS a hard deny
+    // has him smothered (then he can't get it off and the clock dies = violation).
+    const gameBuzzer = this.gameClock > 0 && this.gameClock < 0.9;
+    const shotBuzzer = this.shotClock < 0.45;
+    if ((gameBuzzer || (shotBuzzer && !this.denySmother(h, dDef))) && dHoop > 1.8) {
+      this.shoot(h, dHoop, dDef); return;
+    }
 
     // change of possession: the ball has to be carried up, and that's a guard's
     // job. A PF/C who ends up with it before the frontcourt is set looks for the
@@ -1419,9 +1425,9 @@ export class Game {
       // ハンドラー/フロアジェネラル/ハブビッグ: まず配球。ただし「打たずにパス回し
       // だけ」にならないよう、空いた球は打ち、レーンが開けば仕掛けてギャップを作る。
       if (!this.frontT) { this.bringUpLane(h); return; }
-      if (this.shotClock < 4 && dHoop > 1.8) { this.shoot(h, dHoop, dDef); return; }
+      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
       const inRange = dHoop <= this.shootRangeOf(h) + 0.3;
-      const clockPush = clamp((9 - this.shotClock) / 9, 0, 1);   // 遅いほど打つ
+      const clockPush = clamp((SHOT_CLOCK * 0.5 - this.shotClock) / (SHOT_CLOCK * 0.5), 0, 1);   // 遅いほど打つ(残半分から)
       // a clean lane → attack to bend the defence (a big posts instead of dribbling)
       if (this.laneClear(h, rimFloor) && dHoop <= 8 && this.canIso(h, dHoop)
           && chance(clamp(0.2 + rate(h.attr.handling) * 0.25 + clockPush * 0.3, 0, 0.6))) {
@@ -1440,9 +1446,9 @@ export class Game {
       // 基本。無理な単独クリエイトはしないが、「クローズアウトには仕掛ける」ことで
       // ギャップを作り、開いた球はしっかり打つ（打たずに回すだけにしない）。
       if (!this.frontT) { this.bringUpLane(h); return; }
-      if (this.shotClock < 4 && dHoop > 1.8) { this.shoot(h, dHoop, dDef); return; }
+      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
       const inRange = dHoop <= this.shootRangeOf(h) + 0.3;
-      const clockPush = clamp((10 - this.shotClock) / 10, 0, 1);
+      const clockPush = clamp((SHOT_CLOCK * 0.5 - this.shotClock) / (SHOT_CLOCK * 0.5), 0, 1);
       // ATTACK THE CLOSEOUT: a shooter with a live handle drives past a defender
       // flying at him — the main way an off-ball scorer creates a gap.
       const od = this.onBallDefender(h);
@@ -1477,8 +1483,10 @@ export class Game {
       return;
     }
 
-    const urgent = this.shotClock < 4 + tac.pace * 3 * this.twWeight(h); // up-tempo teams force earlier
-    if (urgent) { this.shoot(h, dHoop, dDef); return; }
+    // 残クロックに対する相対しきい値(SHOT_CLOCK 依存)。7秒クロックでは ~2.5秒前後で
+    // 初めて「打ち急ぎ」に入る（up-tempo は少し早い）。絶対秒だと短クロックで早過ぎた。
+    const urgent = this.shotClock < SHOT_CLOCK * (0.28 + tac.pace * 0.14 * this.twWeight(h));
+    if (urgent && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
 
     // desire to do each thing = personality + skill + tactics(×連携) + scoring
     // role + 特殊能力 (ドリブラー/ストライカー/ドリブルキープ)
@@ -2082,7 +2090,11 @@ export class Game {
       // followed faithfully only by players who buy into the scheme (連携), and
       // organised a step deeper by a DFライン general
       const help = this.tactics[defTeam].defense.help * this.twWeight(d);
-      const sag = (1.2 + help * 1.4) * (this.teamHas(defTeam, "dfLine") ? 1.15 : 1);
+      // DENY late in the clock: pull OFF the help-sag and crowd the man to deny
+      // him the ball (fewer open outlets → the offence can't get a look off before
+      // the clock dies). The lost help is part of the deny's risk.
+      const sag = (1.2 + help * 1.4) * (this.teamHas(defTeam, "dfLine") ? 1.15 : 1)
+        * (1 - this.denyIntensity(defTeam) * 0.8);
       const dx = protect.x - man.pos.x, dz = protect.z - man.pos.z;
       const len = Math.hypot(dx, dz) || 1;
       const stx = man.pos.x + (dx / len) * sag, stz = man.pos.z + (dz / len) * sag;
@@ -2122,6 +2134,24 @@ export class Game {
   // On-ball defence: shade toward the side the handler is attacking (with a
   // reaction lag), stay goal-side to cut off the drive, and chase to recover
   // when beaten off the dribble.
+  // How hard a defence is DENYING the shot right now: its `deny` tactic, ramped
+  // up only late in the shot clock (when running the clock out is worth the
+  // gamble). 0 early in the clock, → deny value as it nears expiry.
+  private denyIntensity(defTeam: number): number {
+    const t = this.tactics[defTeam].defense.deny;
+    if (t <= 0 || !this.frontT) return 0;
+    const late = this.shotClock < 4.5 ? (4.5 - this.shotClock) / 4.5 : 0;
+    return t * late;
+  }
+
+  // A hard deny has the handler SMOTHERED — he can't get a clean look off. He
+  // must beat it off the dribble (the deny's risk) or move it; if neither, the
+  // clock runs out (a shot-clock violation — the deny's payoff). Returns true
+  // when he's too smothered to just settle for a jumper.
+  private denySmother(h: Player, dDef: number): boolean {
+    return this.denyIntensity(1 - h.team) > 0.18 && dDef < 1.0;
+  }
+
   private defendOnBall(dt: number, d: Player, man: Player, protect: Vector3): void {
     const effort = this.defEffort(d, protect);
     // a star doesn't press the ball in the BACKCOURT — hounding the bring-up is
@@ -2163,6 +2193,23 @@ export class Game {
       : 1.25 - this.tactics[d.team].defense.pressure * 0.35; // ~0.9 .. 1.25 cushion otherwise
     if (d.has("manMark")) gap *= 0.85;
     if (d.evalRole === "ロックダウン") gap *= 0.85;   // the stopper crawls into his shirt
+    // DENY (late shot clock): crawl in to smother the look and run the clock out.
+    // The RISK: overplaying is beatable — a live handler blows past for a rim
+    // finish (the price of gambling for a shot-clock violation).
+    const dny = this.denyIntensity(d.team);
+    if (dny > 0) {
+      gap = Math.max(0.32, gap - dny * 0.7);
+      if (man.beatenT <= 0 && man.powerT <= 0 && man.jukeT <= 0) {
+        const edge = rate(man.attr.handling) * 0.5 + rate(man.attr.agility) * 0.4
+          - rate(d.attr.agility) * 0.35 - rate(d.attr.defense) * 0.25;
+        if (chance(clamp(dny * (0.55 + edge), 0, 0.7) * dt * 3)) {
+          man.driveSide = this.pickSide(man);
+          man.beatenT = rand(0.5, 0.85);
+          d.reactT = Math.max(d.reactT, rand(0.3, 0.55) * this.reactionLag(d));
+          this.setDriveSide(man);
+        }
+      }
+    }
 
     // EARLY-CONTEST GAMBLE: against a shooter sizing up in range, an
     // aggressive defender may leave his feet FIRST. If the shot goes up now
@@ -4357,6 +4404,21 @@ export class Game {
     );
     this.goLoose(h.team, 1.6, { stealBy: d, victim: h, grabAfter: 0.35 });
     h.touchCool = 0.4;                              // knocked off-balance — can't grab instantly
+  }
+
+  // Shot-clock expiry is an OFFENSIVE VIOLATION: a dead ball (not a live steal).
+  // Play stops, the offence is charged a turnover, and the defence restarts with
+  // a throw-in.
+  private shotClockViolation(): void {
+    const off = this.handler ?? this.teamPlayers(this.possession)[0];
+    off.stats.tov++;
+    const offTeam = this.possession;   // the team that committed the violation
+    const def = 1 - offTeam;
+    this.handler = null;
+    // announce the OFFENSIVE violation (attributed to the offence) and hold it on
+    // screen through the dead-ball pause before the defence's throw-in restart
+    this.setEvent("ショットクロック違反", offTeam, 1.8);
+    this.pauseThen(1.2, () => this.withSubs(() => this.startInbound(def)));
   }
 
   private turnover(loser: Player, reason: string): void {
