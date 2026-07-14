@@ -3,7 +3,8 @@ import {
   DynamicTexture, VertexData,
 } from "@babylonjs/core";
 import { TEAM_COLORS, HUD_OPTS } from "./config";
-import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority, ROLE_BEHAVIOR } from "./attributes";
+import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority, ROLE_BEHAVIOR,
+  DEF_ROLE_BEHAVIOR, OffAction, offActionOf } from "./attributes";
 import { clamp, rand } from "./util";
 
 // A player's box-score line for the current game. `min` is time on court in
@@ -40,7 +41,13 @@ export class Player {
   height: number;                // metres
   runSpeed: number;              // m/s, derived from the `speed` rating
   role: string;                  // PG / SG / SF / PF / C
-  evalRole: string | undefined;  // 評価ロール — behaviour modifiers applied in applyDef
+  evalRole: string | undefined;  // オフェンスロール — 攻撃時の挙動修飾 (applyDef)
+  defRole: string | undefined;   // ディフェンスロール — 守備時の挙動修飾 (applyDef)
+  offAction: OffAction = "balanced"; // オフェンスロール由来の行動プロファイル
+  lockDef = false;               // 守備をサボらない（defRole由来の常時全力）
+  defEffortGear: number | undefined; // defRole由来の守備エフォート上限(0..1)。未設定=自動
+  choiceRank: number | undefined; // 手動の選択順位 1..5 (def由来。未設定=自動)
+  autoRank = 3;                  // refreshChoiceRanks が入れる自動順位 1..5
   hand: "R" | "L" = "R";         // 利き手 — preferred attacking side & finish hand
   offhandAcc = 5;                // 逆手精度 2..8 (WE2010 scale) — weak-hand finish quality
   offhandFreq = 5;               // 逆手頻度 2..8 — how willingly he goes weak-side
@@ -210,6 +217,10 @@ export class Player {
     this.abilities = new Set(def.abilities ?? []);
     this.offPriority = computeOffPriority(def);
     this.playmaking = roleOffense(def.role).playmaking;
+    this.evalRole = def.evalRole;
+    this.offAction = offActionOf(def.evalRole);
+    this.defRole = def.defRole;
+    this.choiceRank = def.choiceRank;
 
     const c = TEAM_COLORS[team];
     this.teamRGB = c;
@@ -1198,6 +1209,8 @@ export class Player {
     // これで「エースにはボールが集まる」「ロックダウンは常時マンマーク」等が
     // 既存の特殊能力/優先度の配線に乗って動く。
     this.evalRole = def.evalRole;
+    this.offAction = offActionOf(def.evalRole);
+    this.choiceRank = def.choiceRank;
     this.hand = def.hand ?? "R";
     this.offhandAcc = def.future?.offhandAcc || 5;
     this.offhandFreq = def.future?.offhandFreq || 5;
@@ -1206,6 +1219,16 @@ export class Player {
       for (const k of rb.ab ?? []) this.abilities.add(k);
       this.offPriority = clamp(this.offPriority + (rb.pri ?? 0), 0, 1);
       this.playmaking = clamp(this.playmaking + (rb.pm ?? 0), 0, 1);
+    }
+    // ディフェンスロール（オフェンスロールとは独立）: 守備の仮想特能と常時全力。
+    this.defRole = def.defRole;
+    this.lockDef = false;
+    this.defEffortGear = undefined;
+    const db = def.defRole ? DEF_ROLE_BEHAVIOR[def.defRole] : undefined;
+    if (db) {
+      for (const k of db.ab ?? []) this.abilities.add(k);
+      this.lockDef = !!db.lockEffort;
+      this.defEffortGear = db.effort;
     }
     if (def.name !== this.name) { this.name = def.name; this.drawNameTag(); }
     if (def.height !== this.height) {

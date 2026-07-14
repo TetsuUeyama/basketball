@@ -130,10 +130,17 @@ export interface PlayerDef {
   attr: Attributes;
   abilities?: AbilityKey[]; // 特殊能力 — 持っているものだけ列挙
   priority?: number;  // explicit offensive priority 0..1 (overrides the role/skill default)
-  // 評価ロール: ハンドラー/エース/3&D等。OVR/チーム戦力バーの評価重みに加え、
-  // ROLE_BEHAVIOR 経由で**試合中の挙動**（仮想特能・攻撃優先度・プレイメイキング）
-  // も変える。undefined = 自動(ポジション基準の評価・挙動補正なし)
+  // オフェンスロール: ハンドラー/エース/スポットアップ等。OVR/チーム戦力バーの評価
+  // 重みに加え、OFF_ROLE_ACTION 経由で**試合中の攻撃時の挙動**（何をするか＝打つ/
+  // 捌く/スポット待ち/ポスト等）と ROLE_BEHAVIOR 経由の仮想特能/優先度/プレイメイキ
+  // ングを変える。undefined = 自動(ポジション基準)。
   evalRole?: string;
+  // ディフェンスロール: ロックダウン/リムプロテクター等。DEF_ROLE_BEHAVIOR 経由で
+  // 守備時の仮想特能と“常時全力(サボらない)”を付与。オフェンスロールとは独立。
+  defRole?: string;
+  // オフェンス選択順位 1..5（誰にボールを集めるか＝使用率）。未設定=チーム内の
+  // 得点力比較で自動。同順位は「co-primary（2人でシェア）」として扱う。
+  choiceRank?: number;
   // 利き手 (DBの利き足を読み替え)。攻める側の選択と逆手フィニッシュ精度に影響
   hand?: "R" | "L";
   // 安定度は未配線。逆手精度/逆手頻度は利き手システムが使用
@@ -205,6 +212,71 @@ export const ROLE_BEHAVIOR: Record<string, { ab?: AbilityKey[]; pri?: number; pm
 };
 
 // ---------------------------------------------------------------------------
+// オフェンスロール → ボールが手に渡った時の“行動プロファイル”。何をするかを
+// ロールが支配するので、パサーやビッグに使用率(選択順位)が集まっても強引に打っ
+// たり無理なドリブルをしない。game.ts の decide() がこれを読む。
+//   score     … 自分で打ち切る/iso（エース）
+//   slash     … ドリブルでリムへアタック（スラッシャー）
+//   distribute… まず配球。明確に空いた時だけ打つ（ハンドラー/フロアジェネラル/PF）
+//   postHub   … ポスト/ハイポストから配る（プレイメイキングビッグ）
+//   spot      … キャッチ&シュート。無理なドリブルはしない（スポット/ストレッチ等）
+//   cut/run   … 合わせ/リムラン。空けば決める、無ければ移動
+//   screen    … スクリーン主。貰っても捌く
+//   rebound   … ペイント/板。貰ってもゴール下フィニッシュか捌くのみ
+//   balanced  … 強いロール補正なし＝従来の属性ドリブンな判断
+// ---------------------------------------------------------------------------
+export type OffAction =
+  | "score" | "slash" | "distribute" | "postHub" | "postScore"
+  | "spot" | "cut" | "run" | "screen" | "rebound" | "balanced";
+
+export const OFF_ROLE_ACTION: Record<string, OffAction> = {
+  メインハンドラー: "distribute", セカンドハンドラー: "distribute",
+  フロアジェネラル: "distribute", ポイントフォワード: "distribute",
+  スラッシャー: "slash", エース: "score",
+  スポットアップ: "spot", "3&D": "spot", ストレッチ: "spot", フロアスペーサー: "spot",
+  オフボールカッター: "cut", リムランナー: "run",
+  スクリーナー: "screen", プレイメイキングビッグ: "postHub",
+  リバウンダー: "rebound", リムプロテクター: "rebound",
+  ロックダウン: "balanced", スイッチディフェンダー: "balanced", エナジーガイ: "balanced",
+};
+export function offActionOf(role: string | undefined): OffAction {
+  return (role && OFF_ROLE_ACTION[role]) || "balanced";
+}
+
+// ---------------------------------------------------------------------------
+// ディフェンスロール → 守備時の仮想特能とエフォート・ギア。オフェンスロールと独立。
+// `effort`(0..1) は守備の“出力”＝どれだけ全力で守るか。移動速度が下がると疲労も
+// 減る仕組み(entities.tickMotion)なので、effortが低いロール＝スタミナ消費が少ない。
+// これで「攻撃に専念して脚を温存する省エネ守備」も「常時全力の二刀流」もロール
+// 割当だけで表現でき、守備手抜きを“使用率”に自動連動させずに済む。
+// `lockEffort` はクラッチ以外でも常に全力(effort 1.0)。
+// ---------------------------------------------------------------------------
+export const DEF_ROLE_BEHAVIOR: Record<string, { ab?: AbilityKey[]; effort: number; lockEffort?: boolean }> = {
+  ロックダウン:          { ab: ["manMark"], effort: 1.0, lockEffort: true },
+  スイッチディフェンダー: { ab: ["covering", "manMark"], effort: 1.0, lockEffort: true },
+  パスカット:            { ab: ["interceptor"], effort: 1.0, lockEffort: true },  // 旧エナジーガイを統合
+  リムプロテクター:      { ab: ["covering"], effort: 1.0 },
+  ヘルプディフェンダー:  { ab: ["covering"], effort: 0.95 },
+  守備司令塔:            { ab: ["dfLine"], effort: 0.95 },
+  ハッスルディフェンダー: { effort: 1.0, lockEffort: true },  // 常時全力・特能なし(体を張る堅実型)
+  バランス:              { effort: 0.9 },                     // 標準
+  省エネ:                { effort: 0.7 },                     // 攻撃専念で脚を温存(スタミナ消費小)
+};
+
+// オフェンス選択順位(1..5) → 使用率(0..1)。sim検証で「中庸な傾斜」が最良
+// （最大まで振ると過剰iso＋守備サボりで逆効果）だったため、緩やかな階段に。
+const RANK_USAGE = [0.86, 0.72, 0.60, 0.52, 0.45];
+export function usageFromRank(rank: number): number {
+  return RANK_USAGE[clamp(Math.round(rank), 1, 5) - 1];
+}
+
+// 得点力スコア（選択順位の自動割当に使う。チーム内で相対比較）。
+export function scoringPower(a: Attributes): number {
+  return rate(a.threeAcc) * 0.26 + rate(a.midAcc) * 0.24 + rate(a.dunk) * 0.12
+    + rate(a.aggression) * 0.14 + rate(a.handling) * 0.12 + rate(a.offense) * 0.12;
+}
+
+// ---------------------------------------------------------------------------
 // Role-based offensive identity. `scoreBase` is how much of a scoring option the
 // position usually is (the go-to scorers are the wings/2-guard); `playmaking` is
 // how much the position brings the ball up and sets others up (the point guard).
@@ -225,6 +297,10 @@ export function roleOffense(role: string): { scoreBase: number; playmaking: numb
 // wins (so it can be set in the pre-game editor); otherwise it's derived from
 // the position baseline nudged by the player's scoring ratings.
 export function computeOffPriority(def: PlayerDef): number {
+  // an explicit choice rank (1..5) is the strongest signal — it IS the usage
+  // the user (or the auto-ranker) set. game.ts re-derives this per on-court unit
+  // in refreshChoiceRanks; this covers the standalone/preview case.
+  if (def.choiceRank) return usageFromRank(def.choiceRank);
   if (def.priority !== undefined) return clamp(def.priority, 0, 1);
   const ro = roleOffense(def.role);
   const a = def.attr;

@@ -1,6 +1,6 @@
 import { Game } from "./game";
 import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS } from "./config";
-import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, type Attributes, type PlayerDef } from "./attributes";
+import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "./attributes";
 import { PLAYER_DB, type DbPlayer } from "./playerdb";
 
 const colorOf = (team: number): string => {
@@ -489,7 +489,8 @@ export class UI {
   /** Draw a fresh random matchup from the database and rebuild the editors. */
   private newMatchup(): void {
     randomizeRosters();
-    this.autoAssignRoles();   // sensible default 役割 for the fresh draw
+    this.autoAssignRoles();        // sensible default 攻守ロール for the fresh draw
+    this.autoAssignChoiceRanks();  // primary 1..5 by scoring ability (starters + bench)
     this.refreshEditors();
   }
 
@@ -507,6 +508,7 @@ export class UI {
         let best = "";
         let bestS = -Infinity;
         for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
+          if (UI.DEF_ONLY.has(nm)) continue;   // defence jobs live in the DEF role now
           if (r.pos && !r.pos.includes(def.role)) continue;
           let s = r.ht * hs, tot = r.ht;
           for (let k = 0; k < ax.length; k++) { s += r.ax[k] * ax[k]; tot += r.ax[k]; }
@@ -515,6 +517,7 @@ export class UI {
           if (s > bestS) { bestS = s; best = nm; }
         }
         def.evalRole = best || undefined;
+        def.defRole = this.pickDefRole(def);   // sensible default DEFENSE role too
         if (best) taken.set(best, (taken.get(best) ?? 0) + 1);
       }
     }
@@ -644,6 +647,82 @@ export class UI {
     エナジーガイ:          { ax: [0.06, 0.06, 0.08, 0.24, 0.30, 0.26], ht: 0.06, short: "ENG",
       tip: "ハッスルプレイとルーズボールで試合の流れを変える仕事人（全ポジション共通）。" },
   };
+
+  // Roles from EVAL_ROLES that are actually DEFENCE jobs — they now live in the
+  // DEFENSE picker (def.defRole), not the offence one, so exclude them from the
+  // offence picker and the offence auto-assign.
+  private static readonly DEF_ONLY = new Set(["ロックダウン", "スイッチディフェンダー", "エナジーガイ"]);
+
+  // ディフェンスロールのカタログ（オフェンスロールと独立に選択）。effort ギアは
+  // attributes.ts の DEF_ROLE_BEHAVIOR 側が持つ（守備出力＝スタミナ消費に連動）。
+  private static readonly DEF_ROLES: Record<string, { short: string; tip: string }> = {
+    ハッスルディフェンダー: { short: "HUS", tip: "常に全力で体を張る堅実な守備。特別な奪取補正はないが、攻撃の主軸でも守備で手を抜かない（スタミナ消費は大きい）。" },
+    バランス:              { short: "BAL", tip: "標準的な守備エフォート。" },
+    省エネ:                { short: "ECO", tip: "攻撃に専念し守備は省エネ。脚を温存しスタミナ消費が小さい（その分、守備の強度は緩め）。" },
+    ロックダウン:          { short: "LCK", tip: "相手エースをマンマークで封じるストッパー。常時全力で接近して守る。" },
+    スイッチディフェンダー: { short: "SWD", tip: "スイッチで誰についても守り切る万能守備。常時全力。" },
+    パスカット:            { short: "STL", tip: "パスコースを読んで奪う。パスカット／リーチイン／飛び出しが上手い。常時全力。" },
+    リムプロテクター:      { short: "RIM", tip: "ゴール下を封鎖しカバーへ先回りする守護神。" },
+    ヘルプディフェンダー:  { short: "HLP", tip: "抜かれた味方のカバーが上手い。" },
+    守備司令塔:            { short: "CMD", tip: "味方全体の守備位置を指示し補正する。" },
+  };
+
+  // Auto-assign the OFFENCE choice order (primary 1..5) from scoring ability, so
+  // the ball is funnelled to the best scorers by default. Starters and the bench
+  // are ranked SEPARATELY (each 1..5), so a starter's "1" and a bench "1" can
+  // coexist — that's fine (they're never on the floor as two #1s unless the user
+  // wants it; the engine treats a genuine tie as a shared co-primary).
+  private autoAssignChoiceRanks(): void {
+    for (let t = 0; t < 2; t++) {
+      this.rankGroup(ROSTER[t].slice(0, STARTERS));
+      this.rankGroup(ROSTER[t].slice(STARTERS));
+    }
+  }
+  private rankGroup(defs: PlayerDef[]): void {
+    defs.map((d) => ({ d, s: scoringPower(d.attr) }))
+      .sort((a, b) => b.s - a.s)
+      .forEach((o, k) => { o.d.choiceRank = Math.min(k + 1, 5); });
+  }
+  // Rank ONE freshly-placed player among his unit by ability (used on a swap, so
+  // teammates' hand-set ranks are left alone). Ties are allowed.
+  private assignRankFor(def: PlayerDef, team: number, idx: number): void {
+    const grp = idx < STARTERS ? ROSTER[team].slice(0, STARTERS) : ROSTER[team].slice(STARTERS);
+    const mine = scoringPower(def.attr);
+    let higher = 0;
+    for (const d of grp) if (d !== def && scoringPower(d.attr) > mine) higher++;
+    def.choiceRank = Math.min(higher + 1, 5);
+  }
+
+  // Best OFFENCE role for one player from his rating axes (no team balancing —
+  // used on a single swap; autoAssignRoles does the team-wide balanced version).
+  private bestOffRole(def: PlayerDef): string | undefined {
+    const ax = this.axesOf(def);
+    const hs = UI.heightValue(def.height * 100);
+    let best = "", bestS = -Infinity;
+    for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
+      if (UI.DEF_ONLY.has(nm)) continue;
+      if (r.pos && !r.pos.includes(def.role)) continue;
+      let s = r.ht * hs, tot = r.ht;
+      for (let k = 0; k < ax.length; k++) { s += r.ax[k] * ax[k]; tot += r.ax[k]; }
+      s /= tot;
+      if (s > bestS) { bestS = s; best = nm; }
+    }
+    return best || undefined;
+  }
+
+  // Auto default DEFENSE role from a player's ratings: a strong defender locks
+  // down (two-way if he's also a scorer), a rim-protecting big anchors, a high-
+  // usage offensive specialist conserves (省エネ), everyone else is バランス.
+  private pickDefRole(def: PlayerDef): string {
+    const a = def.attr;
+    const defSkill = (a.defense + a.reaction + a.agility) / 300;      // 0..1
+    const offSkill = (a.aggression + a.threeAcc + a.midAcc) / 300;    // 0..1
+    const big = def.role === "PF" || def.role === "C";
+    if (big && (a.jump + a.dunk) / 200 > 0.64 && defSkill > 0.58) return "リムプロテクター";
+    if (defSkill > 0.68) return offSkill > 0.66 ? "ハッスルディフェンダー" : "ロックダウン";
+    if (offSkill > 0.66 && defSkill < 0.55) return "省エネ";
+    return "バランス";
+  }
 
   // The weights actually used for a player: his hand-set 評価ロール, or his
   // position's profile when left on 自動.
@@ -1020,7 +1099,7 @@ export class UI {
     row.dataset.dropTeam = String(team);   // drag-&-drop hit-testing
     row.dataset.dropIdx = String(i);
     Object.assign(row.style, {
-      display: "grid", gridTemplateColumns: "28px 30px 1fr 30px 24px 40px 26px", gap: "6px",
+      display: "grid", gridTemplateColumns: "26px 30px 30px 22px 1fr 24px 22px 24px", gap: "5px",
       alignItems: "center", padding: "2px 6px", borderRadius: "6px",
       cursor: "grab", pointerEvents: "auto",
       background: "rgba(255,255,255,0.04)",
@@ -1031,23 +1110,33 @@ export class UI {
     Object.assign(pos.style, { fontSize: "10px", fontWeight: "800", color, border: `1px solid ${color}`, borderRadius: "5px", textAlign: "center", padding: "1px 0" });
     pos.textContent = def.role;
 
-    // 評価ロール — a POS-chip-sized pill showing the current role as a short
-    // code (full names live in the picker menu / hover card); pressing it
-    // opens the picker. Switching re-evaluates OVR and the team bars.
-    const curRole = def.evalRole ?? "自動";
-    const roleSel = document.createElement("button");
-    roleSel.textContent = curRole === "自動" ? "-" : (UI.EVAL_ROLES[curRole]?.short ?? "?");
-    const on = curRole !== "自動";
-    Object.assign(roleSel.style, {
-      fontSize: "9px", fontWeight: on ? "800" : "600", width: "100%", boxSizing: "border-box",
-      padding: "2px 0", borderRadius: "9px", cursor: "pointer", pointerEvents: "auto",
-      whiteSpace: "nowrap", overflow: "hidden",
-      background: on ? color : "rgba(20,24,34,0.9)",
-      color: on ? "#0d1016" : "rgba(255,255,255,0.45)",
-      border: on ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.16)",
-    } as Partial<CSSStyleDeclaration>);
-    roleSel.onpointerdown = (e) => e.stopPropagation();
-    roleSel.onclick = () => this.openRolePicker(def, team, roleSel);
+    // Three POS-chip-sized pills, editable right here in the roster row:
+    //   攻 = offence role, 守 = defence role, 順 = offence choice order (usage).
+    // (full names / tips live in the picker menu and the 詳細 modal)
+    const pill = (text: string, active: boolean, title: string, onClick: () => void): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.textContent = text; b.title = title;
+      Object.assign(b.style, {
+        fontSize: "9px", fontWeight: active ? "800" : "600", width: "100%", boxSizing: "border-box",
+        padding: "2px 0", borderRadius: "9px", cursor: "pointer", pointerEvents: "auto",
+        whiteSpace: "nowrap", overflow: "hidden", textAlign: "center",
+        background: active ? color : "rgba(20,24,34,0.9)",
+        color: active ? "#0d1016" : "rgba(255,255,255,0.45)",
+        border: active ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.16)",
+      } as Partial<CSSStyleDeclaration>);
+      b.onpointerdown = (e) => e.stopPropagation();
+      b.onclick = (e) => { e.stopPropagation(); onClick(); };
+      return b;
+    };
+    const roleSel = pill(def.evalRole ? (UI.EVAL_ROLES[def.evalRole]?.short ?? "?") : "-",
+      !!def.evalRole, "オフェンスロール", () => this.openRolePicker(def, team, roleSel, undefined, "off"));
+    const defSel = pill(def.defRole ? (UI.DEF_ROLES[def.defRole]?.short ?? "?") : "-",
+      !!def.defRole, "ディフェンスロール", () => this.openRolePicker(def, team, defSel, undefined, "def"));
+    const rankSel = pill(def.choiceRank ? String(def.choiceRank) : "-",
+      !!def.choiceRank, "オフェンス選択順位（1=最優先。未設定=能力で自動）", () => {
+        def.choiceRank = def.choiceRank === undefined ? 1 : def.choiceRank >= 5 ? undefined : def.choiceRank + 1;
+        this.refreshEditors();
+      });
 
     const name = document.createElement("span");
     Object.assign(name.style, { fontSize: "12px", fontWeight: "700", color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
@@ -1061,12 +1150,6 @@ export class UI {
     Object.assign(num.style, { fontSize: "13px", fontWeight: "800", color: "#fff", textAlign: "right" });
     num.textContent = String(ovr);
 
-    const track = document.createElement("div");
-    Object.assign(track.style, { height: "6px", background: "rgba(255,255,255,0.1)", borderRadius: "3px", overflow: "hidden" } as Partial<CSSStyleDeclaration>);
-    const fill = document.createElement("div");
-    Object.assign(fill.style, { width: `${Math.max(4, Math.min(100, ((ovr - 40) / 59) * 100))}%`, height: "100%", background: color } as Partial<CSSStyleDeclaration>);
-    track.appendChild(fill);
-
     // 詳細 — opens the full-ratings modal (all 25 ratings + 特殊能力)
     const det = document.createElement("button");
     det.textContent = "詳";
@@ -1079,7 +1162,7 @@ export class UI {
     det.onpointerdown = (e) => e.stopPropagation();
     det.onclick = (e) => { e.stopPropagation(); this.openDetailModal(def, team); };
 
-    row.append(pos, roleSel, name, ht, num, track, det);
+    row.append(pos, roleSel, defSel, rankSel, name, ht, num, det);
     row.onpointerdown = (e) => this.beginDrag(team, i, e);
     row.onmouseenter = () => { if (!this.dragFrom && !this.carry && !this.rolePicker && !this.detailModal) this.showPlayerCard(def, team, row); };
     row.onmouseleave = () => this.hidePlayerCard();
@@ -1196,11 +1279,12 @@ export class UI {
   // list (the current one is lit in the team colour). Closes on pick or on any
   // press outside.
   private openRolePicker(def: PlayerDef, team: number, anchor: HTMLElement,
-                         onPick?: () => void): void {
+                         onPick?: () => void, kind: "off" | "def" = "off"): void {
     this.closeRolePicker();
     this.hidePlayerCard();
     this.hideTip();
     const color = colorOf(team);
+    const isDef = kind === "def";
     const menu = document.createElement("div");
     Object.assign(menu.style, {
       position: "fixed", zIndex: "88", display: "flex", flexDirection: "column", gap: "4px",
@@ -1208,7 +1292,7 @@ export class UI {
       borderRadius: "10px", padding: "7px", boxShadow: "0 12px 32px rgba(0,0,0,0.6)",
       pointerEvents: "auto",
     } as Partial<CSSStyleDeclaration>);
-    const cur = def.evalRole ?? "自動";
+    const cur = (isDef ? def.defRole : def.evalRole) ?? "自動";
     const mkBtn = (nm: string): HTMLDivElement => {
       const cell = document.createElement("div");
       Object.assign(cell.style, { display: "flex", alignItems: "center", gap: "4px" } as Partial<CSSStyleDeclaration>);
@@ -1223,22 +1307,23 @@ export class UI {
         border: on ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.14)",
       } as Partial<CSSStyleDeclaration>);
       b.onclick = () => {
-        def.evalRole = nm === "自動" ? undefined : nm;
+        if (isDef) def.defRole = nm === "自動" ? undefined : nm;
+        else def.evalRole = nm === "自動" ? undefined : nm;
         this.closeRolePicker();
         if (onPick) onPick();
         else this.refreshEditors();   // OVR + team bars re-evaluate
       };
-      // real-time: hovering a role previews how it would move the team's bars
-      // (only on the pregame roster, where the VS board is actually visible)
-      if (!this.detailModal) {
+      // real-time: hovering an OFFENCE role previews how it moves the team's bars
+      // (only on the pregame roster; defence roles don't change the OVR bars)
+      if (!this.detailModal && !isDef) {
         b.onmouseenter = () => this.previewRole(def, team, nm);
         b.onmouseleave = () => this.clearVsPreview();
       }
       cell.appendChild(b);
       // ⓘ — press (or hover) to read what the role means / what it rewards
       const tip = nm === "自動"
-        ? "ポジション標準の重みで評価します（ロール未設定）。"
-        : UI.EVAL_ROLES[nm]?.tip;
+        ? (isDef ? "能力から自動でディフェンスロールを選びます。" : "ポジション標準の重みで評価します（ロール未設定）。")
+        : (isDef ? UI.DEF_ROLES[nm]?.tip : UI.EVAL_ROLES[nm]?.tip);
       if (tip) {
         const ic = document.createElement("span");
         ic.textContent = "ⓘ";
@@ -1265,22 +1350,31 @@ export class UI {
       return g;
     };
     menu.appendChild(mkBtn("自動"));
-    // roles this POSITION can take...
-    const posGrid = grid();
-    for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
-      if (r.pos && r.pos.includes(def.role)) posGrid.appendChild(mkBtn(nm));
+    if (isDef) {
+      // one flat list of DEFENSE roles (effort gears + specialists)
+      const dg = grid();
+      for (const nm of Object.keys(UI.DEF_ROLES)) dg.appendChild(mkBtn(nm));
+      menu.appendChild(header("ディフェンスロール"));
+      menu.appendChild(dg);
+    } else {
+      // OFFENCE roles this POSITION can take (defence-only names excluded)...
+      const posGrid = grid();
+      for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
+        if (UI.DEF_ONLY.has(nm)) continue;
+        if (r.pos && r.pos.includes(def.role)) posGrid.appendChild(mkBtn(nm));
+      }
+      if (posGrid.childElementCount > 0) {
+        menu.appendChild(header(`${def.role} のロール`));
+        menu.appendChild(posGrid);
+      }
+      // ...and the modern position-crossing jobs, open to everyone
+      const crossGrid = grid();
+      for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
+        if (!r.pos && !UI.DEF_ONLY.has(nm)) crossGrid.appendChild(mkBtn(nm));
+      }
+      menu.appendChild(header("全ポジション共通"));
+      menu.appendChild(crossGrid);
     }
-    if (posGrid.childElementCount > 0) {
-      menu.appendChild(header(`${def.role} のロール`));
-      menu.appendChild(posGrid);
-    }
-    // ...and the modern position-crossing jobs, open to everyone
-    const crossGrid = grid();
-    for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
-      if (!r.pos) crossGrid.appendChild(mkBtn(nm));
-    }
-    menu.appendChild(header("全ポジション共通"));
-    menu.appendChild(crossGrid);
     document.body.appendChild(menu);
     const r = anchor.getBoundingClientRect();
     const mw = menu.offsetWidth, mh = menu.offsetHeight;
@@ -1353,21 +1447,61 @@ export class UI {
     meta.textContent = `${Math.round(def.height * 100)}cm ${def.hand === "L" ? "左" : "右"}利き  OVR ${this.ovrOf(def)}`;
     // 役割 — switched HERE (the icon pill is display-only): opens the same
     // picker as the pregame roster, then the modal rebuilds with the new role
-    const roleBtn = document.createElement("button");
-    roleBtn.textContent = `役割: ${def.evalRole ?? "自動"} ▾`;
-    Object.assign(roleBtn.style, {
-      fontSize: "11px", fontWeight: "700", padding: "3px 12px", borderRadius: "8px",
-      cursor: "pointer", whiteSpace: "nowrap",
-      background: def.evalRole ? color : "rgba(255,255,255,0.07)",
-      color: def.evalRole ? "#0d1016" : "#dfe4ee",
-      border: def.evalRole ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.2)",
-    } as Partial<CSSStyleDeclaration>);
-    roleBtn.onclick = () => this.openRolePicker(def, team, roleBtn, () => {
+    const reopen = () => {
       this.refreshEditors();            // pregame VS board / rosters re-evaluate
       this.openDetailModal(def, team);  // ...and this modal reopens up to date
-    });
-    sub.append(meta, roleBtn);
-    head.append(nm, sub);
+    };
+    const pill = (label: string, set: boolean): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      Object.assign(b.style, {
+        fontSize: "11px", fontWeight: "700", padding: "3px 12px", borderRadius: "8px",
+        cursor: "pointer", whiteSpace: "nowrap",
+        background: set ? color : "rgba(255,255,255,0.07)",
+        color: set ? "#0d1016" : "#dfe4ee",
+        border: set ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.2)",
+      } as Partial<CSSStyleDeclaration>);
+      return b;
+    };
+    // OFFENCE role, DEFENCE role and CHOICE ORDER — all switched here.
+    const roleBtn = pill(`攻: ${def.evalRole ?? "自動"} ▾`, !!def.evalRole);
+    roleBtn.onclick = () => this.openRolePicker(def, team, roleBtn, reopen, "off");
+    const defBtn = pill(`守: ${def.defRole ?? "自動"} ▾`, !!def.defRole);
+    defBtn.onclick = () => this.openRolePicker(def, team, defBtn, reopen, "def");
+    // choice order cycles 自動→1→2→…→5→自動 (1 = first option / most usage)
+    const rankBtn = pill(`プライマリ: ${def.choiceRank ?? "自動"}`, !!def.choiceRank);
+    rankBtn.onclick = () => {
+      const next = def.choiceRank === undefined ? 1 : def.choiceRank >= 5 ? undefined : def.choiceRank + 1;
+      def.choiceRank = next;
+      reopen();
+    };
+    // Layout under 身長・利き腕: [オフェンスロール | プライマリ] on one row, and
+    // ディフェンスロール on the row below at the SAME total width.
+    const roleBox = document.createElement("div");
+    Object.assign(roleBox.style, {
+      display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px",
+      width: "min(360px, 100%)",
+    } as Partial<CSSStyleDeclaration>);
+    const roleRow = document.createElement("div");
+    Object.assign(roleRow.style, { display: "flex", gap: "6px", alignItems: "center" } as Partial<CSSStyleDeclaration>);
+    Object.assign(roleBtn.style, { flex: "1.6", boxSizing: "border-box", textAlign: "center" } as Partial<CSSStyleDeclaration>);
+    Object.assign(rankBtn.style, { flex: "1", boxSizing: "border-box", textAlign: "center" } as Partial<CSSStyleDeclaration>);
+    // プライマリの説明 (ⓘ: hover / tap で表示)
+    const rankTip = "プライマリ＝オフェンスの選択順位（誰にボールを集めて攻撃をけん引させるか）。1が最優先で、数字が大きいほど使用率が下がる。「自動」はチーム内の得点力で自動割当。同じ番号を複数の選手に付けると2人でボールをシェア（co-primary）。";
+    rankBtn.title = rankTip;
+    const rankInfo = document.createElement("span");
+    rankInfo.textContent = "ⓘ";
+    Object.assign(rankInfo.style, {
+      fontSize: "13px", color: "rgba(150,190,255,0.9)", cursor: "help", flexShrink: "0",
+    } as Partial<CSSStyleDeclaration>);
+    rankInfo.onmouseenter = () => this.showTextTip("プライマリ", rankTip, rankInfo);
+    rankInfo.onmouseleave = () => this.hideTip();
+    rankInfo.onclick = (e) => { e.stopPropagation(); this.showTextTip("プライマリ", rankTip, rankInfo); };
+    roleRow.append(roleBtn, rankBtn, rankInfo);
+    Object.assign(defBtn.style, { width: "100%", boxSizing: "border-box", textAlign: "center" } as Partial<CSSStyleDeclaration>);
+    roleBox.append(roleRow, defBtn);
+    sub.append(meta);
+    head.append(nm, sub, roleBox);
 
     // TOP ROW: name / role / coverable positions on the left, hexagon chart on
     // the right (stacked on the phone). The ratings grid goes FULL WIDTH below.
@@ -1680,8 +1814,14 @@ export class UI {
       if (t && t.team === team) {
         e.preventDefault();
         e.stopPropagation();   // beat the row's own long-press drag
-        applyDbPlayer(ROSTER[team][t.idx], dbp);
-        ROSTER[team][t.idx].evalRole = undefined;   // fresh player → 自動 evaluation
+        const nd = ROSTER[team][t.idx];
+        applyDbPlayer(nd, dbp);
+        // a swapped-in player arrives WITH sensible default roles (prevents the
+        // "forgot to set a role" gap the user hit) — offence by axes, defence by
+        // ratings; choice order back to auto.
+        nd.evalRole = this.bestOffRole(nd);
+        nd.defRole = this.pickDefRole(nd);
+        this.assignRankFor(nd, team, t.idx);   // primary by ability (teammates untouched)
         this.cancelCarry();
         this.refreshEditors();
       } else {
@@ -2376,7 +2516,10 @@ export class UI {
       // rebuild only when the shown set (or a name / tab / 評価ロール) changes —
       // names are in the key so a tip-off applyRoster rename rebuilds at once
       const key = `${this.showBench[t] ? "B" : "C"}:`
-        + list.map((p) => `${p.idx}:${p.name}:${ROSTER[t]?.[p.idx]?.evalRole ?? ""}`).join(",");
+        + list.map((p) => {
+          const d = ROSTER[t]?.[p.idx];
+          return `${p.idx}:${p.name}:${d?.evalRole ?? ""}:${d?.defRole ?? ""}:${d?.choiceRank ?? ""}`;
+        }).join(",");
       if (key === this.iconKey[t]) continue;
       this.iconKey[t] = key;
       const row = this.iconRows[t];

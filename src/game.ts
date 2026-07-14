@@ -6,7 +6,8 @@ import {
   SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS, TEAM_COLORS, TEAM_NAMES,
 } from "./config";
 import { clamp, dist2D, dist2DTo, moveToward2D, chance, rand } from "./util";
-import { ROSTER, ROSTER_SIZE, STARTERS, TACTICS, rate, AbilityKey } from "./attributes";
+import { ROSTER, ROSTER_SIZE, STARTERS, TACTICS, rate, AbilityKey,
+  scoringPower, usageFromRank } from "./attributes";
 
 export type BallMode = "held" | "pass" | "shot" | "loose" | "inbound" | "tipoff" | "freethrow" | "pause" | "subs" | "finale";
 
@@ -278,13 +279,31 @@ export class Game {
   // How badly this player needs to come out: gassed legs, a poor night
   // (turnovers piling up with nothing to show), or garbage time in a blowout.
   private subDesire(p: Player): number {
-    let d = p.fatigue * 1.6 - 0.55;                       // tired → out
     const s = p.stats;
+    // LEASH by primary order: プライマリ1が最も出ずっぱり、5に向かって徐々に交代
+    // されやすく、ベンチが最短。得点役(エース/スラッシャー)は順位に依らず長め。
+    const rank = p.choiceRank ?? p.autoRank;              // 1..5
+    let leash = p.idx < STARTERS ? clamp((5 - rank) / 4, 0, 1) : 0;  // rank1→1 .. rank5→0
+    if (p.offAction === "score") leash = Math.max(leash, 0.9);
+    else if (p.offAction === "slash") leash = Math.max(leash, 0.6);
+    const coeff = 1.6 - leash * 0.3;   // fatigue weight: 1.6(早い交代) .. 1.3(粘る)
+    const base = 0.45 + leash * 0.2;   // hook 閾値 ≈ 疲労 0.28(rank5) .. 0.50(rank1=半分で休む)
+    let d = p.fatigue * coeff - base;
+    // 活躍度: 好調(スタッツが良い)なら少し長く起用、不調(TO過多/決まらない)なら早めの交代。
+    // ただし効果は控えめ — 半分以下まで疲れたら好調でも休ませる。
     const eff = s.pts + s.reb + s.ast - s.tov * 2 - (s.fga - s.fgm) * 0.5;
-    if (eff <= -2) d += 0.3;                              // cold / turnover-prone night
+    d -= clamp(eff * 0.025, -0.1, 0.3);
     // blowout in the 4th: rest the regulars, empty the bench (starters first)
     const diff = Math.abs(this.score[0] - this.score[1]);
-    if (this.quarter >= QUARTERS && diff >= 18) d += p.idx < STARTERS ? 0.7 : 0.2;
+    const blowout = this.quarter >= QUARTERS && diff >= 18;
+    if (blowout) d += p.idx < STARTERS ? 0.7 : 0.2;
+    // ROTATION SHAPE around the 4Q close (skip in garbage time): rest the
+    // starters through the 3rd so they can go the distance, then keep the
+    // CLOSING LINEUP — the starters, the higher primaries most — on in the 4th.
+    else if (p.idx < STARTERS) {
+      if (this.quarter === 3) d += 0.2 + leash * 0.25;   // planned 3Q breather (stars most)
+      else if (this.quarter >= QUARTERS) d -= 0.4 + leash * 0.3;  // close with the starters
+    }
     if (p.stintT < 12) d -= 0.6;                          // just checked in — stays on
     return d;
   }
@@ -331,6 +350,34 @@ export class Game {
         }
       }
     }
+    // PROACTIVE RESTORE: bring a rested starter back in for a bench-level player
+    // on the floor. Q3 is SKIPPED on purpose — that's the planned breather so the
+    // starters are fresh to close. In the 4th the threshold is relaxed so the
+    // CLOSING LINEUP (the starters) comes back even if not fully recovered.
+    // Skipped in 4Q garbage time (that deliberately empties the bench).
+    const closing = this.quarter >= QUARTERS;
+    if (!blowout && this.quarter !== 3) {
+      const restThresh = closing ? 0.7 : 0.30;
+      for (let team = 0; team < 2; team++) {
+        const resting = this.roster[team]
+          .filter((p) => p.idx < STARTERS && !this.onCourt(p) && p.fatigue < restThresh
+            && !this.subWalkers.some((w) => w.p === p))
+          .sort((a, b) => (a.choiceRank ?? a.autoRank) - (b.choiceRank ?? b.autoRank)); // primary first
+        for (const starter of resting) {
+          let target: Player | null = null, worst = -Infinity;
+          for (const oc of this.teamPlayers(team)) {
+            if (oc === this.handler || oc === exclude) continue;
+            if (oc.idx < STARTERS) continue;                       // never pull another starter
+            if (oc.stintT < 12) continue;                          // just checked in
+            if (this.roleFit(starter.role, oc.role) <= 0) continue; // compatible slot
+            if (this.subWalkers.some((w) => w.p === oc)) continue;
+            const bad = oc.fatigue + (1 - this.overallOf(oc) / 99);   // most tired / weakest first
+            if (bad > worst) { worst = bad; target = oc; }
+          }
+          if (target) this.substitute(target, starter);
+        }
+      }
+    }
     return this.subWalkers.length > 0;
   }
 
@@ -360,6 +407,9 @@ export class Game {
       team: out.team,
       ttl: 3,
     });
+    // the on-court unit changed → re-derive the choice order (auto usage) so the
+    // incoming player slots into the pecking order by ability
+    this.refreshChoiceRanks(out.team);
   }
 
   /** Kick off a bench celebration for the scoring team. `amp` (0..1) scales how
@@ -674,6 +724,8 @@ export class Game {
     }
     this.assistFrom = this.assistTo = this.pendingAssist = null;
     this.applyNumberSides();
+    this.refreshChoiceRanks(0);
+    this.refreshChoiceRanks(1);
     this.startTipoff();
   }
 
@@ -692,6 +744,32 @@ export class Game {
   applyRoster(): void {
     for (let t = 0; t < 2; t++) {
       for (let i = 0; i < ROSTER_SIZE; i++) this.roster[t][i].applyDef(ROSTER[t][i]);
+    }
+    this.refreshChoiceRanks(0);
+    this.refreshChoiceRanks(1);
+  }
+
+  // Turn the CHOICE ORDER into each on-court player's usage (offPriority = who
+  // the ball is funnelled to). A player with an explicit choiceRank keeps it;
+  // duplicate explicit ranks stay equal = "co-primary" who share the ball. The
+  // rest are auto-ranked by scoring power into the remaining 1..5 slots — this is
+  // the "auto by ability" default the user asked for. Recomputed per on-court
+  // unit so a substitution re-shuffles the pecking order.
+  private refreshChoiceRanks(team: number): void {
+    const on = this.teamPlayers(team);
+    const used = new Set<number>();
+    for (const p of on) if (p.choiceRank) used.add(p.choiceRank);
+    const auto = on.filter((p) => !p.choiceRank)
+      .sort((a, b) => scoringPower(b.attr) - scoringPower(a.attr));
+    let r = 1;
+    for (const p of auto) {
+      while (used.has(r) && r < 5) r++;
+      p.autoRank = clamp(r, 1, 5); used.add(r); r++;
+    }
+    for (const p of on) {
+      const rank = p.choiceRank ?? p.autoRank;
+      // a designated shot-creator (エース) gets a small usage bump on top of rank
+      p.offPriority = clamp(usageFromRank(rank) + (p.offAction === "score" ? 0.06 : 0), 0, 1);
     }
   }
 
@@ -1224,6 +1302,14 @@ export class Game {
   private decide(h: Player, dHoop: number, dDef: number, rimFloor: Vector3): void {
     const tac = this.tactics[h.team].offense;
     const prio = h.offPriority;
+    // ロール由来の行動プロファイル: 何をするかはオフェンスロールが支配する。
+    // canCreate = 自分から仕掛ける役（エース/スラッシャー/得点ビッグ/balanced）、
+    // passFirst = まず配球（ハンドラー/フロアジェネラル/ハブビッグ）、
+    // noCreate = 無理に作らない（スポット/カッター/スクリーナー/リバウンダー等）。
+    const act = h.offAction;
+    const canCreate = act === "score" || act === "slash" || act === "postScore" || act === "balanced";
+    const passFirst = act === "distribute" || act === "postHub";
+    const noCreate = act === "spot" || act === "cut" || act === "run" || act === "screen" || act === "rebound";
 
     // BUZZER BEATER: almost no time on the game/shot clock and no chance to work
     // a good look — heave it up from wherever he is, however off-balance. shoot()
@@ -1278,8 +1364,9 @@ export class Game {
     // the man guarding him has LEFT HIS FEET (an early-contest gamble or a
     // fake he bought) — put the ball on the floor and walk past the floater.
     // Quick, sharp handlers punish it almost every time; slower ones sometimes
-    // hesitate and the moment passes.
-    {
+    // hesitate and the moment passes. (only the shot-creators exploit it off the
+    // dribble — a spot-up/distributor doesn't suddenly iso.)
+    if (canCreate) {
       const od = this.onBallDefender(h);
       if (od && od.airborne && dDef < 2.2 && this.canIso(h, dHoop)
           && chance(0.45 + rate(h.attr.reaction) * 0.3 + rate(h.attr.handling) * 0.15)) {
@@ -1323,6 +1410,58 @@ export class Game {
         const panic = clamp((near - 1) * 0.32 + (edge / near) * 0.85, 0, 0.9);
         if (chance(panic) && this.pass(h)) return;
       }
+    }
+
+    // ROLE-DRIVEN ACTION — the ball has reached him; what he does now follows
+    // his OFFENSIVE ROLE, so funnelling usage to a distributor/big/spacer does
+    // NOT turn him into a gunner or a reckless dribbler.
+    if (passFirst) {
+      // ハンドラー/フロアジェネラル/ハブビッグ: まず配球。ただし「打たずにパス回し
+      // だけ」にならないよう、空いた球は打ち、レーンが開けば仕掛けてギャップを作る。
+      if (!this.frontT) { this.bringUpLane(h); return; }
+      if (this.shotClock < 4 && dHoop > 1.8) { this.shoot(h, dHoop, dDef); return; }
+      const inRange = dHoop <= this.shootRangeOf(h) + 0.3;
+      const clockPush = clamp((9 - this.shotClock) / 9, 0, 1);   // 遅いほど打つ
+      // a clean lane → attack to bend the defence (a big posts instead of dribbling)
+      if (this.laneClear(h, rimFloor) && dHoop <= 8 && this.canIso(h, dHoop)
+          && chance(clamp(0.2 + rate(h.attr.handling) * 0.25 + clockPush * 0.3, 0, 0.6))) {
+        if (this.isBig(h)) this.postMove(h); else this.driveDecision(h);
+        return;
+      }
+      const open = dDef > 1.7;
+      const pS = clamp(0.16 + rate(h.attr.threeAcc) * 0.28 + (dDef - 1.7) * 0.2 + clockPush * 0.5, 0.04, 0.9);
+      if (inRange && open && chance(pS)) { this.shoot(h, dHoop, dDef); return; }
+      if (this.pass(h)) return;
+      this.setDrive(h, rimFloor, 4.5);   // no outlet yet — probe/reset
+      return;
+    }
+    if (noCreate) {
+      // スポット/カッター/ランナー/スクリーナー/リバウンダー: キャッチ&シュートが
+      // 基本。無理な単独クリエイトはしないが、「クローズアウトには仕掛ける」ことで
+      // ギャップを作り、開いた球はしっかり打つ（打たずに回すだけにしない）。
+      if (!this.frontT) { this.bringUpLane(h); return; }
+      if (this.shotClock < 4 && dHoop > 1.8) { this.shoot(h, dHoop, dDef); return; }
+      const inRange = dHoop <= this.shootRangeOf(h) + 0.3;
+      const clockPush = clamp((10 - this.shotClock) / 10, 0, 1);
+      // ATTACK THE CLOSEOUT: a shooter with a live handle drives past a defender
+      // flying at him — the main way an off-ball scorer creates a gap.
+      const od = this.onBallDefender(h);
+      if (od && !od.airborne && dDef < 2.3 && od.curSpd > od.runSpeed * 0.5
+          && this.canIso(h, dHoop) && rate(h.attr.handling) > 0.45
+          && chance(clamp(0.28 + rate(h.attr.handling) * 0.4 + rate(h.attr.agility) * 0.3
+              - rate(od.attr.balance) * 0.4, 0.1, 0.7))) {
+        h.driveSide = this.pickSide(h); h.beatenT = rand(0.5, 0.8);
+        od.reactT = Math.max(od.reactT, rand(0.3, 0.5) * this.reactionLag(od));
+        this.setDriveSide(h); return;
+      }
+      const isThreeL = dHoop > THREE_DIST;
+      const open = dDef > (h.has("isoShooter") ? 1.3 : 1.5);
+      const pS = clamp(0.42 + rate(h.attr.aggression) * 0.2 + (dDef - 1.5) * 0.22
+        + (isThreeL ? tac.threeBias * 0.2 * this.twWeight(h) : 0.12) + clockPush * 0.4, 0.06, 0.95);
+      if (inRange && open && chance(pS)) { this.shoot(h, dHoop, dDef); return; }
+      if (this.pass(h)) return;
+      this.setDrive(h, rimFloor, 4.5);
+      return;
     }
 
     // BIGS (PF/C) — and anyone with the ポスト ability — work in the post: back
@@ -1960,13 +2099,22 @@ export class Game {
   // back in near his own goal (~90% even for the most ball-dominant star)
   // and in crunch time (Q4, close game).
   private defEffort(d: Player, protect: Vector3): number {
-    // defensive-identity ロール never coast — their whole job is this end
+    // crunch time: everyone locks back in regardless of role
+    if (this.quarter >= 4 && Math.abs(this.score[0] - this.score[1]) <= 6) return 1;
+    if (d.lockDef) return 1;                                  // 常時全力ロール
+    const nearGoal = clamp(1 - dist2D(d.pos, protect) / 9, 0, 1); // 1 at the rim
+    // DEFENSE-ROLE gear (preferred): the role sets his defensive output — 省エネ
+    // saves his legs (lower speed → less fatigue), ツーウェイ/バランス give more.
+    // This is how a two-way star keeps full effort while a scorer conserves —
+    // controlled by the DEF role, NOT auto-tied to his offensive usage.
+    if (d.defEffortGear !== undefined) {
+      return clamp(d.defEffortGear + (1 - d.defEffortGear) * nearGoal, 0, 1);
+    }
+    // legacy fallback (no defRole set): offensive stars auto-coast a little
     if (d.evalRole === "ロックダウン" || d.evalRole === "スイッチディフェンダー"
       || d.evalRole === "エナジーガイ" || d.evalRole === "3&D") return 1;
     const star = clamp((d.offPriority - 0.45) / 0.4, 0, 1);  // 0 role .. 1 star
     if (star <= 0) return 1;
-    if (this.quarter >= 4 && Math.abs(this.score[0] - this.score[1]) <= 6) return 1;
-    const nearGoal = clamp(1 - dist2D(d.pos, protect) / 9, 0, 1); // 1 at the rim
     const e = 0.68 + (0.9 - 0.68) * nearGoal;   // cruising 0.68 .. 0.9 at the goal
     return 1 - star * (1 - e);
   }
@@ -2411,7 +2559,7 @@ export class Game {
         if (this.isBig(p) && dist2D(p.pos, rimFloor) > 6 && this.shotClock > 4) continue;
         value += p.playmaking * 4.0;
       }
-      else value += p.offPriority * 1.6 * clamp(open / 2, 0, 1);   // feed an open scorer
+      else value += p.offPriority * 2.2 * clamp(open / 2, 0, 1);   // funnel to the primary (choice order)
       // expected value: discount by the chance the pass is picked off
       const score = value * (1 - risk) - risk * 2.5;
       if (score > bestScore) { bestScore = score; best = p; }
