@@ -73,6 +73,7 @@ export class UI {
   private statSnap = new Map<import("./entities").Player, number[]>();     // last-seen POP_STATS values
   private controls!: HTMLDivElement;      // speed / RESTART row
   private menuBtn!: HTMLButtonElement;    // ☰ hamburger — rides the top edge until the scoreboard reaches it
+  private camHint!: HTMLDivElement;       // "drag: orbit" hint — kept level with the ☰ on the left
   private board!: HTMLDivElement;         // centred scoreboard (its width decides where the ☰ can sit)
   private iconPanels: HTMLDivElement[] = []; // the two team face-icon panels
   private layoutMode = "";                // "desktop" | "phone" — recomputed on resize
@@ -279,12 +280,16 @@ export class UI {
     controls.appendChild(restart);
 
     const hint = document.createElement("div");
+    // top-LEFT, kept level with the ☰ (positionMenu syncs its top). The bottom
+    // is taken by the face-icon HUD and the centred scoreboard overlaps a fixed
+    // top:10px, so it rides the same row as the menu, on the opposite side.
     css(hint, {
-      position: "absolute", bottom: "16px", right: "16px", fontSize: "12px",
+      position: "absolute", top: "14px", left: "12px", fontSize: "12px",
       opacity: "0.5", pointerEvents: "none",
     });
     hint.textContent = "drag: orbit  ·  wheel: zoom";
     this.hud.appendChild(hint);
+    this.camHint = hint;
 
     this.buildPlayerBars();
     this.buildTooltip();
@@ -2109,6 +2114,8 @@ export class UI {
     this.menuBtn.style.top = clears ? "14px" : "92px";
     // the dropdown hangs just under the button in whichever spot it landed
     this.controls.style.top = clears ? "58px" : "132px";
+    // keep the camera hint on the same row as the ☰, on the left
+    if (this.camHint) this.camHint.style.top = clears ? "14px" : "92px";
   }
 
   // Reflect the current 体力バー position on the toggle button's label.
