@@ -49,7 +49,10 @@ const game = new Game(scene);
 game.attachHoops(hoops);
 for (let t = 0; t < 2; t++) {
   for (const p of game.allPlayers(t)) {
-    for (const m of p.meshes) shadow.addShadowCaster(m);
+    // includeDescendants=false: cast from the body meshes only, NOT their new
+    // children (hair/eyes) — otherwise the hair dome throws a shadow onto the
+    // shoulders/neck (the "shoulders lost light" report).
+    for (const m of p.meshes) shadow.addShadowCaster(m, false);
   }
 }
 shadow.addShadowCaster(game.ball.mesh);
