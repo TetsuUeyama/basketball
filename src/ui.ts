@@ -2,6 +2,7 @@ import { Game } from "./game";
 import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS } from "./config";
 import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "./attributes";
 import { PLAYER_DB, type DbPlayer } from "./playerdb";
+import { playerLook } from "./util";
 
 const colorOf = (team: number): string => {
   const c = TEAM_COLORS[team];
@@ -2426,18 +2427,34 @@ export class UI {
     // team-tinted background disc
     ctx.fillStyle = `rgb(${Math.round(tc.r * 120 + 25)},${Math.round(tc.g * 120 + 25)},${Math.round(tc.b * 120 + 25)})`;
     ctx.fillRect(0, 0, W, H);
-    // deterministic variety per player so faces aren't all identical
-    const h = (player.idx * 2654435761) >>> 0;
-    const skins = ["#f2cfa8", "#e6b48c", "#cf9a6a", "#a9713f", "#8a5a2b"];
-    const hairs = ["#20140a", "#3a2413", "#0e0e0e", "#5a3a1c", "#7a5230"];
-    const skin = skins[h % skins.length];
-    const hair = hairs[(h >> 3) % hairs.length];
-    // head
+    // deterministic variety per player so faces aren't all identical — SHARED
+    // with the 3D head (entities.ts) via playerLook, so the model matches the icon
+    const look = playerLook(player.idx);
+    const skin = look.skinHex;
+    const hair = look.hairHex;
+    const style = look.style;   // 0短髪 1坊主 2アフロ 3フラットトップ 4ヘッドバンド
+    // hair BEHIND the head — a full backing so the crown & sides are covered
+    // (not a balding top-cap). Skipped for 坊主(1).
+    if (style !== 1) {
+      ctx.fillStyle = hair;
+      const hr = style === 2 ? 0.40 : 0.335;                 // afro bigger
+      ctx.beginPath(); ctx.arc(W / 2, H * (style === 2 ? 0.44 : 0.46), W * hr, 0, Math.PI * 2); ctx.fill();
+      if (style === 3) ctx.fillRect(W * 0.15, H * 0.14, W * 0.70, H * 0.32);   // flat-top block
+    }
+    // head (skin) on top of the backing → hair frames the crown and sides
     ctx.fillStyle = skin;
     ctx.beginPath(); ctx.arc(W / 2, H * 0.52, W * 0.30, 0, Math.PI * 2); ctx.fill();
-    // hair cap
-    ctx.fillStyle = hair;
-    ctx.beginPath(); ctx.arc(W / 2, H * 0.46, W * 0.31, Math.PI * 1.05, Math.PI * 1.95); ctx.fill();
+    // front hairline / bangs across the forehead (the FRONT reads distinct from
+    // the fuller back)
+    if (style !== 1) {
+      ctx.fillStyle = hair;
+      ctx.beginPath(); ctx.arc(W / 2, H * 0.45, W * 0.305, Math.PI * 1.03, Math.PI * 1.97); ctx.fill();
+    }
+    // headband (style 4) — team colour across the forehead
+    if (style === 4) {
+      ctx.fillStyle = `rgb(${Math.round(tc.r * 255)},${Math.round(tc.g * 255)},${Math.round(tc.b * 255)})`;
+      ctx.fillRect(W * 0.20, H * 0.40, W * 0.60, H * 0.07);
+    }
     // eyes
     ctx.fillStyle = "#26211c";
     ctx.beginPath(); ctx.arc(W * 0.41, H * 0.52, 1.7, 0, Math.PI * 2); ctx.fill();

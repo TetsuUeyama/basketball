@@ -5,7 +5,7 @@ import {
 import { TEAM_COLORS, HUD_OPTS } from "./config";
 import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority, ROLE_BEHAVIOR,
   DEF_ROLE_BEHAVIOR, OffAction, offActionOf } from "./attributes";
-import { clamp, rand } from "./util";
+import { clamp, rand, playerLook } from "./util";
 
 // A player's box-score line for the current game. `min` is time on court in
 // game-clock seconds (shown as minutes in the result screen).
@@ -94,6 +94,10 @@ export class Player {
                                        // sitting folds it 90° forward (the lap)
   private acornFootL!: TransformNode;  // shoe-shaped feet — asymmetric, so both the
   private acornFootR!: TransformNode;  // position AND the yaw flip with numberSide
+  private eyeL!: Mesh;                  // face eyes — sit on the front (-numberSide·Z)
+  private eyeR!: Mesh;
+  private hair: Mesh | null = null;    // hair crown — tilted back so front/nape differ
+  private hairTilt = 0;                // backward tilt magnitude (flipped by numberSide)
 
   decisionT = 0;                 // cooldown before the next AI decision
   driveTarget = new Vector3();   // where a ball-handler is heading
@@ -354,11 +358,70 @@ export class Player {
 
     const head = MeshBuilder.CreateSphere(`head_${team}_${idx}`, { diameter: 0.34, segments: 10 }, scene);
     head.position.y = 1.78;
+    // skin / hair tone MATCH the HUD face icon (shared playerLook, seeded by idx)
+    const look = playerLook(idx);
     const headMat = new StandardMaterial(`hmat_${team}_${idx}`, scene);
-    headMat.diffuseColor = new Color3(0.86, 0.7, 0.56);
+    headMat.diffuseColor = new Color3(look.skin.r, look.skin.g, look.skin.b);
     headMat.specularColor = new Color3(0.05, 0.05, 0.05);
     head.material = headMat;
     head.parent = torsoNode;   // the head turns with the chest
+
+    // hair — a crown mesh whose SHAPE varies by hairstyle (so players read apart,
+    // not just by colour). 0=短髪 1=坊主(髪なし) 2=アフロ 3=フラットトップ 4=ヘッドバンド。
+    const hairMat = new StandardMaterial(`hair_${team}_${idx}`, scene);
+    hairMat.diffuseColor = new Color3(look.hair.r, look.hair.g, look.hair.b);
+    hairMat.specularColor = new Color3(0.04, 0.04, 0.04);
+    // fuller coverage (comes down the sides/back so the crown isn't balding) and
+    // a backward TILT so the front rides up at the hairline while the back covers
+    // the nape — front and back hair then read differently. `tilt` is flipped by
+    // numberSide (front = -numberSide·Z) in setNumberSide.
+    // slice = how far the dome comes down (moderate, so it covers the sides/back
+    // but NOT the face); tilt = backward lean so the FRONT rides up above the eyes
+    // (forehead & expression visible) while the nape stays covered.
+    const HS: ({ d: number; slice: number; sy: number; y: number; tilt: number } | null)[] = [
+      { d: 0.375, slice: 0.58, sy: 1.0, y: 0.0, tilt: 0.34 },   // 0 短髪
+      null,                                                     // 1 坊主
+      { d: 0.47, slice: 0.66, sy: 1.08, y: 0.0, tilt: 0.24 },   // 2 アフロ
+      { d: 0.375, slice: 0.56, sy: 1.4, y: 0.02, tilt: 0.30 },  // 3 フラットトップ
+      { d: 0.375, slice: 0.56, sy: 0.95, y: 0.0, tilt: 0.32 },  // 4 ヘッドバンド下の髪
+    ];
+    const hs = HS[look.style];
+    if (hs) {
+      const hair = MeshBuilder.CreateSphere(`haircap_${team}_${idx}`, { diameter: hs.d, segments: 12, slice: hs.slice }, scene);
+      hair.material = hairMat;
+      hair.parent = head;            // rides the head
+      hair.position.y = hs.y;
+      hair.scaling.y = hs.sy;
+      hair.rotation.x = this.numberSide * hs.tilt;   // lean back: front up, nape down
+      this.hair = hair;
+      this.hairTilt = hs.tilt;
+    }
+    if (look.style === 4) {
+      // headband — a team-coloured ring around the head
+      const band = MeshBuilder.CreateTorus(`band_${team}_${idx}`, { diameter: 0.355, thickness: 0.05, tessellation: 12 }, scene);
+      const bandMat = new StandardMaterial(`bandmat_${team}_${idx}`, scene);
+      const tc = TEAM_COLORS[team];
+      bandMat.diffuseColor = new Color3(tc.r, tc.g, tc.b);
+      bandMat.specularColor = new Color3(0.05, 0.05, 0.05);
+      band.material = bandMat;
+      band.parent = head;
+      band.position.y = 0.035;       // forehead height
+    }
+    // eyes — two small dark spheres on the FRONT of the head. Front = local
+    // -numberSide·Z (same convention the arms/feet use); setNumberSide re-aims Z
+    // when the teams switch ends at half-time.
+    const eyeMat = new StandardMaterial(`eye_${team}_${idx}`, scene);
+    eyeMat.diffuseColor = new Color3(0.14, 0.1, 0.08);
+    eyeMat.specularColor = new Color3(0, 0, 0);
+    const mkEye = (sx: number): Mesh => {
+      const e = MeshBuilder.CreateSphere(`eye_${team}_${idx}_${sx}`, { diameter: 0.05, segments: 6 }, scene);
+      e.material = eyeMat;
+      e.parent = head;
+      e.position.set(sx, -0.005, -0.15);   // front hemisphere (numberSide default +1)
+      return e;
+    };
+    this.eyeL = mkEye(-0.062);
+    this.eyeR = mkEye(0.062);
 
     // acorn penguin feet, shaped like SHOES: a long low toe box + a rounded toe
     // cap + a taller ankle shaft tucking up under the waist bottom. Built with
@@ -623,6 +686,10 @@ export class Player {
     // team attacking -Z doesn't read with its feet on backwards
     this.footL.position.z = -this.numberSide * 0.1;
     this.footR.position.z = -this.numberSide * 0.1;
+    // eyes sit on the chest/front side too, so they don't end up on the back
+    if (this.eyeL) { this.eyeL.position.z = -this.numberSide * 0.15; this.eyeR.position.z = -this.numberSide * 0.15; }
+    // hair leans back relative to the face, so the tilt flips with the front side
+    if (this.hair) this.hair.rotation.x = this.numberSide * this.hairTilt;
     // shoe feet: same rule, but the shoe is front/back asymmetric so its yaw
     // flips too (built toe-forward for numberSide +1). The stance sits toward
     // the back of the body with the toes fanned outward (a slight duck stance),
