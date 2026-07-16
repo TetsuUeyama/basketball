@@ -1158,12 +1158,15 @@ export class UI {
     };
     const genBtn = ctrlBtn("ランダム編成", false, () => this.randomizeOne(team));
     const roleBtn = ctrlBtn("役割再設定", false, () => this.reassignRoles(team));
-    const swapBtn = ctrlBtn("選手を交代", true, () => this.openPlayerPicker(team));
+    const swapBtn = ctrlBtn("選手を交代", false, () => this.openPlayerPicker(team));
+    // the three controls sit on their OWN row so they always stay on ONE line —
+    // a slightly longer team name (BLAZE vs WAVE) no longer wraps them to two.
     const btns = document.createElement("div");
-    Object.assign(btns.style, { display: "flex", gap: "5px", flexWrap: "wrap", justifyContent: "flex-end" } as Partial<CSSStyleDeclaration>);
+    Object.assign(btns.style, { display: "flex", gap: "5px", flexWrap: "nowrap", justifyContent: "space-between", margin: "0 0 3px" } as Partial<CSSStyleDeclaration>);
     btns.append(genBtn, roleBtn, swapBtn);
-    head.append(teamName, btns);
+    head.append(teamName);
     wrap.appendChild(head);
+    wrap.appendChild(btns);
 
     const divider = (label: string): HTMLDivElement => {
       const d = document.createElement("div");

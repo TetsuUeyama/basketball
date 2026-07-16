@@ -892,8 +892,8 @@ export class Player {
       // the FIRST part of the reaction (he catches himself after)
       if (this.foulStumble && this.foulReactDur > 0) {
         const remain = this.foulReactT / this.foulReactDur;      // 1 → 0
-        const w = clamp((remain - 0.55) / 0.45, 0, 1);           // strong at start, gone by ~45% elapsed
-        const r = w * 2.4 * dt;
+        const w = clamp((remain - 0.3) / 0.7, 0, 1);             // spent over the first ~70% (a few steps)
+        const r = w * 2.2 * dt;
         this.pos.x += this.foulStaggerX * r;
         this.pos.z += this.foulStaggerZ * r;
       }
@@ -913,15 +913,17 @@ export class Player {
     // a HARD, off-centre hit can BLOW him back — a little hop off his feet and a
     // big stagger; a lighter one is just a stumble step; most are neither.
     const hard = kind === "hurt" && pl > 0.01;
-    const knock = hard && s > 0.5 && chance((s - 0.5) * 0.8);
-    this.foulStumble = hard && (knock || chance(0.12 + s * 0.5));
-    // a harder hit sells longer; a knockback needs time to fly and land
+    const knock = hard && s > 0.45 && chance(0.25 + (s - 0.45) * 1.1);   // blown back
+    // most hard contact makes him GIVE GROUND — a stagger of a few steps (the
+    // stagger drives real speed, so updateLegs actually steps the feet)
+    this.foulStumble = hard && (knock || chance(0.4 + s * 0.5));
+    // a harder hit sells longer; the stagger/knockback needs time to step & land
     this.foulReactDur = this.foulReactT =
-      kind === "and1" ? 1.1 : knock ? (1.0 + s * 0.4) : (0.6 + s * 0.6);
+      kind === "and1" ? 1.1 : knock ? (1.2 + s * 0.5) : (0.85 + s * 0.6);
     if (kind === "and1") this.jump(0.22, 0.4);           // the flex hop
-    else if (knock) this.jump(0.14 + s * 0.16, 0.5 + s * 0.2);   // popped off the floor
+    else if (knock) this.jump(0.16 + s * 0.18, 0.5 + s * 0.2);   // popped off the floor
     if (this.foulStumble) {
-      const step = knock ? (0.7 + s * 0.9) : (0.3 + s * 0.5);   // blown back vs a stumble
+      const step = knock ? (1.1 + s * 1.3) : (0.55 + s * 0.8);   // a few steps back
       this.foulStaggerX = this.foulPushX * step;
       this.foulStaggerZ = this.foulPushZ * step;
     } else { this.foulStaggerX = this.foulStaggerZ = 0; }
@@ -1122,6 +1124,8 @@ export class Player {
   private static readonly ACORN_CUT = 0.72;     // waist-chest cut height (the sit hinge)
   private static readonly ACORN_WAIST_R = 0.25; // waist radius (constructor's WR)
   private static readonly SEAT_SURF = 0.42;     // bench seat surface the folded waist rests on
+  private static readonly SIT_FOLD = 1.15;      // waist fold when sat (~66°, gentler than a hard 90°)
+  private static readonly ACORN_WAIST_LEN = 0.50; // pivot→waist tip length (from the lathe profile)
   private static readonly ACORN_FOOT_Z = 0.02;  // standing stance: feet sit toward the back
   private static readonly ACORN_SPLAY = 0.30;   // standing stance: toes fan outward (~17° each)
 
@@ -1150,22 +1154,31 @@ export class Player {
   // toward the chest side (front = -numberSide·Z, so rotation.x = +90°·ns maps
   // the downward waist onto -ns·Z), shoes move forward under the lap and back
   // down to the floor (the root is dropped by sync() while seated).
+  // Lowest point of the folded waist below the root (what rests on the seat).
+  // Derived from the fold angle so it stays correct as SIT_FOLD changes; reduces
+  // to the old (ACORN_CUT - ACORN_WAIST_R)=0.47 at a 90° fold.
+  private static acornSeatDrop(): number {
+    const f = Player.SIT_FOLD;
+    return Player.ACORN_CUT - Player.ACORN_WAIST_R * (Math.cos(f) + Math.sin(f));
+  }
   private foldAcornSeat(): void {
     const ns = this.numberSide;
-    this.acornWaistPivot.rotation.x = (Math.PI / 2) * ns;
+    const fold = Player.SIT_FOLD;                 // gentler than a hard 90°
+    this.acornWaistPivot.rotation.x = fold * ns;
     const s = this.height / 1.95;
-    // The feet grow out of the waist's BOTTOM — which, folded, faces forward at
-    // the lap's end — so they sit under that end, pitched toe-down: the collar
-    // aims up-and-back into the lap's underside, the toe rests on the floor,
-    // as if the same sprout point just changed its angle.
-    const TILT = 0.45;                     // toe-down pitch (local heel-up is -x for both sides)
+    // flatter feet planted on the floor read more like sitting than a steep
+    // toe-down. `lift` self-compensates the floor contact for the seat drop and
+    // the toe pitch; z is horizontal, so the foot stays grounded either way.
+    const TILT = 0.30;                     // toe-down pitch (local heel-up is -x for both sides)
     const toeDrop = 0.28 * Math.sin(TILT); // the pitched toe (z -0.28) dips this far below the node
-    // `lift` cancels the seated root drop (see sync) so the lowest point — the
-    // pitched toe — lands exactly on the floor
-    const lift = (Player.ACORN_CUT - Player.ACORN_WAIST_R) - Player.SEAT_SURF / s + toeDrop;
+    const RAISE = 0.24;                    // lift the feet off the floor (dangling look)
+    const lift = Player.acornSeatDrop() - Player.SEAT_SURF / s + toeDrop + RAISE;
     this.acornFootL.rotation.x = this.acornFootR.rotation.x = -TILT;
     this.acornFootL.position.y = this.acornFootR.position.y = lift;
-    this.acornFootL.position.z = this.acornFootR.position.z = -ns * 0.42;
+    // the feet sprout from UNDER the waist bottom (its forward reach shrinks with
+    // a gentler fold), dropping straight to the floor
+    const footZ = -ns * Player.ACORN_WAIST_LEN * Math.sin(fold) * 0.7;
+    this.acornFootL.position.z = this.acornFootR.position.z = footZ;
   }
   // Back to the standing arrangement (also safe to call in human mode).
   private unfoldAcornSeat(): void {
@@ -1285,7 +1298,7 @@ export class Player {
       // lifted back onto the floor by foldAcornSeat.
       const s = this.height / 1.95;
       const rootY = HUD_OPTS.model === "acorn"
-        ? Player.SEAT_SURF - (Player.ACORN_CUT - Player.ACORN_WAIST_R) * s
+        ? Player.SEAT_SURF - Player.acornSeatDrop() * s
         : Player.SEAT_HIP - Player.HIP_Y * s;
       this.root.position.set(this.pos.x, rootY + this.jumpY(), this.pos.z);
       this.root.rotation.x = 0;

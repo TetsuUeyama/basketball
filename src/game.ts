@@ -2,14 +2,14 @@ import { Scene, Vector3, Mesh } from "@babylonjs/core";
 import { Player, Ball } from "./entities";
 import { makeHandlerRing, hoopIndex, type Hoops } from "./court";
 import {
-  COURT, RIM, SHOOT_RANGE, THREE_DIST, PASS_SPEED,
+  COURT, RIM, THREE_DIST, PASS_SPEED,
   SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS, TEAM_COLORS, TEAM_NAMES,
 } from "./config";
 import { clamp, dist2D, dist2DTo, moveToward2D, chance, rand } from "./util";
 import { ROSTER, ROSTER_SIZE, STARTERS, TACTICS, rate, AbilityKey,
   scoringPower, usageFromRank } from "./attributes";
 
-export type BallMode = "held" | "pass" | "shot" | "loose" | "inbound" | "tipoff" | "freethrow" | "pause" | "subs" | "finale";
+export type BallMode = "held" | "charge" | "pass" | "shot" | "loose" | "inbound" | "tipoff" | "freethrow" | "pause" | "subs" | "finale";
 
 // how close (metres) a defender must be to the passing lane to threaten it
 const LANE_W = 1.1;
@@ -39,6 +39,8 @@ export class Game {
   readonly ball: Ball;
   private readonly ring: Mesh;
   private readonly tactics = TACTICS; // per-team game plan
+
+  // TEMP debug (remove): charge/contest/block telemetry
 
   // --- score / clock ---
   score: [number, number] = [0, 0];
@@ -621,10 +623,28 @@ export class Game {
     return 1.35 - rate(p.attr.reaction) * 0.75;      // ~1.27 (slow) .. ~0.6 (instant)
   }
 
-  // L速度: how far out this player is willing to shoot from (+特能ミドル).
+  // L速度(3P range) → how far out this player can comfortably shoot. Calibrated
+  // to the user's spec: 75 = the three-point line, 95 = the halfway line (and
+  // that is the CAP — nobody's comfortable range reaches past centre court).
+  // Below 75 the comfortable range falls INSIDE the arc; such a player can still
+  // launch from beyond it, but only with GATHER TIME (see gatherFor).
+  private static readonly SHOOT_ARC = THREE_DIST;   // 6.75 m (the three-point line)
+  private static readonly SHOOT_HALF = RIM.z;       // 13.0 m (rim → the centre line)
   private shootRangeOf(p: Player): number {
-    return SHOOT_RANGE - 0.7 + rate(p.attr.threeRange) * 2.4   // ~7.1 .. ~9.3 m
-      + (p.has("range") ? 1.2 : 0);
+    const r = Game.SHOOT_ARC + (p.attr.threeRange - 75)
+      * (Game.SHOOT_HALF - Game.SHOOT_ARC) / 20;   // 75→arc, 95→halfway, linear
+    // floor at ~mid-range: a poor L速度 shooter still takes 2s inside the arc (he
+    // just can't get to the 3-point line comfortably), capped at halfway.
+    return clamp(r, 4.5, Game.SHOOT_HALF) + (p.has("range") ? 1.0 : 0);
+  }
+
+  // Seconds of wind-up needed to launch from beyond the comfortable range: the
+  // further past shootRangeOf, the longer the gather. A low-L速度 player therefore
+  // cannot just quick-heave a deep three at the shot-clock buzzer — he needs time
+  // he doesn't have, so the clock dies (a violation) instead.
+  private gatherFor(p: Player, dHoop: number): number {
+    const over = dHoop - this.shootRangeOf(p);
+    return over <= 0 ? 0 : over * 0.22;   // ~0.22 s per metre beyond range
   }
 
   /** True if anyone on `team` has the given 特殊能力 (team-wide auras: 司令塔/DFライン). */
@@ -926,9 +946,9 @@ export class Game {
           this.shotClockViolation();
         }
       }
-      // the buzzer: a shot already in the air is allowed to finish (buzzer
-      // beater) — resolveShot hands the period end over once it lands
-      if (this.gameClock <= 0 && this.ballMode !== "shot") {
+      // the buzzer: a shot already in the air — or being gathered — is allowed to
+      // finish (buzzer beater); resolveShot hands the period end over once it lands
+      if (this.gameClock <= 0 && this.ballMode !== "shot" && this.ballMode !== "charge") {
         // don't freeze the instant the horn sounds — let a live play COAST for
         // a beat (players carry their momentum, the ball keeps rolling) before
         // the period actually ends
@@ -945,6 +965,7 @@ export class Game {
     // ball-state machine
     switch (this.ballMode) {
       case "held": this.updateLive(dt); break;
+      case "charge": this.updateCharge(dt); break;
       case "pass": this.updatePass(dt); break;
       case "shot": this.updateShot(dt); break;
       case "loose": this.updateLoose(dt); break;
@@ -1057,6 +1078,10 @@ export class Game {
         }
         break;
       }
+      case "charge":
+        this.shooter?.reach(b, true);                // ball loaded in the shot pocket
+        this.raiseAirborne(b, this.shooter);         // a defender who left early is already up
+        break;
       case "inbound":
         this.handler?.reach(b);                      // holds the ball to throw it in
         break;
@@ -1324,7 +1349,12 @@ export class Game {
     // has him smothered (then he can't get it off and the clock dies = violation).
     const gameBuzzer = this.gameClock > 0 && this.gameClock < 0.9;
     const shotBuzzer = this.shotClock < 0.45;
-    if ((gameBuzzer || (shotBuzzer && !this.denySmother(h, dDef))) && dHoop > 1.8) {
+    // he can only launch the deep one if there's clock left to GATHER it — a low
+    // L速度 player heaving from way behind the arc needs wind-up time he doesn't
+    // have, so the shot clock dies (violation) instead of an ugly deep prayer.
+    // (the end-of-quarter game buzzer is exempt: any desperation heave goes up.)
+    const canGather = this.shotClock >= this.gatherFor(h, dHoop);
+    if ((gameBuzzer || (shotBuzzer && canGather && !this.denySmother(h, dDef))) && dHoop > 1.8) {
       this.shoot(h, dHoop, dDef); return;
     }
 
@@ -1478,7 +1508,7 @@ export class Game {
       // ハンドラー/フロアジェネラル/ハブビッグ: まず配球。ただし「打たずにパス回し
       // だけ」にならないよう、空いた球は打ち、レーンが開けば仕掛けてギャップを作る。
       if (!this.frontT) { this.bringUpLane(h); return; }
-      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
+      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && canGather && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
       const inRange = dHoop <= this.shootRangeOf(h) + 0.3;
       const clockPush = clamp((SHOT_CLOCK * 0.5 - this.shotClock) / (SHOT_CLOCK * 0.5), 0, 1);   // 遅いほど打つ(残半分から)
       // a clean lane → attack to bend the defence (a big posts instead of dribbling)
@@ -1499,7 +1529,7 @@ export class Game {
       // 基本。無理な単独クリエイトはしないが、「クローズアウトには仕掛ける」ことで
       // ギャップを作り、開いた球はしっかり打つ（打たずに回すだけにしない）。
       if (!this.frontT) { this.bringUpLane(h); return; }
-      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
+      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && canGather && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
       const inRange = dHoop <= this.shootRangeOf(h) + 0.3;
       const clockPush = clamp((SHOT_CLOCK * 0.5 - this.shotClock) / (SHOT_CLOCK * 0.5), 0, 1);
       // ATTACK THE CLOSEOUT: a shooter with a live handle drives past a defender
@@ -1539,7 +1569,7 @@ export class Game {
     // 残クロックに対する相対しきい値(SHOT_CLOCK 依存)。7秒クロックでは ~2.5秒前後で
     // 初めて「打ち急ぎ」に入る（up-tempo は少し早い）。絶対秒だと短クロックで早過ぎた。
     const urgent = this.shotClock < SHOT_CLOCK * (0.28 + tac.pace * 0.14 * this.twWeight(h));
-    if (urgent && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
+    if (urgent && canGather && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
 
     // desire to do each thing = personality + skill + tactics(×連携) + scoring
     // role + 特殊能力 (ドリブラー/ストライカー/ドリブルキープ)
@@ -1560,6 +1590,7 @@ export class Game {
     // unless a pass-first player kicks it or an elite shooter has a wide-open look
     if ((beaten || laneOpen) && dHoop <= 9) {
       if (!beaten && isThree && dDef > 2.0 && rate(h.attr.threeAcc) > 0.65
+          && dHoop <= this.shootRangeOf(h) + 0.3            // must be within his L速度 range
           && chance(0.25 + tac.threeBias * 0.4 * tw)) { this.shoot(h, dHoop, dDef); return; }
       const driveChance = beaten ? 1 : clamp(0.35 + driveDesire * 0.55, 0.25, 0.95);
       if (chance(driveChance)) { this.driveDecision(h); return; }
@@ -2942,7 +2973,70 @@ export class Game {
     }
   }
 
+  // Deciding to shoot starts a CHARGE (gather) — the ball is loaded for a beat
+  // before it launches. The wind-up is longer from range / for a low S技術, and
+  // shortest on a catch-and-shoot. This gather is the window in which the man
+  // guarding him can read the shot and close out to contest (see updateCharge);
+  // the actual make% / block / launch happen at RELEASE (releaseShot).
+  private chargeT = 0;
+  private chargeShooter: Player | null = null;
+  private chargeDHoop = 0;
+  private chargeDDef = 0;
+  private shotWindup = 0;   // the gather length of the shot being launched (for tryBlock)
   private shoot(h: Player, dHoop: number, dDef: number): void {
+    // BUZZER BEATER: no time to gather — he just flings it up as the horn sounds.
+    // It's a pure accuracy trade-off (releaseShot already floors the make%), so
+    // there's no charge phase and no wind-up (the ball goes NOW).
+    if (this.gameClock > 0 && this.gameClock < 0.9) {
+      this.shotWindup = 0;
+      this.releaseShot(h, dHoop, dDef);
+      return;
+    }
+    let windup = 0.16 + this.gatherFor(h, dHoop) + (1 - rate(h.attr.shotTech)) * 0.12;
+    if (h.quickT > 0 && h.has("oneTouch")) windup *= 0.55;   // ダイレクト: quick release
+    this.shotWindup = windup;
+    this.chargeShooter = h;
+    this.chargeDHoop = dHoop;
+    this.chargeDDef = dDef;
+    this.chargeT = windup;
+    this.shooter = h;              // pose owner during the gather
+    this.handler = null;
+    this.ballMode = "charge";
+    // the ball rides up into the shot pocket for the gather
+    this.ball.pos.set(h.pos.x, 1.45, h.pos.z);
+  }
+
+  // One frame of the gather: hold the ball loaded, and let the on-ball defender
+  // READ the shot and CLOSE OUT / leave his feet to contest. A defender who was
+  // caught leaning on the drive (beaten / recovering) can't get there — that's
+  // how over-playing the dribble gives up a clean look.
+  private updateCharge(dt: number): void {
+    const h = this.chargeShooter;
+    if (!h) { this.ballMode = "held"; return; }
+    this.chargeT -= dt;
+    this.ball.pos.set(h.pos.x, 1.45, h.pos.z);   // ball loaded in the pocket
+    const d = this.teamPlayers(1 - h.team)[h.slot];   // the man guarding the shooter
+    if (d && !d.airborne && d.landT <= 0) {
+      const beaten = h.beatenT > 0 || h.powerT > 0;   // he blew by → the closeout is late
+      const gap = dist2D(d.pos, h.pos);
+      // hard closeout toward the shooter (a beaten defender is out of the play)
+      if (!beaten && gap > 0.75) {
+        const clo = d.accelToward(dt, h.pos.x, h.pos.z, 1.15) * dt;
+        moveToward2D(d.pos, h.pos.x, h.pos.z, clo);
+        this.clampCourt(d.pos);
+      }
+      // as the release nears, a defender who's close and read it LEAVES HIS FEET
+      // to challenge — 反応/守判断 time it, ジャンプ gives the length to reach it
+      if (!beaten && this.chargeT < 0.13 && dist2D(d.pos, h.pos) < 1.7) {
+        const read = rate(d.attr.reaction) * 0.5 + rate(d.attr.defense) * 0.5;
+        if (chance((0.25 + read * 1.5) * dt * 9)) d.jump(0.5 + rate(d.attr.jump) * 0.35, 0.6);
+      }
+    }
+    if (this.chargeT <= 0) this.releaseShot(h, this.chargeDHoop, this.chargeDDef);
+  }
+
+  private releaseShot(h: Player, dHoop: number, dDef: number): void {
+    this.chargeShooter = null;
     this.pendingAssist = this.assistCreditFor(h);
     const isThree = dHoop > THREE_DIST;
     this.shotPoints = isThree ? 3 : 2;
@@ -3118,7 +3212,13 @@ export class Game {
   private tryBlock(shooter: Player, isFinish: boolean): Player | null {
     // finishes can be met by help rotating over from the paint; a perimeter
     // jumper only by a man right in the shooter's face
-    const range = isFinish ? 2.1 : 1.4;
+    // a jumper is contestable a touch further out now that the defender closes
+    // out during the gather (updateCharge), not just if he was already glued on
+    const range = isFinish ? 2.1 : 1.7;
+    // a LONG gather (a deep heave / a slow, low-S技術 release) is a sitting duck:
+    // the defender has time to set and rise into it, so the block chance climbs
+    // with the wind-up. A quick catch-and-shoot barely gives him a window.
+    const windupEdge = isFinish ? 0 : clamp(this.shotWindup - 0.3, 0, 0.8);
     let best: Player | null = null;
     let bestP = 0;
     for (const d of this.teamPlayers(1 - shooter.team)) {
@@ -3131,10 +3231,11 @@ export class Game {
       // height is a real rim-protection edge: length swats shots the shorter
       // defender can't reach
       const heightAdv = clamp((d.height - shooter.height) * 0.9, -0.25, 0.4);
-      let p = (isFinish ? 0.30 : 0.20) * (0.2 + blk * 1.35) * close + heightAdv * close;
-      // ALREADY IN THE AIR when the shot goes up (the early-contest gamble
-      // paid off): hands are at their peak right in the shooting pocket
-      if (d.airborne) p += 0.16 * close;
+      let p = (isFinish ? 0.30 : 0.23) * (0.2 + blk * 1.35) * close + heightAdv * close;
+      p += windupEdge * (0.18 + blk * 0.2) * close;   // a slow gather is more blockable
+      // ALREADY IN THE AIR when the shot goes up (read the gather, rose into it):
+      // hands are at their peak right in the shooting pocket
+      if (d.airborne) p += 0.18 * close;
       // ...but a man who jumped TOO early is coming down / regathering as the
       // shot releases — barely a contest at all (the gamble's other edge)
       else if (d.landT > 0) p *= 0.3;
@@ -3153,11 +3254,29 @@ export class Game {
     shooter.stats.fga++;             // a blocked shot is a missed attempt
     if (this.shotPoints === 3) shooter.stats.tpa++;
     this.pendingAssist = null;
-    blocker.jump(0.9, 0.6);
+    // the blocker rises and meets the ball with his hand right at the release
+    blocker.jump(0.95, 0.6);
     this.setEvent("BLOCK!", blocker.team);
-    this.possession = shooter.team;            // loose ball at the attacked rim
     this.handler = null;
-    this.startRebound();
+
+    // The hand SWATS the ball off its flight: it is knocked away from the block
+    // point (the shooter's release), rejected back OUT away from the rim with a
+    // sideways spray, then falls under gravity as a live loose ball. A stronger
+    // blocker (ジャンプ/守判断) sends it further.
+    const rim = this.attackFloor(shooter.team);
+    let ox = shooter.pos.x - rim.x, oz = shooter.pos.z - rim.z;
+    let ol = Math.hypot(ox, oz);
+    if (ol < 0.9) {                            // a rim finish: swat it out toward the floor
+      ox = rand(-1, 1); oz = -Math.sign(rim.z || 1) * rand(0.6, 1.3);
+      ol = Math.hypot(ox, oz) || 1;
+    }
+    ox /= ol; oz /= ol;
+    const px = -oz, pz = ox, kick = rand(-0.8, 0.8);   // sideways spray off the hand
+    const power = 3.0 + (rate(blocker.attr.jump) * 0.5 + rate(blocker.attr.defense) * 0.5) * 3.0;
+    this.ball.pos.set(shooter.pos.x, 2.15, shooter.pos.z);   // met up at the release
+    this.ball.vel.set((ox + px * kick) * power, rand(0.8, 2.4), (oz + pz * kick) * power);
+    blocker.reach(this.ball.pos, true);        // hand on the ball at contact
+    this.goLoose(shooter.team, 2.6, { rebound: true });
   }
 
   // ---- fouls & free throws ----------------------------------------------
