@@ -501,9 +501,9 @@ export class UI {
           if (s > bestS) { bestS = s; best = nm; }
         }
         def.evalRole = best || undefined;
-        def.defRole = this.pickDefRole(def);   // sensible default DEFENSE role too
         if (best) taken.set(best, (taken.get(best) ?? 0) + 1);
       }
+      this.assignDefRoles(t);   // draft a balanced set of DEFENSE roles across the unit
     }
   }
 
@@ -738,15 +738,70 @@ export class UI {
   // Auto default DEFENSE role from a player's ratings: a strong defender locks
   // down (two-way if he's also a scorer), a rim-protecting big anchors, a high-
   // usage offensive specialist conserves (省エネ), everyone else is バランス.
-  private pickDefRole(def: PlayerDef): string {
+  // Fit score for each DEF role from this player's position, physique and
+  // defensive strengths — higher = better suited. assignDefRoles drafts a
+  // balanced lineup from these; pickDefRole is the single-player pick.
+  private defRoleFits(def: PlayerDef): Record<string, number> {
     const a = def.attr;
-    const defSkill = (a.defense + a.reaction + a.agility) / 300;      // 0..1
-    const offSkill = (a.aggression + a.threeAcc + a.midAcc) / 300;    // 0..1
+    const r = (x: number) => Math.max(0, Math.min(1, x / 100));
+    const def_ = r(a.defense), rea = r(a.reaction), agi = r(a.agility);
+    const jmp = r(a.jump), dnk = r(a.dunk), bal = r(a.balance);
+    const mnt = r(a.mental), tmw = r(a.teamwork);
+    const ht = Math.max(0, Math.min(1, (def.height - 1.85) / 0.3));   // 1.85m→0 .. 2.15m→1
+    const off = Math.max(r(a.threeAcc), r(a.midAcc)) * 0.55 + r(a.aggression) * 0.45; // scoring load
     const big = def.role === "PF" || def.role === "C";
-    if (big && (a.jump + a.dunk) / 200 > 0.64 && defSkill > 0.58) return "リムプロテクター";
-    if (defSkill > 0.68) return offSkill > 0.66 ? "ハッスルディフェンダー" : "ロックダウン";
-    if (offSkill > 0.66 && defSkill < 0.55) return "省エネ";
-    return "バランス";
+    const guard = def.role === "PG" || def.role === "SG";
+    const wing = def.role === "SF";
+    const perim = guard || wing;
+    return {
+      リムプロテクター:       ht * 0.32 + jmp * 0.24 + dnk * 0.24 + def_ * 0.20 + (big ? 0.10 : -0.16),
+      ロックダウン:           (def_ * 0.44 + agi * 0.32 + rea * 0.18 + bal * 0.06) * (1 - off * 0.20) + (perim ? 0.06 : -0.10),
+      パスカット:             (rea * 0.40 + agi * 0.34 + def_ * 0.26) + (perim ? 0.05 : -0.08) - off * 0.10,
+      スイッチディフェンダー:  agi * 0.26 + def_ * 0.26 + bal * 0.18 + ht * 0.22 + ((wing || def.role === "PF") ? 0.11 : -0.05),
+      ヘルプディフェンダー:    def_ * 0.32 + mnt * 0.28 + rea * 0.18 + bal * 0.16,
+      守備司令塔:             mnt * 0.40 + tmw * 0.36 + def_ * 0.24 + (guard ? 0.06 : -0.08),
+      ハッスルディフェンダー:  (def_ + agi + rea) / 3 * 0.48 + off * 0.28 + bal * 0.20,
+      省エネ:                 (off - 0.5) * 1.2 + (0.5 - def_) * 0.9 + 0.28,   // a scorer who can't defend
+      バランス:               0.50,                                            // steady baseline fallback
+    };
+  }
+  private static readonly DEF_ROLE_SPREAD = 0.15;   // penalty per repeat when spreading roles across a unit
+
+  // Best-fit DEF role for one player, optionally spreading duplicates (a role
+  // already used in his unit costs a penalty). Used when a single player is placed.
+  private pickDefRole(def: PlayerDef, taken?: Map<string, number>): string {
+    const fit = this.defRoleFits(def);
+    let best = "バランス", bestV = -Infinity;
+    for (const role of Object.keys(fit)) {
+      const s = fit[role] - (taken ? (taken.get(role) ?? 0) * UI.DEF_ROLE_SPREAD : 0);
+      if (s > bestV) { bestV = s; best = role; }
+    }
+    return best;
+  }
+
+  // Draft DEF roles across a UNIT (the five starters, then the eight bench) so the
+  // lineup gets a BALANCED defence: each role goes to the player who fits it best,
+  // most-confident assignments first, with a penalty that spreads duplicates — so
+  // a lineup ends up with a rim protector, an on-ball lock, a lane thief, a floor
+  // general, help men, etc., matched to who is actually suited to each.
+  private assignDefRoles(team: number): void {
+    for (const unit of [ROSTER[team].slice(0, STARTERS), ROSTER[team].slice(STARTERS)]) {
+      const taken = new Map<string, number>();
+      const rem = unit.map((_, i) => i);
+      const fitsOf = unit.map((d) => this.defRoleFits(d));
+      while (rem.length) {
+        let bi = rem[0], brole = "バランス", bv = -Infinity;
+        for (const pi of rem) {
+          for (const role of Object.keys(fitsOf[pi])) {
+            const s = fitsOf[pi][role] - (taken.get(role) ?? 0) * UI.DEF_ROLE_SPREAD;
+            if (s > bv) { bv = s; bi = pi; brole = role; }
+          }
+        }
+        unit[bi].defRole = brole;
+        taken.set(brole, (taken.get(brole) ?? 0) + 1);
+        rem.splice(rem.indexOf(bi), 1);
+      }
+    }
   }
 
   // The weights actually used for a player: his hand-set 評価ロール, or his
@@ -1921,7 +1976,12 @@ export class UI {
       // "forgot to set a role" gap the user hit) — offence by axes, defence by
       // ratings; choice order back to auto.
       nd.evalRole = this.bestOffRole(nd);
-      nd.defRole = this.pickDefRole(nd);
+      // pick his DEF role to FIT him and to fill a gap in his unit (teammates' roles
+      // left as they are — spread against what's already taken there)
+      const unit = idx < STARTERS ? ROSTER[team].slice(0, STARTERS) : ROSTER[team].slice(STARTERS);
+      const takenDef = new Map<string, number>();
+      for (const d of unit) if (d !== nd && d.defRole) takenDef.set(d.defRole, (takenDef.get(d.defRole) ?? 0) + 1);
+      nd.defRole = this.pickDefRole(nd, takenDef);
       this.assignRankFor(nd, team, idx);   // primary by ability (teammates untouched)
       this.cancelCarry();
       this.refreshEditors();

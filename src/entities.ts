@@ -746,7 +746,7 @@ export class Player {
    *  (legs, feet) keeps its own facing — receiving on the run, shading a driver
    *  while sprinting alongside. Clamped to TWIST_MAX and eased; aiming near the
    *  root's own facing (or standing square) unwinds it back to zero. */
-  twistToward(x: number, z: number, dt: number): void {
+  twistToward(x: number, z: number, dt: number, maxTwist = Player.TWIST_MAX, rate = 10): void {
     const s = this.numberSide;
     const fx = x - this.pos.x, fz = z - this.pos.z;
     let want = 0;
@@ -754,11 +754,31 @@ export class Player {
       let d = Math.atan2(-s * fx, -s * fz) - this.root.rotation.y;
       while (d > Math.PI) d -= 2 * Math.PI;
       while (d < -Math.PI) d += 2 * Math.PI;
-      want = clamp(d, -Player.TWIST_MAX, Player.TWIST_MAX);
+      want = clamp(d, -maxTwist, maxTwist);
     }
-    const step = 10 * dt;   // the chest turns quicker than the feet (faceSmooth's 8)
+    const step = rate * dt;   // the chest turns quicker than the feet (faceSmooth's 8)
     this.torsoTwist += clamp(want - this.torsoTwist, -step, step);
     this.torsoNode.rotation.y = this.torsoTwist;
+  }
+
+  /** Orient the CHEST to face (x,z) NOW (no easing) — a two-handed pass is thrown
+   *  chest-on to the target. The torso twists there; the feet only turn by the
+   *  part the torso can't cover (|twist| capped at TWIST_MAX), so the feet may lag
+   *  ("足はズレていても") while the upper body lands on the receiver. */
+  faceChestToward(x: number, z: number): void {
+    const s = this.numberSide;
+    const fx = x - this.pos.x, fz = z - this.pos.z;
+    if (Math.abs(fx) + Math.abs(fz) < 0.05) return;
+    const want = Math.atan2(-s * fx, -s * fz);       // desired chest world yaw
+    let twist = want - this.root.rotation.y;
+    while (twist > Math.PI) twist -= 2 * Math.PI;
+    while (twist < -Math.PI) twist += 2 * Math.PI;
+    if (Math.abs(twist) > Player.TWIST_MAX) {          // beyond the torso's reach → turn the feet the excess
+      this.root.rotation.y += twist - Math.sign(twist) * Player.TWIST_MAX;
+      twist = Math.sign(twist) * Player.TWIST_MAX;
+    }
+    this.torsoTwist = twist;
+    this.torsoNode.rotation.y = twist;
   }
 
   /** Square the chest back over the hips instantly (bench seat, resets). */
@@ -1057,6 +1077,7 @@ export class Player {
    * Call once per frame after all movement/collisions have resolved.
    */
   tickMotion(dt: number, resting: boolean): void {
+    this.lastDt = dt;   // remembered so rate-limited arm slews know the frame length
     if (dt > 0) {
       const moved = Math.hypot(this.pos.x - this.prevX, this.pos.z - this.prevZ);
       this.curSpd = Math.min(moved / dt, 12);
@@ -1423,8 +1444,17 @@ export class Player {
 
   // elbow bend: forward (toward the chest, -numberSide·Z), matching the arm/leg
   // convention. Straight (0) whenever the hand must reach the ball.
+  // The FOREARM (elbow) eases toward its bend at the same rate as the upper arm
+  // when a slew is active — so the two segments move independently, the forearm
+  // straightening/folding at its own controlled speed rather than snapping.
   private bendElbow(node: TransformNode, amount: number): void {
-    node.rotation.x = amount * this.numberSide;
+    const target = amount * this.numberSide;
+    if (this.armRateCap > 0) {
+      const k = 1 - Math.exp(-this.armRateCap * this.lastDt);
+      node.rotation.x += (target - node.rotation.x) * k;
+    } else {
+      node.rotation.x = target;
+    }
   }
 
   /** Both arms hang at the sides, elbows slightly bent (default pose). */
@@ -1445,6 +1475,10 @@ export class Player {
   // in step with the feet. Rests at a walk/standstill. poseHands() calls this
   // for everyone, then overrides ball arms.
   private backArms = false;   // hysteresis so the style doesn't flicker at the threshold
+  private lastDt = 1 / 60;    // last frame length, for rate-limited arm slews
+  // While > 0, setArmDir turns the arm toward its target at this many rad/s instead
+  // of snapping — a weak defender re-orients his hands slowly, so a switch lags.
+  private armRateCap = 0;
   runArms(): void {
     const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
     if (frac < 0.16) { this.backArms = false; this.handsRest(); return; }
@@ -1498,22 +1532,72 @@ export class Player {
   /** Dribble/hold the ball with the hand on the SAME side it sits — so a ball
    *  carried to the left hip is held with the LEFT hand instead of reaching the
    *  right arm across (through) the body, and vice-versa. */
-  reachDribble(world: Vector3, useRight: boolean): void {
+  reachDribble(world: Vector3, useRight: boolean, rate = 0): void {
     const near = useRight ? this.armPivotR : this.armPivotL;
     const nearElbow = useRight ? this.elbowR : this.elbowL;
     const far = useRight ? this.armPivotL : this.armPivotR;
     const farElbow = useRight ? this.elbowL : this.elbowR;
+    this.armRateCap = rate;   // > 0 → the hand re-places at dribble-accuracy speed
     this.aimArm(near, world);
-    nearElbow.rotation.x = 0;
+    this.bendElbow(nearElbow, 0);   // forearm straightens toward the ball, eased
+    this.armRateCap = 0;
     far.rotationQuaternion = Quaternion.Identity();
     this.bendElbow(farElbow, 0.28);
   }
 
-  /** Spread both arms out wide — active hands to wall off the ball-handler. */
-  armsWide(): void {
+  /** Spread both arms out wide — active hands to wall off a side-to-side drive.
+   *  `rate` (rad/s) rate-limits the switch; 0 snaps (bench / non-defensive use). */
+  armsWide(rate = 0): void {
+    this.armRateCap = rate;
     this.setArmDir(this.armPivotL, -1, -0.35, 0.35);
     this.setArmDir(this.armPivotR, 1, -0.35, 0.35);
-    this.elbowL.rotation.x = this.elbowR.rotation.x = 0;   // arms out straight
+    this.bendElbow(this.elbowL, 0);   // forearms straighten out, eased
+    this.bendElbow(this.elbowR, 0);
+    this.armRateCap = 0;
+  }
+
+  /** Cut off a straight drive: the hand nearer the ball goes out FRONT and low to
+   *  wall off penetration and stab at the ball (the steal), the off hand rides low
+   *  and out for balance in the slide. `rate` rate-limits the re-orient. */
+  guardDrive(world: Vector3, useRight: boolean, rate = 0): void {
+    this.armRateCap = rate;
+    const near = useRight ? this.armPivotR : this.armPivotL;
+    const nearElbow = useRight ? this.elbowR : this.elbowL;
+    const far = useRight ? this.armPivotL : this.armPivotR;
+    const farElbow = useRight ? this.elbowL : this.elbowR;
+    this.aimArm(near, world);                 // front hand on the ball
+    this.bendElbow(nearElbow, 0);             // forearm straightens, eased
+    this.setArmDir(far, useRight ? -0.75 : 0.75, -0.55, 0.15);   // off hand low & out
+    this.bendElbow(farElbow, 0);
+    this.armRateCap = 0;
+  }
+
+  /** Deny the pass: one hand thrown out on a DIAGONAL — out to the ball side, up,
+   *  and angled back toward the basket — to wall the lane so a pass can't slip
+   *  BEHIND him. A swing laterally across his chest is conceded (that's fine). */
+  denyLane(useRight: boolean, rate = 0): void {
+    this.armRateCap = rate;
+    const s = useRight ? 1 : -1;
+    const near = useRight ? this.armPivotR : this.armPivotL;
+    const nearElbow = useRight ? this.elbowR : this.elbowL;
+    const far = useRight ? this.armPivotL : this.armPivotR;
+    const farElbow = useRight ? this.elbowL : this.elbowR;
+    this.setArmDir(near, s * 0.85, 0.35, -0.4);   // out, up, angled behind him
+    this.bendElbow(nearElbow, 0);                  // deny arm straightens, eased
+    this.setArmDir(far, -s * 0.3, -0.5, 0.1);      // trail arm relaxed and low
+    this.bendElbow(farElbow, 0.2);
+    this.armRateCap = 0;
+  }
+
+  /** Straight-up shot contest: both hands vertical, challenging without leaving
+   *  the floor (an airborne contest reaches for the ball instead). */
+  handsUp(rate = 0): void {
+    this.armRateCap = rate;
+    this.setArmDir(this.armPivotL, -0.14, 1, 0.06);
+    this.setArmDir(this.armPivotR, 0.14, 1, 0.06);
+    this.bendElbow(this.elbowL, 0);   // forearms straighten up, eased
+    this.bendElbow(this.elbowR, 0);
+    this.armRateCap = 0;
   }
 
   // Point an arm from its shoulder toward a world point — direction only, so the
@@ -1538,7 +1622,21 @@ export class Player {
 
   private setArmDir(pivot: TransformNode, dx: number, dy: number, dz: number): void {
     const len = Math.hypot(dx, dy, dz) || 1;
-    pivot.rotationQuaternion = aimDownTo(dx / len, dy / len, dz / len);
+    const target = aimDownTo(dx / len, dy / len, dz / len);
+    const cur = pivot.rotationQuaternion;
+    // Rate-limited (defensive) re-orient: ease the arm toward the target no faster
+    // than armRateCap rad/s, so a low-defence player's hands lag on the switch. A
+    // snap write (armRateCap 0, or no current orientation) keeps ball arms crisp.
+    if (this.armRateCap > 0 && cur) {
+      // Exponential ease — move a fixed FRACTION toward the target each frame, so
+      // small target jitter (a bouncing ball, a read flickering between poses) is
+      // damped too, not only big switches. The fraction (settling speed) scales
+      // with defence: a weak defender's hands drift, an elite one's snap in.
+      const k = 1 - Math.exp(-this.armRateCap * this.lastDt);
+      pivot.rotationQuaternion = Quaternion.Slerp(cur, target, k);
+    } else {
+      pivot.rotationQuaternion = target;
+    }
   }
 }
 

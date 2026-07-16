@@ -104,6 +104,8 @@ export class Game {
   private shooter: Player | null = null; // who is taking the current shot
   private shooterFinishing = false;      // true for a layup/dunk (drives toward the rim)
   private finishSpot = new Vector3();    // where the finisher gathers & rises — short of the rim, not under it
+  private finishVX = 0;                   // drive momentum carried into the finish (decays in the air)
+  private finishVZ = 0;
   private shotApex = 2.2;   // arc height — low for layups/dunks, high for jumpers
   // long-shot ball cam: while a beyond-the-arc bomb is in the air (and for a
   // beat after it lands) the broadcast camera chases the ball itself, so the
@@ -115,6 +117,7 @@ export class Game {
   private looseT = 0;        // safety timeout before a loose ball is guaranteed grabbed
   private looseTips = 0;     // how many times the ball has been tipped while loose
   private looseOff = 0;      // the offensive team when the ball came loose (for the rebound label)
+  private lastTouch: Player | null = null;   // last player to touch the ball — decides out-of-bounds throw-ins
   private looseIsRebound = false; // true when the loose ball came off a missed shot
   private looseStealBy: Player | null = null;     // defender who poked/deflected it loose
   private looseStealVictim: Player | null = null; // ball-handler/passer who lost it
@@ -150,6 +153,10 @@ export class Game {
   // dead-ball pause so the viewer can register a score / foul before the restart
   private pauseT = 0;
   private pauseNext: (() => void) | null = null;
+  // out-of-bounds: the thrower walks to the spot during the announcement pause
+  private oobWalker: Player | null = null;
+  private oobSpot = new Vector3();
+  private oobTeam = 0;
   // true while the ball is physically dropping+bouncing during a dead-ball
   // pause (e.g. after a made basket it falls through the net and bounces)
   private ballFalling = false;
@@ -612,6 +619,44 @@ export class Game {
     return best;
   }
 
+  private nearestDefender(p: Player): Player | null {
+    let best = Infinity, who: Player | null = null;
+    for (const d of this.teamPlayers(1 - p.team)) {
+      const dd = dist2D(d.pos, p.pos);
+      if (dd < best) { best = dd; who = d; }
+    }
+    return who;
+  }
+
+  // How well THIS defender protects the rim against THIS shooter — pure position
+  // + physique, no role label: length over the shooter, ヘッド (rim protection),
+  // ジャンプ and 守備. A rangy shot-blocking big scores high, a switched-on guard
+  // low. Centred so a run-of-the-mill contest ≈ 0. This is what makes "keep your
+  // big home" real interior defence and a guard caught on the roll a layup line.
+  private rimProtect(d: Player, shooter: Player): number {
+    return clamp(
+      (d.height - shooter.height) * 0.5
+      + rate(d.attr.dunk) * 0.35            // ヘッド = rim protection / shot-blocking
+      + rate(d.attr.jump) * 0.25
+      + rate(d.attr.defense) * 0.2
+      - 0.4,                                // baseline: an average contest sits near 0
+      -0.4, 0.6);
+  }
+
+  // How well THIS defender contests a jumper — quickness to close out (反応/敏捷),
+  // 守備 and a little reach. A rangy, sharp perimeter defender flies at the shot; a
+  // slow big switched onto a shooter closes out late. Centred so an average
+  // contest ≈ 0. This is the perimeter half of the same interdependence: switch
+  // your big onto a guard, or play slow-footed defenders out top, and the threes
+  // fall.
+  private perimContest(d: Player, shooter: Player): number {
+    return clamp(
+      rate(d.attr.reaction) * 0.35 + rate(d.attr.agility) * 0.3 + rate(d.attr.defense) * 0.3
+      + (d.height - shooter.height) * 0.15
+      - 0.5,
+      -0.35, 0.4);
+  }
+
   // 連携: how faithfully this player executes the team's tactical plan — the
   // multiplier applied to every tactic-driven term in his decisions.
   private twWeight(p: Player): number {
@@ -645,6 +690,20 @@ export class Game {
   private gatherFor(p: Player, dHoop: number): number {
     const over = dHoop - this.shootRangeOf(p);
     return over <= 0 ? 0 : over * 0.22;   // ~0.22 s per metre beyond range
+  }
+
+  // How long this player would GATHER this shot (the overhead load before release).
+  private shotWindupFor(h: Player, dHoop: number): number {
+    let w = 0.16 + this.gatherFor(h, dHoop) + (1 - rate(h.attr.shotTech)) * 0.12;
+    if (h.quickT > 0 && h.has("oneTouch")) w *= 0.55;   // ダイレクト: quick release
+    return w;
+  }
+
+  // A shot he shouldn't attempt: a LONG overhead load with a defender in his
+  // airspace is asking to be stripped/blocked before it goes up — better to
+  // drive, kick it, or reset than load up into a waiting shot-blocker.
+  private wontLoadUp(h: Player, dHoop: number, dDef: number): boolean {
+    return this.shotWindupFor(h, dHoop) > 0.45 && dDef < 1.7 && h.beatenT <= 0;
   }
 
   /** True if anyone on `team` has the given 特殊能力 (team-wide auras: 司令塔/DFライン). */
@@ -722,6 +781,7 @@ export class Game {
     this.subEvents.length = 0;
     this.subWalkers = [];
     this.subNext = null;
+    this.oobWalker = null;
     this.cheerT = [-1, -1];
     this.longShot = false;
     this.longShotHoldT = 0;
@@ -1017,8 +1077,18 @@ export class Game {
   private updateFacing(dt: number): void {
     if (this.ballMode === "subs" || this.ballMode === "finale") return;
     const b = this.ball.pos;
-    const step = 8 * dt;   // rad this frame: fast enough to follow the ball, eased enough not to snap
     for (const p of this.players) {
+      // the PASSER delivers a two-handed pass CHEST-ON: snap his upper body to the
+      // receiver NOW (the pass is too quick for an eased turn), feet left where
+      // they are. Done BEFORE the airborne skip so a JUMP pass out of a double-team
+      // (trapKickOut leaves the floor) still turns chest-on to the receiver.
+      if (this.ballMode === "pass" && p === this.passer && this.passTo) {
+        p.faceChestToward(this.passTo.pos.x, this.passTo.pos.z);
+        continue;
+      }
+      // OFF THE FLOOR he can't re-orient: a jumper (shooter, contester, tip) holds
+      // whatever way he was facing at take-off until he lands — no mid-air turns.
+      if (p.airborne) continue;
       const aim = (p === this.handler || p === this.shooter) ? this.attackFloor(p.team) : b;
       // Lower body: while running, the legs face the direction of TRAVEL and the
       // torso twists toward the play (twistToward) — receiving on the move,
@@ -1031,14 +1101,28 @@ export class Game {
       if (spd > 1.5) {
         const ax = aim.x - p.pos.x, az = aim.z - p.pos.z;
         const al = Math.hypot(ax, az);
-        // > ~105° between travel and aim = a retreat, keep facing the aim
-        if (al > 0.05 && (p.velX * ax + p.velZ * az) / (spd * al) > -0.26) {
+        // Moving toward the aim → legs face travel. Moving AWAY (a retreat) a
+        // slow contain-shuffle stays chest-on (keep facing the aim, backpedal) —
+        // BUT a committed SPRINT away (chasing a loose ball, or a beaten defender
+        // sprinting back to recover) turns and RUNS: face the travel direction so
+        // he doesn't moon-walk. faceSmooth eases it, so the turn is gradual.
+        const committed = spd > p.runSpeed * 0.72;
+        if (al > 0.05 && ((p.velX * ax + p.velZ * az) / (spd * al) > -0.26 || committed)) {
           lx = p.pos.x + p.velX;
           lz = p.pos.z + p.velZ;
         }
       }
-      p.faceSmooth(lx, lz, step);
-      p.twistToward(aim.x, aim.z, dt);
+      // How fast he can WHIP his body around to a new direction — no instant
+      // spins. Driven by クイックネス(敏捷性) plus his role skill: a DEFENDER turns
+      // on 敏捷性 + ディフェンス (staying with his man), an attacker on オフェンス +
+      // 敏捷性. Low ratings turn slowly (a beat to change direction), elite ones
+      // snap around — but never instantly.
+      const offense = p.team === this.possession;
+      const quick = rate(p.attr.agility);
+      const skill = offense ? rate(p.attr.offense) : rate(p.attr.defense);
+      const turnRate = 2.2 + (quick * 0.6 + skill * 0.4) * 6;   // ~2.2 (slow) .. ~8.2 (quick) rad/s
+      p.faceSmooth(lx, lz, turnRate * dt);                       // lower body (legs/hips)
+      p.twistToward(aim.x, aim.z, dt, undefined, turnRate * 1.25); // upper body (chest), a touch quicker
     }
   }
 
@@ -1059,8 +1143,28 @@ export class Game {
   // their arms at their sides.
   private poseHands(): void {
     if (this.ballMode === "finale") return;   // updateFinale owns every pose
-    for (const p of this.players) p.runArms();   // swing the arms with the run (rest if slow)
     const b = this.ball.pos;
+    // Defensive stances are RATE-LIMITED — they slew toward the target pose rather
+    // than snapping — so runArms must not stomp those arms first. Work out who is
+    // holding a defensive stance this frame, apply it, and skip their runArms.
+    const posed = new Set<Player>();
+    if (this.ballMode === "held" && this.handler) {
+      this.poseOnBallHands(this.handler, b, posed);   // what the on-ball defender answers
+      this.poseDenyHands(this.handler, b, posed);       // off-ball defenders denying the pass
+      posed.add(this.handler);   // his dribble hand slews too (below) — don't stomp it
+    } else if (this.ballMode === "charge" && this.shooter) {
+      const cd = this.onBallDefender(this.shooter);     // a grounded contest goes STRAIGHT UP
+      if (cd && !cd.airborne && dist2D(cd.pos, this.shooter.pos) < 2.2) {
+        cd.handsUp(this.defArmRate(cd)); posed.add(cd);
+      }
+    }
+    // a shooter frozen in his follow-through owns his own arms (held below) — even
+    // grounded (a set jumper that doesn't leave the floor) — so don't let runArms
+    // pump them back down during his cooldown
+    if (this.shooter && this.shooter.coolT > 0 && this.shooter !== this.handler) {
+      posed.add(this.shooter);
+    }
+    for (const p of this.players) if (!posed.has(p)) p.runArms();   // run swing / rest
     switch (this.ballMode) {
       case "held": {
         if (this.handler) {
@@ -1068,13 +1172,7 @@ export class Game {
           // dribbled with the hand on the SAME side the ball is carried (a hip
           // carry uses the near hand, not the far arm reaching across the body)
           const bw = new Vector3(b.x, 0.95, b.z);
-          this.handler.reachDribble(bw, this.handler.dribbleWithRight(bw));
-          // the man guarding him plays active hands; right on top, he stabs at it
-          const d = this.onBallDefender(this.handler);
-          if (d) {
-            if (dist2D(d.pos, this.handler.pos) < 0.9) d.reach(b); // poking for the steal
-            else d.armsWide();                                     // walling off lanes & the drive
-          }
+          this.handler.reachDribble(bw, this.handler.dribbleWithRight(bw), this.dribArmRate(this.handler));
         }
         break;
       }
@@ -1093,12 +1191,20 @@ export class Game {
         if (this.ftT < 1.4) this.ftShooter?.reach(b, true);
         break;
       case "pass":
-        if (this.passT < this.passDur * 0.4) this.passer?.reach(b);        // release...
-        else if (this.passT > this.passDur * 0.6) this.passTo?.reach(b);   // ...and catch
+        // two-handed CHEST pass: both arms shove FORWARD at chest height toward the
+        // receiver — NOT up after the arcing ball (which read as an overhead throw)
+        if (this.passT < this.passDur * 0.4 && this.passer && this.passTo) {
+          const pr = this.passer.pos, tp = this.passTo.pos;
+          const dx = tp.x - pr.x, dz = tp.z - pr.z, dl = Math.hypot(dx, dz) || 1;
+          this.passer.reach(new Vector3(pr.x + (dx / dl) * 1.2, 1.3, pr.z + (dz / dl) * 1.2), true);
+        } else if (this.passT > this.passDur * 0.6) this.passTo?.reach(b, true); // catch
         if (this.passSteal) this.passSteal.def.reach(b);                   // jumping the lane
         break;
       case "loose":
-        this.raiseAirborne(b, null);                 // everyone going up for the board reaches up
+        // everyone going up for the board reaches for it — EXCEPT a shooter still
+        // in his follow-through, who must not snap his arms toward a blocked ball
+        // (that read as "he threw it there"); he holds his release form below.
+        this.raiseAirborne(b, this.shooter && this.shooter.coolT > 0 ? this.shooter : null);
         break;
       case "tipoff":
         this.teamPlayers(0)[4].reach(b, true);       // both centres tip with both hands
@@ -1115,9 +1221,25 @@ export class Game {
     if (this.ballMode !== "loose" && this.ballMode !== "tipoff") {
       for (const p of this.players) {
         if (!p.airborne || p === this.shooter || p === this.handler) continue;
-        if (p.foulReactT > 0) continue;   // the AND-1 flex hop keeps its fists up
+        if (p === this.passer) continue;   // a jump PASSER keeps his chest-pass arms, not hands-up
+        if (p.foulReactT > 0) continue;    // the AND-1 flex hop keeps its fists up
         p.reach(new Vector3(p.pos.x, 6, p.pos.z), true);   // dead-vertical target
       }
+    }
+
+    // FROZEN FOLLOW-THROUGH: a shooter holds his release form — arms up toward the
+    // basket he shot at — for his whole cooldown (coolT), whether he left the floor
+    // or not. So a set jumper keeps the pose after the ball leaves, and a
+    // blocked/missed shot never snaps his arms toward the ball as if he threw it
+    // there. Exceptions: the "charge" gather owns his pose (ball loaded overhead),
+    // and the very start of the "shot" flight is the live release motion (the shot
+    // case reaches with the ball); after that we freeze the form.
+    const sh = this.shooter;
+    const releasing = this.ballMode === "shot" && this.shotT < this.shotDur * 0.45;
+    if (sh && sh.coolT > 0 && this.ballMode !== "charge" && !releasing
+        && sh !== this.handler && sh.foulReactT <= 0) {
+      const rim = this.attackFloor(sh.team);
+      sh.reach(new Vector3(rim.x, 3.2, rim.z), true);
     }
 
     // foul reactions play out last so they own the arms over any rest pose
@@ -1129,6 +1251,60 @@ export class Game {
   private raiseAirborne(b: Vector3, except: Player | null): void {
     for (const p of this.players) {
       if (p !== except && p.airborne) p.reach(b, true);
+    }
+  }
+
+  // The on-ball defender's hands say what he is answering. Straight blow-by (or a
+  // handler driving at the rim) → a front hand cuts off the lane and stabs at the
+  // ball. Working it side to side → arms spread wide to wall both directions. A
+  // held, stationary ball with the defender right on top → the same front-hand
+  // poke. Otherwise he keeps his hands active and wide.
+  // How fast a defender can re-orient his hands, in rad/s — a weak defender switches
+  // his stance slowly (so he's a beat late), an elite one snaps to it.
+  private defArmRate(d: Player): number {
+    return 1.2 + rate(d.attr.defense) * 4.3;   // ~1.2 (slow drift) .. ~5.5 (crisp)
+  }
+
+  // How fast the ball-handler's dribbling hand can re-place itself — tied to his
+  // dribble accuracy (D精度): a loose handler's hand lags, a tight one's is quick.
+  private dribArmRate(h: Player): number {
+    return 1.2 + rate(h.attr.dribbleAcc) * 4.3;
+  }
+
+  private poseOnBallHands(h: Player, b: Vector3, posed: Set<Player>): void {
+    const d = this.onBallDefender(h);
+    if (!d || d.airborne) return;
+    const r = this.defArmRate(d);
+    // aim the front hand at a STEADY height, not the raw ball — the dribble bounces
+    // y between the floor and the hand, and chasing it makes the hand bob
+    const bt = new Vector3(b.x, 1.0, b.z);
+    const useRight = d.dribbleWithRight(bt);         // the hand nearer the ball leads
+    const rim = this.attackFloor(h.team);            // the basket he is attacking
+    const spd = Math.hypot(h.velX, h.velZ);
+    const toRimX = rim.x - h.pos.x, toRimZ = rim.z - h.pos.z;
+    const rl = Math.hypot(toRimX, toRimZ) || 1;
+    const straight = spd > 1.2 && (h.velX * toRimX + h.velZ * toRimZ) / (spd * rl) > 0.5;
+    if (h.beatenT > 0 || straight) d.guardDrive(bt, useRight, r);         // cut off penetration
+    else if (spd > 1.2) d.armsWide(r);                                    // shut the side lanes
+    else if (dist2D(d.pos, h.pos) < 0.9) d.guardDrive(bt, useRight, r);   // poke the held ball
+    else d.armsWide(r);
+    posed.add(d);
+  }
+
+  // Off-ball defenders one pass away and ball-side FRONT their man — a diagonal
+  // hand in the lane so the ball can't be threaded behind them (a swing back out
+  // is conceded). A defender sagging as help (goal-side of his man) keeps his
+  // arms down; the on-ball defender is left to poseOnBallHands.
+  private poseDenyHands(h: Player, b: Vector3, posed: Set<Player>): void {
+    for (const o of this.teamPlayers(h.team)) {
+      if (o === h) continue;                          // he has the ball, not a receiver
+      if (dist2D(o.pos, b) > MAX_PASS) continue;      // out of any passing range
+      const d = this.onBallDefender(o);               // the man guarding this receiver
+      if (!d || d.airborne) continue;
+      if (dist2D(d.pos, b) < dist2D(o.pos, b)) {      // ball-side / fronting → deny
+        d.denyLane(d.dribbleWithRight(b), this.defArmRate(d));
+        posed.add(d);
+      }
     }
   }
 
@@ -1493,10 +1669,12 @@ export class Game {
             : clamp(0.02 + rel * 0.45 + openness, 0.015, 0.24);
           if (chance(splitChance)) { this.driveDecision(h); return; }
         }
-        // otherwise: pass out of the trap; if nobody is open, keep it and reset
-        // out rather than advance into the double team.
-        if (this.pass(h)) return;
-        this.advanceSafely(h);
+        // can't split → SOLVE IT WITH PASSING: kick out to the man the trap left
+        // open (a good passer threads a bounce/jump pass between them). If nobody
+        // is open yet, EVADE — retreat-dribble out of the trap and reset, rather
+        // than standing there keeping the ball in the double-team.
+        if (this.trapKickOut(h)) return;
+        this.retreatFromTrap(h);
         return;
       }
     }
@@ -1508,7 +1686,7 @@ export class Game {
       // ハンドラー/フロアジェネラル/ハブビッグ: まず配球。ただし「打たずにパス回し
       // だけ」にならないよう、空いた球は打ち、レーンが開けば仕掛けてギャップを作る。
       if (!this.frontT) { this.bringUpLane(h); return; }
-      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && canGather && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
+      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && canGather && !this.wontLoadUp(h, dHoop, dDef) && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
       const inRange = dHoop <= this.shootRangeOf(h) + 0.3;
       const clockPush = clamp((SHOT_CLOCK * 0.5 - this.shotClock) / (SHOT_CLOCK * 0.5), 0, 1);   // 遅いほど打つ(残半分から)
       // a clean lane → attack to bend the defence (a big posts instead of dribbling)
@@ -1529,7 +1707,7 @@ export class Game {
       // 基本。無理な単独クリエイトはしないが、「クローズアウトには仕掛ける」ことで
       // ギャップを作り、開いた球はしっかり打つ（打たずに回すだけにしない）。
       if (!this.frontT) { this.bringUpLane(h); return; }
-      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && canGather && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
+      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && canGather && !this.wontLoadUp(h, dHoop, dDef) && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
       const inRange = dHoop <= this.shootRangeOf(h) + 0.3;
       const clockPush = clamp((SHOT_CLOCK * 0.5 - this.shotClock) / (SHOT_CLOCK * 0.5), 0, 1);
       // ATTACK THE CLOSEOUT: a shooter with a live handle drives past a defender
@@ -1569,7 +1747,7 @@ export class Game {
     // 残クロックに対する相対しきい値(SHOT_CLOCK 依存)。7秒クロックでは ~2.5秒前後で
     // 初めて「打ち急ぎ」に入る（up-tempo は少し早い）。絶対秒だと短クロックで早過ぎた。
     const urgent = this.shotClock < SHOT_CLOCK * (0.28 + tac.pace * 0.14 * this.twWeight(h));
-    if (urgent && canGather && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
+    if (urgent && canGather && !this.wontLoadUp(h, dHoop, dDef) && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
 
     // desire to do each thing = personality + skill + tactics(×連携) + scoring
     // role + 特殊能力 (ドリブラー/ストライカー/ドリブルキープ)
@@ -1718,6 +1896,34 @@ export class Game {
     // a big who ends up bringing it up also uses a side lane, not the middle
     if (!this.frontT) this.bringUpLane(h);
     else this.setDrive(h, this.attackFloor(h.team), 8);   // ~top of the key, in the frontcourt
+  }
+
+  // SOLVE THE TRAP WITH PASSING: the double-team always leaves a man open — hit
+  // the most open reachable team-mate with a forced pass (bounce between them /
+  // jump over the top). passToReceiver(force) skips the usual veto so PASSING
+  // ABILITY, not caution, decides it: a great passer threads it, a poor one who
+  // forces it gets picked off.
+  private trapKickOut(h: Player): boolean {
+    let best: Player | null = null, bestOpen = 1.0;   // need at least a sliver of space
+    for (const mate of this.teamPlayers(h.team)) {
+      if (mate === h) continue;
+      if (dist2D(h.pos, mate.pos) > MAX_PASS) continue;
+      const open = this.nearestDefenderDist(mate);
+      if (open > bestOpen) { bestOpen = open; best = mate; }
+    }
+    if (!best) return false;
+    h.jump(0.26, 0.5);                       // a jump pass to see over the trap
+    return this.passToReceiver(h, best, true);
+  }
+
+  // EVADE THE TRAP: retreat-dribble AWAY from the two nearest defenders to break
+  // the double-team and open a passing angle, instead of standing in it.
+  private retreatFromTrap(h: Player): void {
+    const defs = this.teamPlayers(1 - h.team).slice()
+      .sort((a, b) => dist2D(a.pos, h.pos) - dist2D(b.pos, h.pos));
+    const a = defs[0], b2 = defs[1] ?? defs[0];
+    const centroid = new Vector3((a.pos.x + b2.pos.x) / 2, 0, (a.pos.z + b2.pos.z) / 2);
+    this.setDrive(h, centroid, dist2D(h.pos, centroid) + 3);   // target lands beyond h, away from the trap
   }
 
   // Open a fast-break window after a live-ball change of possession, if the
@@ -2814,7 +3020,7 @@ export class Game {
 
   // Throw to a specific receiver — used both by the general read (chooseReceiver)
   // and by an explicit decision to swing the ball to a better scoring option.
-  private passToReceiver(h: Player, target: Player): boolean {
+  private passToReceiver(h: Player, target: Player, force = false): boolean {
     // The ball homes onto the receiver, so what matters is the distance to the
     // CATCH point, not to where he stands now — lead a sprinting receiver by
     // his velocity over the flight. Without this, a 7 m release stretches into
@@ -2831,7 +3037,7 @@ export class Game {
     // rebound, kick-out, swing): a defender standing in the lane, or a full
     // risk estimate that says "likely turnover", means the ball simply doesn't
     // get thrown. Only a dying shot clock forces a heave through traffic.
-    if (this.shotClock > 2
+    if (!force && this.shotClock > 2
         && (this.laneVetoed(h, target)
           || this.passRisk(h, target) > 0.3
           || (!target.cutting && this.nearestDefenderDist(target) < 1.0))) {
@@ -2856,6 +3062,12 @@ export class Game {
     // lane at release (スライディング readers range the furthest)
     if (!this.passSteal && d > 9) {
       this.passSteal = this.longBallRead(h, target, this.passDur, d);
+    }
+    // FORCED out of a trap: a skilled passer (P精度) THREADS it — a bounce pass
+    // slipped between the two trappers, or a jump pass over the top — so his
+    // ability, not the veto, decides it. A weak passer forcing it gets picked.
+    if (force && this.passSteal && chance(rate(h.attr.passAcc) * 0.6)) {
+      this.passSteal = null;
     }
     this.ballMode = "pass";
     this.handler = null;
@@ -2992,8 +3204,7 @@ export class Game {
       this.releaseShot(h, dHoop, dDef);
       return;
     }
-    let windup = 0.16 + this.gatherFor(h, dHoop) + (1 - rate(h.attr.shotTech)) * 0.12;
-    if (h.quickT > 0 && h.has("oneTouch")) windup *= 0.55;   // ダイレクト: quick release
+    const windup = this.shotWindupFor(h, dHoop);
     this.shotWindup = windup;
     this.chargeShooter = h;
     this.chargeDHoop = dHoop;
@@ -3002,8 +3213,22 @@ export class Game {
     this.shooter = h;              // pose owner during the gather
     this.handler = null;
     this.ballMode = "charge";
-    // the ball rides up into the shot pocket for the gather
-    this.ball.pos.set(h.pos.x, 1.45, h.pos.z);
+    // the ball STARTS at the gather pocket (chest) and is lifted over the head
+    // across the wind-up (see chargeBallY) — the jump-shot pocket he releases from
+    this.ball.pos.set(h.pos.x, this.chargeBallY(), h.pos.z);
+  }
+  private static readonly SHOT_SET_Y = 2.1;    // overhead ball height at the top of the load
+  private static readonly SHOT_GATHER_Y = 1.2; // where the gather begins — chest / pocket
+
+  // The ball climbs from the pocket to overhead across the wind-up so the load
+  // reads as a motion, not a frozen pose: overhead by ~80% of the gather, then
+  // held there for the release window. Eased (smoothstep) for an unhurried lift.
+  private chargeBallY(): number {
+    const w = this.shotWindup || 0.001;
+    const p = clamp(1 - this.chargeT / w, 0, 1);   // 0 at gather start → 1 at release
+    const rise = clamp(p / 0.8, 0, 1);
+    const e = rise * rise * (3 - 2 * rise);
+    return Game.SHOT_GATHER_Y + (Game.SHOT_SET_Y - Game.SHOT_GATHER_Y) * e;
   }
 
   // One frame of the gather: hold the ball loaded, and let the on-ball defender
@@ -3014,25 +3239,56 @@ export class Game {
     const h = this.chargeShooter;
     if (!h) { this.ballMode = "held"; return; }
     this.chargeT -= dt;
-    this.ball.pos.set(h.pos.x, 1.45, h.pos.z);   // ball loaded in the pocket
+    this.ball.pos.set(h.pos.x, this.chargeBallY(), h.pos.z);   // lifted from the pocket over the head
     const d = this.teamPlayers(1 - h.team)[h.slot];   // the man guarding the shooter
-    if (d && !d.airborne && d.landT <= 0) {
-      const beaten = h.beatenT > 0 || h.powerT > 0;   // he blew by → the closeout is late
+    const beaten = h.beatenT > 0 || h.powerT > 0;     // he blew by → the closeout is late
+    if (d && !beaten) {
       const gap = dist2D(d.pos, h.pos);
-      // hard closeout toward the shooter (a beaten defender is out of the play)
-      if (!beaten && gap > 0.75) {
-        const clo = d.accelToward(dt, h.pos.x, h.pos.z, 1.15) * dt;
-        moveToward2D(d.pos, h.pos.x, h.pos.z, clo);
-        this.clampCourt(d.pos);
+      if (!d.airborne && d.landT <= 0) {
+        // hard closeout toward the shooter
+        if (gap > 0.75) {
+          const clo = d.accelToward(dt, h.pos.x, h.pos.z, 1.15) * dt;
+          moveToward2D(d.pos, h.pos.x, h.pos.z, clo);
+          this.clampCourt(d.pos);
+        }
+        // as the release nears, a defender who's close and read it LEAVES HIS FEET
+        // to challenge — 反応/守判断 time it, ジャンプ gives the length to reach it
+        if (this.chargeT < 0.13 && gap < 1.7) {
+          const read = rate(d.attr.reaction) * 0.5 + rate(d.attr.defense) * 0.5;
+          if (chance((0.25 + read * 1.5) * dt * 9)) d.jump(0.5 + rate(d.attr.jump) * 0.35, 0.6);
+        }
       }
-      // as the release nears, a defender who's close and read it LEAVES HIS FEET
-      // to challenge — 反応/守判断 time it, ジャンプ gives the length to reach it
-      if (!beaten && this.chargeT < 0.13 && dist2D(d.pos, h.pos) < 1.7) {
-        const read = rate(d.attr.reaction) * 0.5 + rate(d.attr.defense) * 0.5;
-        if (chance((0.25 + read * 1.5) * dt * 9)) d.jump(0.5 + rate(d.attr.jump) * 0.35, 0.6);
+      // STRIP ON THE GATHER: while the ball is loaded OVERHEAD, a defender in his
+      // airspace swipes at it — per frame, so a LONGER gather (a deep / slow load)
+      // is far more likely to be knocked loose BEFORE the release. He has to reach
+      // the high ball (airborne helps a lot); a taller shooter holds it away.
+      if (gap < 1.2) {
+        const poke = rate(d.attr.reaction) * 0.4 + rate(d.attr.agility) * 0.35
+          + rate(d.attr.defense) * 0.25 + (d.has("interceptor") ? 0.12 : 0);
+        const secure = rate(h.attr.handling) * 0.5 + clamp((h.height - d.height) * 0.6, -0.15, 0.35);
+        const reach = d.airborne ? 1.3 : 0.5;   // the ball is overhead — he must get up to it
+        if (chance(Math.max(0, poke - secure) * reach * dt * 5)) { this.stripGather(h, d); return; }
       }
     }
     if (this.chargeT <= 0) this.releaseShot(h, this.chargeDHoop, this.chargeDDef);
+  }
+
+  // The loaded (overhead) ball is knocked out of the shooter's hands before the
+  // release — a live loose ball, sprayed toward the defender who tipped it.
+  private stripGather(h: Player, d: Player): void {
+    this.chargeShooter = null;
+    d.stats.stl++;
+    const ax = d.pos.x - h.pos.x, az = d.pos.z - h.pos.z;
+    const len = Math.hypot(ax, az) || 1;
+    const grip = clamp(0.2 + rate(d.attr.reaction) * 0.6 - rate(h.attr.handling) * 0.3, 0.05, 0.9);
+    const power = rand(1.8, 3.4);
+    this.ball.pos.set(h.pos.x, Game.SHOT_SET_Y, h.pos.z);
+    this.ball.vel.set((ax / len) * power * grip + rand(-1, 1) * (1 - grip), rand(-0.4, 0.9),
+                      (az / len) * power * grip + rand(-1, 1) * (1 - grip));
+    this.setEvent("STRIP!", d.team);
+    this.lastTouch = d;   // the stripper last touched it
+    h.touchCool = 0.4;
+    this.goLoose(h.team, 1.6, { stealBy: d, victim: h, grabAfter: 0.35 });
   }
 
   private releaseShot(h: Player, dHoop: number, dDef: number): void {
@@ -3071,7 +3327,11 @@ export class Game {
     // one can't (attr-impact tuning: revived S威力 from ~0 to a real effect).
     let contestScale = 1 - rate(h.attr.shotStrength) * 0.78;
     if (h.has("isoShooter") && this.defendersWithin(h, 2.4) <= 1) contestScale *= 0.6;
-    p -= clamp(1.8 - dDef, 0, 1.8) * 0.24 * contestScale;
+    // WHO is closing out matters: a quick, rangy perimeter defender flies at it, a
+    // slow big switched onto the shooter is late — position + physique, no tag.
+    const cn = this.nearestDefender(h);
+    const perimQ = cn ? clamp(1 + this.perimContest(cn, h), 0.6, 1.5) : 1;
+    p -= clamp(1.8 - dDef, 0, 1.8) * 0.24 * contestScale * perimQ;
     // off-balance (shooting on the move) — S技術 keeps the mechanics clean
     if (h.beatenT > 0 || h.curSpd > h.runSpeed * 0.55) {
       p -= 0.10 * (1 - rate(h.attr.shotTech));
@@ -3087,6 +3347,8 @@ export class Game {
     p = clamp(p, 0.02, 0.93);   // low floor so a long heave can be a couple %
     this.shotMade = chance(p);
 
+    this.shooter = h;   // own the shot NOW so a block freezes HIS follow-through
+    this.lastTouch = h;   // the shooter last touched it (an airball out → other team's ball)
     const blocker = this.tryBlock(h, false);
     if (blocker) { this.swatShot(h, blocker); return; }
     if (this.tryShootingFoul(h, dDef, false)) return;
@@ -3142,7 +3404,13 @@ export class Game {
     // physical player from bulling through 2-3 defenders for an easy dunk. An
     // OPEN catch-and-finish (nobody near) keeps its high percentage.
     const strong = rate(h.attr.shotStrength);
-    p -= clamp(1.1 - dDef, 0, 1.0) * 0.42 * (1 - strong * 0.7);
+    // WHO is contesting matters as much as how close: a rim-protecting big walls
+    // the basket, a guard switched onto the roll barely bothers it (rimProtect is
+    // pure position + physique, not a role tag). This is the interior-defence
+    // interdependence — vacate the paint or switch small and finishes fall in.
+    const near = this.nearestDefender(h);
+    const contestQ = near ? clamp(1 + this.rimProtect(near, h), 0.5, 1.6) : 1;
+    p -= clamp(1.1 - dDef, 0, 1.0) * 0.42 * (1 - strong * 0.7) * contestQ;
     // EACH additional body at the rim is a wall — driving into a crowd is a
     // low-percentage prayer that S威力 barely helps. This is what stops a
     // physical player bulling through 2-3 defenders for an easy bucket while
@@ -3155,6 +3423,8 @@ export class Game {
     p -= this.clutchFactor(h) * 0.1;
     this.shotMade = chance(clamp(p, 0.05, 0.97));
 
+    this.shooter = h;   // own the shot NOW so a block freezes HIS follow-through
+    this.lastTouch = h;   // the shooter last touched it (an airball out → other team's ball)
     const blocker = this.tryBlock(h, true);
     if (blocker) { this.swatShot(h, blocker); return; }
     if (this.tryShootingFoul(h, dDef, true)) return;
@@ -3174,6 +3444,17 @@ export class Game {
       if (len < 0.4) { dx = 0; dz = -this.attackSign(h.team); len = 1; }   // approach from mid-court
       const standoff = dunk ? 0.6 : 0.9;
       this.finishSpot.set(rimFloor.x + (dx / len) * standoff, 0, rimFloor.z + (dz / len) * standoff);
+    }
+    // carry his DRIVE MOMENTUM into the leap: he takes off at the speed he was
+    // running (a stride into the finish, not a dead-stop planted jump), and that
+    // horizontal speed decays in the air (crashBoards). Capped so a fast break
+    // doesn't sail him past the rim.
+    {
+      const cap = h.runSpeed * 1.05;
+      const sp = Math.hypot(h.velX, h.velZ);
+      const k = sp > cap ? cap / sp : 1;
+      this.finishVX = h.velX * k;
+      this.finishVZ = h.velZ * k;
     }
     this.shotTarget.copyFrom(this.attackRim(this.possession));   // point-blank: a miss just rims out
     this.ballMode = "shot";
@@ -3254,8 +3535,10 @@ export class Game {
     shooter.stats.fga++;             // a blocked shot is a missed attempt
     if (this.shotPoints === 3) shooter.stats.tpa++;
     this.pendingAssist = null;
-    // the blocker rises and meets the ball with his hand right at the release
-    blocker.jump(0.95, 0.6);
+    // the blocker rises and meets the ball with his hand right at the release —
+    // but he may ALREADY be up (he jumped during the gather), so don't re-jump
+    // (that would reset his leap and break the contact read)
+    if (!blocker.airborne) blocker.jump(0.95, 0.6);
     this.setEvent("BLOCK!", blocker.team);
     this.handler = null;
 
@@ -3273,10 +3556,28 @@ export class Game {
     ox /= ol; oz /= ol;
     const px = -oz, pz = ox, kick = rand(-0.8, 0.8);   // sideways spray off the hand
     const power = 3.0 + (rate(blocker.attr.jump) * 0.5 + rate(blocker.attr.defense) * 0.5) * 3.0;
-    this.ball.pos.set(shooter.pos.x, 2.15, shooter.pos.z);   // met up at the release
-    this.ball.vel.set((ox + px * kick) * power, rand(0.8, 2.4), (oz + pz * kick) * power);
+    // CONTACT POINT = the BLOCKER's hand, not the shooter's space: place the ball
+    // just in front of the blocker (toward the shooter), up at the top of his reach,
+    // so it's WITHIN his reach and the hand visibly lands on it — the ball is
+    // knocked away FROM his hand, not teleported off the shooter.
+    let hx = shooter.pos.x - blocker.pos.x, hz = shooter.pos.z - blocker.pos.z;
+    const hl = Math.hypot(hx, hz) || 1;
+    this.ball.pos.set(blocker.pos.x + (hx / hl) * 0.45, 2.6, blocker.pos.z + (hz / hl) * 0.45);
+    // swatted mostly OUT and DOWN — it drops and rolls rather than popping up into
+    // someone's hands (a little arc, then the free-flight bounce takes it to rest)
+    this.ball.vel.set((ox + px * kick) * power, rand(-0.6, 1.0), (oz + pz * kick) * power);
     blocker.reach(this.ball.pos, true);        // hand on the ball at contact
-    this.goLoose(shooter.team, 2.6, { rebound: true });
+    this.lastTouch = blocker;                  // he last touched it → out-of-bounds stays with the offence
+    // the SHOOTER can't recover it while he is still in his shot motion / landing
+    // (no instantly re-grabbing his own blocked shot), and grabAfter keeps it a
+    // clear, free, rolling loose ball before ANYONE can secure it.
+    shooter.touchCool = 1.0;
+    // FREEZE his follow-through: releaseShot never got to set coolT (the block
+    // returned first), so set it here — otherwise the loose-ball pose lets his
+    // airborne arms snap toward the swatted ball as if he threw it there. With
+    // coolT up, poseHands excludes him from the scramble and holds his release form.
+    shooter.coolT = 0.6 + rand(0.3, 0.6) * shooter.recoveryMult();
+    this.goLoose(shooter.team, 2.6, { rebound: true, grabAfter: 0.6 });
   }
 
   // ---- fouls & free throws ----------------------------------------------
@@ -3471,7 +3772,28 @@ export class Game {
 
     this.shotT += dt;
     const k = Math.min(1, this.shotT / this.shotDur);
-    const a = this.shotFrom, b = this.shotTarget;   // rim on a make, off-target on a miss
+    const b = this.shotTarget;   // rim on a make, off-target on a miss
+    // FINISH (dunk / layup): the ball RIDES IN HIS HAND — tracking his glide to the
+    // rim and rising with him — and is only released LATE, reaching it up and into
+    // the hoop over the last stretch, rather than leaving the hand at take-off.
+    if (this.shooterFinishing && this.shooter) {
+      const fin = this.shooter;
+      const rel = 0.6;                       // he lets go of it at 60% of the motion
+      const topY = RIM.height + 0.2;         // hand height at the rim
+      if (k < rel) {
+        const kk = k / rel;
+        this.ball.pos.set(fin.pos.x, this.shotFrom.y + (topY - this.shotFrom.y) * kk, fin.pos.z);
+      } else {
+        const kk = (k - rel) / (1 - rel);
+        const arc = Math.sin(kk * Math.PI) * this.shotApex * 0.5;   // a soft last-touch on a layup
+        this.ball.pos.set(fin.pos.x + (b.x - fin.pos.x) * kk,
+          topY + (b.y - topY) * kk + arc,
+          fin.pos.z + (b.z - fin.pos.z) * kk);
+      }
+      if (k >= 1) this.resolveShot();
+      return;
+    }
+    const a = this.shotFrom;
     const baseY = a.y + (b.y - a.y) * k;
     const apex = Math.sin(k * Math.PI) * this.shotApex;
     this.ball.pos.set(a.x + (b.x - a.x) * k, baseY + apex, a.z + (b.z - a.z) * k);
@@ -3543,6 +3865,12 @@ export class Game {
     // floor; otherwise it just settles down to rest
     if (this.ballFalling) this.stepBallFreeFlight(dt);
     else this.ball.pos.y = Math.max(0.3, this.ball.pos.y - 3 * dt);
+    // OUT OF BOUNDS: the thrower walks over to the spot during the announcement
+    // (tickMotion/updateLegs animate the walk from his moved position)
+    if (this.oobWalker) {
+      moveToward2D(this.oobWalker.pos, this.oobSpot.x, this.oobSpot.z,
+        this.oobWalker.runSpeed * 0.6 * dt);
+    }
     this.pauseT -= dt;
     if (this.pauseT <= 0) {
       this.ballFalling = false;
@@ -3590,7 +3918,7 @@ export class Game {
   // energy (so it dribbles to rest like a real basketball), and reflection off
   // the court boundary. Shared by the loose ball and the cosmetic drop after a
   // made basket. `restY` is the floor contact height (ball radius).
-  private stepBallFreeFlight(dt: number): void {
+  private stepBallFreeFlight(dt: number, reflect = true): void {
     const b = this.ball;
     b.vel.y -= 9.0 * dt;
     b.pos.x += b.vel.x * dt;
@@ -3598,19 +3926,31 @@ export class Game {
     b.pos.z += b.vel.z * dt;
     // bounce off the floor, losing energy (a rolling-to-rest dribble)
     if (b.pos.y < 0.12) { b.pos.y = 0.12; b.vel.y = Math.abs(b.vel.y) * 0.62; b.vel.x *= 0.72; b.vel.z *= 0.72; }
-    // reflect off the court boundary so it stays in play
-    const mw = COURT.halfW - 0.1, ml = COURT.halfL - 0.1;
-    if (b.pos.x < -mw) { b.pos.x = -mw; b.vel.x = Math.abs(b.vel.x) * 0.6; }
-    if (b.pos.x > mw) { b.pos.x = mw; b.vel.x = -Math.abs(b.vel.x) * 0.6; }
-    if (b.pos.z < -ml) { b.pos.z = -ml; b.vel.z = Math.abs(b.vel.z) * 0.6; }
-    if (b.pos.z > ml) { b.pos.z = ml; b.vel.z = -Math.abs(b.vel.z) * 0.6; }
+    // reflect off the court boundary to keep it in play — but a LIVE loose ball
+    // (reflect = false) is allowed to cross the line so it can go out of bounds
+    // and become a throw-in (updateLoose detects the crossing).
+    if (reflect) {
+      const mw = COURT.halfW - 0.1, ml = COURT.halfL - 0.1;
+      if (b.pos.x < -mw) { b.pos.x = -mw; b.vel.x = Math.abs(b.vel.x) * 0.6; }
+      if (b.pos.x > mw) { b.pos.x = mw; b.vel.x = -Math.abs(b.vel.x) * 0.6; }
+      if (b.pos.z < -ml) { b.pos.z = -ml; b.vel.z = Math.abs(b.vel.z) * 0.6; }
+      if (b.pos.z > ml) { b.pos.z = ml; b.vel.z = -Math.abs(b.vel.z) * 0.6; }
+    }
     // clamp speed so a bad bounce can never send it flying (stays deterministic)
     const sp = Math.hypot(b.vel.x, b.vel.y, b.vel.z);
     if (sp > 10) { const k = 10 / sp; b.vel.x *= k; b.vel.y *= k; b.vel.z *= k; }
   }
 
   private updateLoose(dt: number): void {
-    this.stepBallFreeFlight(dt);
+    this.stepBallFreeFlight(dt, false);   // a live loose ball may cross the line
+    // OUT OF BOUNDS → throw-in for the team that did NOT touch it last (e.g. a
+    // block swatted out off the defender's hand stays with the offence).
+    const b = this.ball.pos;
+    if (Math.abs(b.x) > COURT.halfW || Math.abs(b.z) > COURT.halfL) {
+      const to = this.lastTouch ? 1 - this.lastTouch.team : 1 - this.looseOff;
+      this.startInboundAt(to, b.x, b.z);
+      return;
+    }
     for (const p of this.players) if (p.touchCool > 0) p.touchCool = Math.max(0, p.touchCool - dt);
 
     this.looseAge += dt;
@@ -3689,6 +4029,7 @@ export class Game {
   // trajectory). ジャンプ/反応/バランス and height drive how often it's secured;
   // defenders box out (守判断) for an edge. After a few tips the next is forced.
   private contactLooseBall(p: Player): void {
+    this.lastTouch = p;   // a hand on the ball — decides a subsequent out-of-bounds
     const defending = p.team !== this.looseOff;
     const rebSkill = rate(p.attr.jump) * 0.3 + rate(p.attr.reaction) * 0.25
       + rate(p.attr.balance) * 0.2;
@@ -3711,6 +4052,7 @@ export class Game {
 
   // A player comes down with the loose ball and play resumes.
   private secureLoose(p: Player, label?: string): void {
+    this.lastTouch = p;
     const offensive = p.team === this.looseOff;
     if (this.looseIsRebound) p.stats.reb++;   // only count boards off a missed shot
     if (!offensive && this.looseStealBy) {    // the defence came up with a poked-loose ball
@@ -3776,11 +4118,18 @@ export class Game {
   private crashBoards(dt: number): void {
     const rimFloor = this.attackFloor(this.possession);
     for (const p of this.players) {
-      // a finisher drives to his gather point just short of the rim and rises
-      // there (don't let him drift backwards) — committed momentum, so no
-      // recovery drag applies mid-flight. The ball goes on up to the hoop.
+      // a finisher carries his DRIVE MOMENTUM into the air: he takes off at the
+      // speed he was running and that speed decays over the leap, so he travels
+      // in stride through the take-off instead of decelerating to a plant first
+      // (which read as a stop-then-jump). A light steer toward the gather point
+      // curls him in to finish at the rim. The ball goes on up to the hoop.
       if (p === this.shooter && this.ballMode === "shot" && this.shooterFinishing) {
-        moveToward2D(p.pos, this.finishSpot.x, this.finishSpot.z, p.runSpeed * (1 - p.fatigue * 0.2) * dt);
+        const decay = Math.exp(-dt / 0.33);     // momentum bleeds off (τ≈0.33s)
+        this.finishVX *= decay;
+        this.finishVZ *= decay;
+        p.pos.x += this.finishVX * dt;
+        p.pos.z += this.finishVZ * dt;
+        moveToward2D(p.pos, this.finishSpot.x, this.finishSpot.z, p.runSpeed * 0.18 * dt);
         this.clampCourt(p.pos);
         continue;
       }
@@ -3818,6 +4167,56 @@ export class Game {
     this.shotClock = SHOT_CLOCK;
     this.resetMotion();
     this.inboundReceiver = this.pickInboundReceiver(taker);
+  }
+
+  // Throw-in from where the ball went out: the taker (nearest team-mate) steps
+  // just over the nearest edge — the sideline if it crossed the touchline, the
+  // baseline if it crossed the endline.
+  private startInboundAt(team: number, ox: number, oz: number): void {
+    this.possession = team;
+    const overSide = Math.abs(ox) - COURT.halfW;   // how far past each edge it went
+    const overEnd = Math.abs(oz) - COURT.halfL;
+    let sx: number, sz: number;
+    if (overSide >= overEnd) {                     // out over a sideline
+      sx = Math.sign(ox || 1) * (COURT.halfW + 0.3);
+      sz = clamp(oz, -(COURT.halfL - 1), COURT.halfL - 1);
+    } else {                                        // out over an endline (baseline)
+      sx = clamp(ox, -(COURT.halfW - 1), COURT.halfW - 1);
+      sz = Math.sign(oz || 1) * (COURT.halfL + 0.3);
+    }
+    const tp = this.teamPlayers(team);
+    let taker = tp[0];
+    for (const p of tp) {
+      if (dist2DTo(this.ball.pos, p.pos.x, p.pos.z) < dist2DTo(this.ball.pos, taker.pos.x, taker.pos.z)) taker = p;
+    }
+    // the ball is dead at the spot; ANNOUNCE the out-of-bounds and let the thrower
+    // WALK over to it (updatePause moves him) before play resumes — no instant
+    // restart. finishOOB then puts the ball in his hands and goes live.
+    this.ball.pos.set(sx, 1.2, sz);
+    this.ball.vel.set(0, 0, 0);
+    this.handler = null;
+    this.possession = team;
+    this.oobWalker = taker;
+    this.oobSpot.set(sx, 0, sz);
+    this.oobTeam = team;
+    this.setEvent("OUT OF BOUNDS", team);
+    this.pauseThen(1.5, () => this.finishOOB());
+  }
+
+  // The announcement is over: the thrower is at (or snapped to) the spot — put the
+  // ball in his hands and start the throw-in.
+  private finishOOB(): void {
+    const taker = this.oobWalker ?? this.teamPlayers(this.oobTeam)[0];
+    taker.pos.set(this.oobSpot.x, 0, this.oobSpot.z);
+    this.handler = taker;
+    this.lastTouch = taker;
+    this.possession = this.oobTeam;
+    this.ballMode = "inbound";
+    this.inboundT = 0.9;
+    this.shotClock = SHOT_CLOCK;
+    this.resetMotion();
+    this.inboundReceiver = this.pickInboundReceiver(taker);
+    this.oobWalker = null;
   }
 
   // A teammate (a guard, if available) flashes in to take the throw-in — but a
