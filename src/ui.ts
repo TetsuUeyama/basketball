@@ -1,6 +1,6 @@
 import { Game } from "./game";
 import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS } from "./config";
-import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "./attributes";
+import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "./attributes";
 import { PLAYER_DB, type DbPlayer } from "./playerdb";
 import { playerLook } from "./util";
 
@@ -11,15 +11,6 @@ const colorOf = (team: number): string => {
 
 type Phase = "pregame" | "playing" | "result";
 
-// Hover explanations (shared floating tooltip) — kept for the ability chips
-// and any labelled UI that wants a definition on hover.
-const INFO: Record<string, string> = {
-  操作方法: "選手は毎試合ランダム編成（WE2010データベースから抽選）。"
-    + "選手バーをつかんでドラッグし、入れ替えたい選手の上でドロップするとスタメン⇄ベンチ交代"
-    + "（タッチは長押しでつかむ）。選手にカーソルを合わせると詳細（6角チャート＋特殊能力）が出ます。",
-};
-for (const m of ATTR_META) INFO[m.label] = `【${m.name}】${m.tip}`;
-for (const m of ABILITY_META) INFO[m.label] = `【特殊能力】${m.tip}`;
 // Stats that pop a floating "＋" badge over a player's icon the moment he earns
 // them (score / assist / rebound / steal / block / turnover).
 const POP_STATS: { key: keyof import("./entities").Stats; label: string; color: string }[] = [
@@ -333,12 +324,6 @@ export class UI {
     this.tooltip = tip;
   }
 
-  private showTip(label: string, anchor: HTMLElement): void {
-    const info = INFO[label];
-    if (!info) return;
-    this.showTextTip(label, info, anchor);
-  }
-
   // Same floating tooltip, but with free-form title/body (role explanations
   // and the like — anything not registered in INFO).
   private showTextTip(title: string, body: string, anchor: HTMLElement): void {
@@ -432,27 +417,14 @@ export class UI {
   private buildPregame(): void {
     const p = this.panel();
 
-    // title + a small ⓘ — the how-to text lives behind a hover (tap on touch)
-    const titleRow = document.createElement("div");
-    Object.assign(titleRow.style, { display: "flex", alignItems: "center", gap: "9px", justifyContent: "center" } as Partial<CSSStyleDeclaration>);
-    const title = document.createElement("div");
-    Object.assign(title.style, { fontSize: "clamp(18px, 5vw, 26px)", fontWeight: "800", letterSpacing: "1px" });
-    title.textContent = "スターティング設定 — LINE-UPS";
-    const info = document.createElement("span");
-    info.textContent = "ⓘ";
-    Object.assign(info.style, {
-      fontSize: "17px", color: "rgba(150,190,255,0.95)", cursor: "help",
-      pointerEvents: "auto", lineHeight: "1",
-    } as Partial<CSSStyleDeclaration>);
-    info.onmouseenter = () => this.showTip("操作方法", info);
-    info.onmouseleave = () => this.hideTip();
-    info.onclick = () => this.showTip("操作方法", info);   // touch: tap to read
-    titleRow.append(title, info);
-
-    p.append(titleRow);
+    // the pregame modal hugs its content: no padding / no inter-element gap so
+    // there is no empty band above, below or beside the rosters
+    p.style.padding = "0";
+    p.style.gap = "0";                  // overflow stays auto (tall rosters scroll)
+    // no title row — the modal opens straight into the buttons and rosters
     this.editorHost = document.createElement("div");
     Object.assign(this.editorHost.style, {
-      width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: "8px",
+      width: "100%", display: "flex", flexDirection: "column", alignItems: "stretch", gap: "0",
     } as Partial<CSSStyleDeclaration>);
     p.appendChild(this.editorHost);
 
@@ -466,24 +438,16 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
     document.body.appendChild(this.playerCard);
 
-    const buttons = document.createElement("div");
-    Object.assign(buttons.style, { display: "flex", gap: "10px", marginTop: "2px" } as Partial<CSSStyleDeclaration>);
-    // responsive: full size on a wide view, shrinks as the window narrows
-    const reroll = this.button("ランダム編成しなおす");
-    Object.assign(reroll.style, { fontSize: "clamp(11px,2.9vw,15px)", padding: "clamp(7px,1.8vw,11px) clamp(12px,3vw,22px)" });
-    reroll.onclick = () => this.newMatchup();
-    const start = this.button("TIP OFF");
-    Object.assign(start.style, { fontSize: "clamp(13px,3.3vw,17px)", padding: "clamp(7px,1.8vw,11px) clamp(16px,4vw,30px)", background: "rgba(70,120,220,0.95)" });
-    start.onclick = () => { this.setPhase("playing"); this.onStart(); };
-    buttons.append(reroll, start);
-    p.appendChild(buttons);
+    // TIP OFF is no longer a top row — it sits BETWEEN the two teams, built
+    // inside refreshEditors so it lands between the cards (side-by-side) or
+    // between the team tabs (narrow toggle view).
 
     this.root.appendChild(p);
     this.pregamePanel = p;
-    // crossing the phone/desktop breakpoint re-lays-out the roster area
+    // crossing the side-by-side / tab-toggle breakpoint re-lays-out the rosters
     window.addEventListener("resize", () => {
       if (this.phase !== "pregame") return;
-      const mode = window.innerWidth < 640 ? "phone" : "desktop";
+      const mode = this.rostersFitSideBySide() ? "desktop" : "phone";
       if (mode !== this.pregameMode) this.refreshEditors();
     });
     this.newMatchup();   // the first matchup is drawn at once
@@ -497,12 +461,29 @@ export class UI {
     this.refreshEditors();
   }
 
+  /** Re-draw ONE team's roster (the other team is left untouched) and rebuild. */
+  private randomizeOne(team: number): void {
+    randomizeTeam(team);
+    this.autoAssignRoles(team);        // default 攻守ロール for this team's fresh draw
+    this.autoAssignChoiceRanks(team);  // primary 1..5 for this team only
+    this.refreshEditors();
+  }
+
+  /** Re-optimise ONE team's 攻守ロール + primary order for its CURRENT roster —
+   *  handy after swapping players in/out — without changing who is on the team. */
+  private reassignRoles(team: number): void {
+    this.autoAssignRoles(team);
+    this.autoAssignChoiceRanks(team);
+    this.refreshEditors();
+  }
+
   // Hand every player a default 評価ロール from the fresh draw: the role his
   // profile fits best among those his position can take, with a team-balance
   // penalty so five エース never happens — the roles spread across the squad.
   // Starters are assigned first (they define the team's shape), then the bench.
-  private autoAssignRoles(): void {
+  private autoAssignRoles(only?: number): void {
     for (let t = 0; t < 2; t++) {
+      if (only !== undefined && t !== only) continue;
       const taken = new Map<string, number>();
       for (let i = 0; i < ROSTER_SIZE; i++) {
         const def = ROSTER[t][i];
@@ -526,24 +507,57 @@ export class UI {
     }
   }
 
+  // The big blue "start the game" button — placed BETWEEN the two teams (in the
+  // middle of the side-by-side view, or between the team tabs when narrow).
+  private tipOffButton(): HTMLButtonElement {
+    const b = this.button("TIP OFF");
+    Object.assign(b.style, {
+      fontSize: "clamp(13px,3.3vw,17px)", fontWeight: "800", flexShrink: "0",
+      padding: "clamp(7px,1.8vw,11px) clamp(14px,3.4vw,24px)",
+      // neutral silver — belongs to neither the RED nor the BLUE team, so the
+      // tip-off reads as fair rather than favouring the blue side
+      background: "rgba(232,235,242,0.96)", color: "#10131a",
+      border: "1px solid rgba(255,255,255,0.5)",
+    } as Partial<CSSStyleDeclaration>);
+    b.onclick = () => { this.setPhase("playing"); this.onStart(); };
+    return b;
+  }
+
+  // Two 320px cards + the TIP OFF column + gaps ≈ 760px of content; with the
+  // modal capped at 96vw plus its padding, that only fits once the viewport is
+  // ~830px wide. Below that the modal can't hold both, so we fall back to the
+  // tab toggle rather than let the cards overflow / wrap.
+  private rostersFitSideBySide(): boolean {
+    return window.innerWidth >= 840;
+  }
+
   /** Rebuild the VS board and both roster cards from the current ROSTER. */
   private refreshEditors(): void {
     this.hidePlayerCard();
     this.closeRolePicker();
     this.closeDetailModal();
     this.closePlayerPicker();
-    const phone = window.innerWidth < 640;
-    this.pregameMode = phone ? "phone" : "desktop";
+    const sideBySide = this.rostersFitSideBySide();
+    this.pregameMode = sideBySide ? "desktop" : "phone";
+    // side-by-side: hug the two-column content; toggle view: a fixed comfortable
+    // width that both the VS board and the single card fill edge-to-edge
+    this.editorHost.style.width = sideBySide ? "auto" : "min(560px, 96vw)";
     this.editorHost.replaceChildren();
     this.vsBoard = this.buildVsBoard();
+    if (sideBySide) {
+      // full-width bars over the two-column layout look stretched — cap the VS
+      // board and centre it above the rosters
+      this.vsBoard.style.width = "min(560px, 100%)";
+      this.vsBoard.style.alignSelf = "center";
+    }
     this.editorHost.appendChild(this.vsBoard);
 
-    if (phone) {
+    if (!sideBySide) {
       // one roster at a time behind team tabs — two stacked 13-man cards would
-      // scroll forever on a phone
+      // scroll forever on a phone. TIP OFF sits between the two team tabs.
       const tabs = document.createElement("div");
-      Object.assign(tabs.style, { display: "flex", gap: "6px", justifyContent: "center" } as Partial<CSSStyleDeclaration>);
-      for (let t = 0; t < 2; t++) {
+      Object.assign(tabs.style, { display: "flex", gap: "8px", justifyContent: "center", alignItems: "center", flexWrap: "wrap" } as Partial<CSSStyleDeclaration>);
+      const teamTab = (t: number): HTMLButtonElement => {
         const b = this.button(TEAM_NAMES[t]);
         const active = this.rosterTab === t;
         Object.assign(b.style, {
@@ -554,19 +568,26 @@ export class UI {
           fontWeight: "800",
         } as Partial<CSSStyleDeclaration>);
         b.onclick = () => { this.rosterTab = t; this.refreshEditors(); };
-        tabs.appendChild(b);
-      }
+        return b;
+      };
+      tabs.append(teamTab(0), this.tipOffButton(), teamTab(1));
       this.editorHost.appendChild(tabs);
-      this.editorHost.appendChild(this.rosterCard(this.rosterTab));
+      const card = this.rosterCard(this.rosterTab);
+      card.style.width = "100%";   // fill the modal width (no side band under the VS board)
+      this.editorHost.appendChild(card);
       return;
     }
 
+    // side by side: [team 0 card] [TIP OFF] [team 1 card]
     const cols = document.createElement("div");
     Object.assign(cols.style, {
-      display: "flex", gap: "12px", flexWrap: "wrap", justifyContent: "center",
-      alignItems: "flex-start", width: "100%",
+      display: "flex", gap: "12px", flexWrap: "nowrap", justifyContent: "center",
+      alignItems: "stretch", width: "100%",
     } as Partial<CSSStyleDeclaration>);
-    for (let t = 0; t < 2; t++) cols.appendChild(this.rosterCard(t));
+    const mid = document.createElement("div");
+    Object.assign(mid.style, { display: "flex", alignItems: "center", flexShrink: "0" } as Partial<CSSStyleDeclaration>);
+    mid.appendChild(this.tipOffButton());
+    cols.append(this.rosterCard(0), mid, this.rosterCard(1));
     this.editorHost.appendChild(cols);
   }
 
@@ -628,8 +649,8 @@ export class UI {
     // --- ビッグマン系 ---
     ストレッチ:            { ax: [0.40, 0.04, 0.06, 0.08, 0.16, 0.16], ht: 0.10, short: "STR", pos: ["PF", "C"],
       tip: "ビッグマンながら外角シュートで相手守備を外へ広げる（ストレッチ4/5）。" },
-    リムプロテクター:      { ax: [0.04, 0.02, 0.04, 0.08, 0.30, 0.34], ht: 0.18, short: "RIM", pos: ["PF", "C"],
-      tip: "ゴール下で相手のシュートをブロックする守護神。高さと守備を評価。" },
+    インサイドフィニッシャー: { ax: [0.18, 0.04, 0.06, 0.14, 0.40, 0.00], ht: 0.18, short: "FIN", pos: ["PF", "C"],
+      tip: "ゴール下で合わせ・ポストアップから確実に沈める大型フィニッシャー。高さとフィジカルを評価。" },
     リムランナー:          { ax: [0.10, 0.04, 0.04, 0.28, 0.26, 0.10], ht: 0.18, short: "RUN", pos: ["PF", "C"],
       tip: "速攻で誰よりも早くリムへ走り込むビッグマン。走力と高さを評価。" },
     スクリーナー:          { ax: [0.06, 0.02, 0.08, 0.06, 0.44, 0.16], ht: 0.18, short: "SCR", pos: ["PF", "C"],
@@ -675,8 +696,9 @@ export class UI {
   // are ranked SEPARATELY (each 1..5), so a starter's "1" and a bench "1" can
   // coexist — that's fine (they're never on the floor as two #1s unless the user
   // wants it; the engine treats a genuine tie as a shared co-primary).
-  private autoAssignChoiceRanks(): void {
+  private autoAssignChoiceRanks(only?: number): void {
     for (let t = 0; t < 2; t++) {
+      if (only !== undefined && t !== only) continue;
       this.rankGroup(ROSTER[t].slice(0, STARTERS));
       this.rankGroup(ROSTER[t].slice(STARTERS));
     }
@@ -863,6 +885,41 @@ export class UI {
   // Pale-green (gain) / light-red (loss) tints for the swap-preview deltas.
   private static readonly GAIN = "rgb(120,225,140)";
   private static readonly LOSS = "rgb(240,140,130)";
+  // Each ROLE carries its own accent colour so they are told apart at a glance.
+  // Offence and defence roles that form a natural pair share one colour:
+  //   フロアジェネラル(攻) = 守備司令塔(守)   … 司令塔 / on-court commander
+  //   エース(攻)           = ロックダウン(守)  … the star ↔ the star-stopper
+  // muted / desaturated so they sit inside the dark UI rather than shout
+  private static readonly OFF_ROLE_C: Record<string, string> = {
+    メインハンドラー:      "rgb(113,154,206)",
+    セカンドハンドラー:    "rgb(146,174,209)",
+    フロアジェネラル:      "rgb(103,131,196)",  // = 守備司令塔
+    スラッシャー:          "rgb(206,140,94)",
+    エース:                "rgb(201,111,106)",  // = ロックダウン
+    スポットアップ:        "rgb(206,177,97)",
+    "3&D":                 "rgb(182,191,103)",
+    ポイントフォワード:    "rgb(123,177,196)",
+    ストレッチ:            "rgb(206,156,113)",
+    インサイドフィニッシャー: "rgb(197,129,117)",
+    リムランナー:          "rgb(114,179,123)",
+    スクリーナー:          "rgb(172,143,114)",
+    プレイメイキングビッグ: "rgb(146,154,206)",
+    リバウンダー:          "rgb(185,153,118)",
+    フロアスペーサー:      "rgb(196,185,113)",
+    オフボールカッター:    "rgb(201,136,175)",
+  };
+  private static readonly DEF_ROLE_C: Record<string, string> = {
+    ハッスルディフェンダー: "rgb(201,136,175)",
+    バランス:              "rgb(153,156,164)",
+    省エネ:                "rgb(126,130,136)",
+    ロックダウン:          "rgb(201,111,106)",  // = 攻 エース
+    スイッチディフェンダー: "rgb(136,144,206)",
+    パスカット:            "rgb(169,141,200)",
+    リムプロテクター:      "rgb(92,170,157)",   // defence rim protector (own colour)
+    ヘルプディフェンダー:  "rgb(114,179,123)",
+    守備司令塔:            "rgb(103,131,196)",  // = 攻 フロアジェネラル
+  };
+  private static readonly USE_C = "rgb(198,202,212)";  // 順 primary/usage order — neutral silver
 
   // `preview` (set while carrying an incoming DB player over a target row) shows
   // how one team's strength bars WOULD change if the swap happened: the changed
@@ -877,9 +934,11 @@ export class UI {
 
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {
-      width: "min(560px, 100%)", boxSizing: "border-box", padding: "7px 14px",
+      width: "100%", boxSizing: "border-box", padding: "7px 14px",
       background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.14)",
-      borderRadius: "12px", display: "flex", flexDirection: "column", gap: "3px",
+      // gap: vertical spacing between the stacked comparison rows (shot / dribble
+      // / …) — kept tight so the bars sit close together
+      borderRadius: "12px", display: "flex", flexDirection: "column", gap: "1px",
     } as Partial<CSSStyleDeclaration>);
 
     // header: TEAM A  <OVR>  VS  <OVR>  TEAM B
@@ -931,32 +990,45 @@ export class UI {
                     oldA: number | null, oldB: number | null) => {
       const row = document.createElement("div");
       Object.assign(row.style, {
-        // value columns are a FIXED width whether or not a ±N is shown, so the
-        // preview never changes the board's size (no reflow / hover flicker)
-        display: "grid", gridTemplateColumns: "66px 1fr 64px 1fr 66px", gap: "8px",
+        // value columns hold just the number, pushed to the outer edges, so the
+        // two bars run long and sit close together across a tight centre label.
+        // The preview ±N floats (absolute) and so costs no column width — the
+        // board never reflows and the bars never shrink when a delta appears.
+        display: "grid", gridTemplateColumns: "40px 1fr 54px 1fr 40px", gap: "6px",
         alignItems: "center",
       } as Partial<CSSStyleDeclaration>);
       const scale = (v: number) => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
-      // value cell: the number, plus a tinted ±N BESIDE it (horizontal) when
-      // previewed — kept on one line so the row height never changes.
+      // value cell: the number hugs the OUTER edge; the tinted ±N (shown only
+      // when previewed) floats inward over the bar's empty end, painted on top so
+      // it is never hidden and never widens the cell.
       const val = (v: number, win: boolean, align: string, old: number | null): HTMLDivElement => {
         const d = document.createElement("div");
         Object.assign(d.style, {
-          display: "flex", alignItems: "baseline", gap: "3px", whiteSpace: "nowrap",
-          justifyContent: align === "right" ? "flex-end" : "flex-start",
+          position: "relative", display: "flex", alignItems: "center", whiteSpace: "nowrap",
+          // hug the OUTER edge: team A (left col) to the left, team B to the right
+          justifyContent: align === "right" ? "flex-start" : "flex-end",
         } as Partial<CSSStyleDeclaration>);
         const n = document.createElement("span");
         Object.assign(n.style, { fontSize: "12px", fontWeight: "800", color: "#fff", opacity: win ? "1" : "0.5" });
         n.textContent = v.toFixed(1);   // 0.1 precision so small swaps are visible
+        d.appendChild(n);
         // TRUE change to one decimal — bench / starter⇄bench swaps move the team
         // value by less than a whole point, so an integer delta would vanish.
         const raw = old !== null ? v - old : 0;
         const delta = Math.round(raw * 10) / 10;
-        const dl = document.createElement("span");
-        Object.assign(dl.style, { fontSize: "10px", fontWeight: "800", color: delta > 0 ? UI.GAIN : UI.LOSS });
-        dl.textContent = delta !== 0 ? (delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)) : "";
-        // outer side carries the number, the ±N sits toward the centre/bar
-        if (align === "right") d.append(dl, n); else d.append(n, dl);
+        if (delta !== 0) {
+          const dl = document.createElement("span");
+          Object.assign(dl.style, {
+            position: "absolute", top: "50%", fontSize: "10px", fontWeight: "800",
+            color: delta > 0 ? UI.GAIN : UI.LOSS, zIndex: "5", pointerEvents: "none",
+            // float toward the centre/bar so the outer number keeps its place
+            ...(align === "right"
+              ? { right: "0", transform: "translate(calc(100% + 3px), -50%)" }
+              : { left: "0", transform: "translate(calc(-100% - 3px), -50%)" }),
+          } as Partial<CSSStyleDeclaration>);
+          dl.textContent = delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1);
+          d.appendChild(dl);
+        }
         return d;
       };
       // bar: base fill in team colour; if previewed, the changed slice is tinted
@@ -1071,13 +1143,26 @@ export class UI {
     const teamName = document.createElement("span");
     Object.assign(teamName.style, { fontSize: "15px", fontWeight: "800", color });
     teamName.textContent = TEAM_NAMES[team];
-    const swapBtn = this.button("選手を交代");
-    Object.assign(swapBtn.style, {
-      fontSize: "11px", fontWeight: "800", padding: "3px 12px",
-      background: color, color: "#0d1016", border: `1px solid ${color}`,
-    } as Partial<CSSStyleDeclaration>);
-    swapBtn.onclick = () => this.openPlayerPicker(team);
-    head.append(teamName, swapBtn);
+    // per-team controls beside the name: re-draw this squad / re-optimise its
+    // roles for the current line-up / swap a player from the DB. Kept compact so
+    // all three fit the card, and allowed to wrap on a very narrow view.
+    const ctrlBtn = (label: string, filled: boolean, onClick: () => void): HTMLButtonElement => {
+      const b = this.button(label);
+      Object.assign(b.style, {
+        fontSize: "10px", fontWeight: "800", padding: "3px 8px",
+        background: filled ? color : "rgba(255,255,255,0.06)",
+        color: filled ? "#0d1016" : "#dfe4ee", border: `1px solid ${color}`,
+      } as Partial<CSSStyleDeclaration>);
+      b.onclick = onClick;
+      return b;
+    };
+    const genBtn = ctrlBtn("ランダム編成", false, () => this.randomizeOne(team));
+    const roleBtn = ctrlBtn("役割再設定", false, () => this.reassignRoles(team));
+    const swapBtn = ctrlBtn("選手を交代", true, () => this.openPlayerPicker(team));
+    const btns = document.createElement("div");
+    Object.assign(btns.style, { display: "flex", gap: "5px", flexWrap: "wrap", justifyContent: "flex-end" } as Partial<CSSStyleDeclaration>);
+    btns.append(genBtn, roleBtn, swapBtn);
+    head.append(teamName, btns);
     wrap.appendChild(head);
 
     const divider = (label: string): HTMLDivElement => {
@@ -1103,7 +1188,7 @@ export class UI {
     row.dataset.dropIdx = String(i);
     Object.assign(row.style, {
       display: "grid", gridTemplateColumns: "26px 30px 30px 22px 1fr 24px 22px 24px", gap: "5px",
-      alignItems: "center", padding: "2px 6px", borderRadius: "6px",
+      alignItems: "center", padding: "1px 6px", borderRadius: "6px",
       cursor: "grab", pointerEvents: "auto",
       background: "rgba(255,255,255,0.04)",
       border: "1px solid transparent",
@@ -1115,28 +1200,32 @@ export class UI {
 
     // Three POS-chip-sized pills, editable right here in the roster row:
     //   攻 = offence role, 守 = defence role, 順 = offence choice order (usage).
-    // (full names / tips live in the picker menu and the 詳細 modal)
-    const pill = (text: string, active: boolean, title: string, onClick: () => void): HTMLButtonElement => {
+    // The 攻/守 pills take the SELECTED role's own colour (paired offence/defence
+    // roles share one), so roles are told apart at a glance. (full names / tips
+    // live in the picker + 詳細)
+    const pill = (text: string, active: boolean, accent: string, title: string, onClick: () => void): HTMLButtonElement => {
       const b = document.createElement("button");
       b.textContent = text; b.title = title;
       Object.assign(b.style, {
         fontSize: "9px", fontWeight: active ? "800" : "600", width: "100%", boxSizing: "border-box",
         padding: "2px 0", borderRadius: "9px", cursor: "pointer", pointerEvents: "auto",
         whiteSpace: "nowrap", overflow: "hidden", textAlign: "center",
-        background: active ? color : "rgba(20,24,34,0.9)",
+        background: active ? accent : "rgba(20,24,34,0.9)",
         color: active ? "#0d1016" : "rgba(255,255,255,0.45)",
-        border: active ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.16)",
+        border: active ? `1px solid ${accent}` : "1px solid rgba(255,255,255,0.16)",
       } as Partial<CSSStyleDeclaration>);
       b.onpointerdown = (e) => e.stopPropagation();
       b.onclick = (e) => { e.stopPropagation(); onClick(); };
       return b;
     };
+    const offC = (def.evalRole && UI.OFF_ROLE_C[def.evalRole]) || "rgb(150,156,168)";
+    const defC = (def.defRole && UI.DEF_ROLE_C[def.defRole]) || "rgb(150,156,168)";
     const roleSel = pill(def.evalRole ? (UI.EVAL_ROLES[def.evalRole]?.short ?? "?") : "-",
-      !!def.evalRole, "オフェンスロール", () => this.openRolePicker(def, team, roleSel, undefined, "off"));
+      !!def.evalRole, offC, "オフェンスロール", () => this.openRolePicker(def, team, roleSel, undefined, "off"));
     const defSel = pill(def.defRole ? (UI.DEF_ROLES[def.defRole]?.short ?? "?") : "-",
-      !!def.defRole, "ディフェンスロール", () => this.openRolePicker(def, team, defSel, undefined, "def"));
+      !!def.defRole, defC, "ディフェンスロール", () => this.openRolePicker(def, team, defSel, undefined, "def"));
     const rankSel = pill(def.choiceRank ? String(def.choiceRank) : "-",
-      !!def.choiceRank, "オフェンス選択順位（1=最優先。未設定=能力で自動）", () => {
+      !!def.choiceRank, UI.USE_C, "オフェンス選択順位（1=最優先。未設定=能力で自動）", () => {
         def.choiceRank = def.choiceRank === undefined ? 1 : def.choiceRank >= 5 ? undefined : def.choiceRank + 1;
         this.refreshEditors();
       });
@@ -1286,7 +1375,6 @@ export class UI {
     this.closeRolePicker();
     this.hidePlayerCard();
     this.hideTip();
-    const color = colorOf(team);
     const isDef = kind === "def";
     const menu = document.createElement("div");
     Object.assign(menu.style, {
@@ -1296,18 +1384,26 @@ export class UI {
       pointerEvents: "auto",
     } as Partial<CSSStyleDeclaration>);
     const cur = (isDef ? def.defRole : def.evalRole) ?? "自動";
+    const roleColour = (nm: string): string =>
+      nm === "自動" ? "rgb(150,156,168)"
+        : ((isDef ? UI.DEF_ROLE_C[nm] : UI.OFF_ROLE_C[nm]) ?? "rgb(150,156,168)");
     const mkBtn = (nm: string): HTMLDivElement => {
       const cell = document.createElement("div");
       Object.assign(cell.style, { display: "flex", alignItems: "center", gap: "4px" } as Partial<CSSStyleDeclaration>);
+      // each option is tinted with the role's OWN colour so the picker doubles as
+      // a legend; the selected one fills solid
+      const acc = roleColour(nm);
+      const dot = document.createElement("span");
+      Object.assign(dot.style, { width: "9px", height: "9px", borderRadius: "50%", background: acc, flexShrink: "0" } as Partial<CSSStyleDeclaration>);
       const b = document.createElement("button");
       const on = nm === cur;
       b.textContent = nm;
       Object.assign(b.style, {
         flex: "1", fontSize: "11px", fontWeight: on ? "800" : "600", padding: "4px 10px",
         borderRadius: "8px", cursor: "pointer", whiteSpace: "nowrap", textAlign: "left",
-        background: on ? color : "rgba(255,255,255,0.06)",
+        background: on ? acc : "rgba(255,255,255,0.06)",
         color: on ? "#0d1016" : "#dfe4ee",
-        border: on ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.14)",
+        border: `1px solid ${on ? acc : "rgba(255,255,255,0.14)"}`,
       } as Partial<CSSStyleDeclaration>);
       b.onclick = () => {
         if (isDef) def.defRole = nm === "自動" ? undefined : nm;
@@ -1322,7 +1418,7 @@ export class UI {
         b.onmouseenter = () => this.previewRole(def, team, nm);
         b.onmouseleave = () => this.clearVsPreview();
       }
-      cell.appendChild(b);
+      cell.append(dot, b);
       // ⓘ — press (or hover) to read what the role means / what it rewards
       const tip = nm === "自動"
         ? (isDef ? "能力から自動でディフェンスロールを選びます。" : "ポジション標準の重みで評価します（ロール未設定）。")
@@ -1793,40 +1889,57 @@ export class UI {
         this.carryHl = null;
       }
     };
+    const setHl = (el: HTMLElement) => {
+      if (this.carryHl === el) return;
+      clearHl();
+      el.style.border = "1px dashed rgba(150,195,255,0.95)";
+      el.style.background = "rgba(90,140,255,0.22)";
+      this.carryHl = el;
+    };
+    // preview how team strength would change if dropped on the given slot
+    const preview = (idx: number): void => {
+      if (idx === previewIdx) return;
+      previewIdx = idx;
+      if (previewIdx >= 0) this.showVsPreview(team, previewIdx, dbp);
+      else this.clearVsPreview();
+    };
     const onMove = (e: PointerEvent) => {
       g.style.left = `${e.clientX}px`;
       g.style.top = `${e.clientY - 18}px`;
       const t = this.dropTargetAt(e.clientX, e.clientY);
       const valid = t && t.team === team ? t : null;
-      if (this.carryHl && this.carryHl !== valid?.el) clearHl();
-      if (valid && this.carryHl !== valid.el) {
-        valid.el.style.border = "1px dashed rgba(150,195,255,0.95)";
-        valid.el.style.background = "rgba(90,140,255,0.22)";
-        this.carryHl = valid.el;
-      }
-      // preview how team strength would change if dropped on this player
-      const wantIdx = valid ? valid.idx : -1;
-      if (wantIdx !== previewIdx) {
-        previewIdx = wantIdx;
-        if (previewIdx >= 0) this.showVsPreview(team, previewIdx, dbp);
-        else this.clearVsPreview();
-      }
+      if (valid) setHl(valid.el); else clearHl();
+      preview(valid ? valid.idx : -1);
+    };
+    const commit = (idx: number): void => {
+      const nd = ROSTER[team][idx];
+      applyDbPlayer(nd, dbp);
+      // a swapped-in player arrives WITH sensible default roles (prevents the
+      // "forgot to set a role" gap the user hit) — offence by axes, defence by
+      // ratings; choice order back to auto.
+      nd.evalRole = this.bestOffRole(nd);
+      nd.defRole = this.pickDefRole(nd);
+      this.assignRankFor(nd, team, idx);   // primary by ability (teammates untouched)
+      this.cancelCarry();
+      this.refreshEditors();
     };
     const onDown = (e: PointerEvent) => {
       const t = this.dropTargetAt(e.clientX, e.clientY);
       if (t && t.team === team) {
         e.preventDefault();
         e.stopPropagation();   // beat the row's own long-press drag
-        const nd = ROSTER[team][t.idx];
-        applyDbPlayer(nd, dbp);
-        // a swapped-in player arrives WITH sensible default roles (prevents the
-        // "forgot to set a role" gap the user hit) — offence by axes, defence by
-        // ratings; choice order back to auto.
-        nd.evalRole = this.bestOffRole(nd);
-        nd.defRole = this.pickDefRole(nd);
-        this.assignRankFor(nd, team, t.idx);   // primary by ability (teammates untouched)
-        this.cancelCarry();
-        this.refreshEditors();
+        // Touch has no hover, so the strength preview never got a chance to show.
+        // First tap on a slot PREVIEWS the change (highlight + ±N on the VS board);
+        // a second tap on the SAME slot confirms it. A tap on a different slot just
+        // moves the preview. Mouse still commits on the first click (its hover
+        // already previewed the change).
+        if (e.pointerType !== "mouse" && previewIdx !== t.idx) {
+          setHl(t.el);
+          preview(t.idx);
+          hint.textContent = "もう一度タップで確定（Escで取消）";
+          return;
+        }
+        commit(t.idx);
       } else {
         this.cancelCarry();    // dropped away from any of his roster rows → cancel
       }
@@ -2166,6 +2279,37 @@ export class UI {
     const n1 = document.createElement("span"); n1.textContent = TEAM_NAMES[1]; n1.style.color = colorOf(1);
     title.append(n0, n1);
     wrap.appendChild(title);
+
+    // per-quarter line score: 名前 | Q1 Q2 … | T
+    const nq = Math.max(game.qLine[0].length, game.qLine[1].length);
+    if (nq > 0) {
+      const ls = document.createElement("div");
+      Object.assign(ls.style, {
+        display: "grid", gridTemplateColumns: `minmax(48px,1.4fr) repeat(${nq}, 1fr) 1fr`,
+        gap: "1px 6px", fontSize: "11px", alignItems: "center",
+        margin: "2px 0 7px", paddingBottom: "5px", borderBottom: "1px solid rgba(255,255,255,0.12)",
+      } as Partial<CSSStyleDeclaration>);
+      const lsCell = (txt: string, o: { color?: string; bold?: boolean; align?: string; dim?: boolean }): HTMLSpanElement => {
+        const s = document.createElement("span");
+        Object.assign(s.style, {
+          textAlign: o.align ?? "center", color: o.color ?? "#fff",
+          fontWeight: o.bold ? "800" : "600", opacity: o.dim ? "0.55" : "1", fontSize: o.dim ? "10px" : "11px",
+        } as Partial<CSSStyleDeclaration>);
+        s.textContent = txt;
+        return s;
+      };
+      // header row: (blank) Q1 Q2 … T
+      ls.appendChild(lsCell("", { dim: true, align: "left" }));
+      for (let i = 0; i < nq; i++) ls.appendChild(lsCell(`Q${i + 1}`, { dim: true }));
+      ls.appendChild(lsCell("T", { dim: true, bold: true }));
+      // one row per team
+      for (let t = 0; t < 2; t++) {
+        ls.appendChild(lsCell(TEAM_NAMES[t], { color: colorOf(t), bold: true, align: "left" }));
+        for (let i = 0; i < nq; i++) ls.appendChild(lsCell(String(game.qLine[t][i] ?? "-"), { color: colorOf(t) }));
+        ls.appendChild(lsCell(String(game.score[t]), { color: colorOf(t), bold: true }));
+      }
+      wrap.appendChild(ls);
+    }
 
     for (const r of rows) {
       const row = document.createElement("div");

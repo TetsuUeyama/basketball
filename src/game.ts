@@ -42,6 +42,7 @@ export class Game {
 
   // --- score / clock ---
   score: [number, number] = [0, 0];
+  qLine: number[][] = [[], []];   // per-team points scored in each completed quarter
   quarter = 1;
   gameClock = QUARTER_TIME;
   shotClock = SHOT_CLOCK;
@@ -690,6 +691,7 @@ export class Game {
 
   reset(): void {
     this.score = [0, 0];
+    this.qLine = [[], []];
     this.quarter = 1;
     this.gameClock = QUARTER_TIME;
     this.shotClock = SHOT_CLOCK;
@@ -4453,6 +4455,15 @@ export class Game {
     this.handler = null;
     this.gameClock = 0;
     const ended = this.quarter;
+    // log this period's points for the result-screen line score (cumulative
+    // score minus what the earlier periods already accounted for). Guarded so a
+    // re-entrant buzzer path can't record the same quarter twice.
+    if (this.qLine[0].length < ended) {
+      for (let t = 0; t < 2; t++) {
+        const prior = this.qLine[t].reduce((s, v) => s + v, 0);
+        this.qLine[t].push(this.score[t] - prior);
+      }
+    }
     this.setEvent(ended === 2 ? "HALFTIME" : `END OF Q${ended}`, leader, 3.0);
     // the break itself restores some legs — halftime considerably more
     if (ended < QUARTERS) {

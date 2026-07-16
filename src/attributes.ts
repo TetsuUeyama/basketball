@@ -367,10 +367,16 @@ export function applyDbPlayer(def: PlayerDef, p: DbPlayer): void {
   def.future = src.future;
 }
 
-export function randomizeRosters(): void {
+// Draw a fresh 13-man roster for ONE team from the database, avoiding anyone
+// already on the OTHER team so the two line-ups never share a player.
+export function randomizeTeam(team: number): void {
   const pools: Record<string, DbPlayer[]> = { PG: [], SG: [], SF: [], PF: [], C: [] };
   for (const p of PLAYER_DB) pools[p[1]]?.push(p);
   const used = new Set<DbPlayer>();
+  // reserve the other team's current players (matched by name) so we never
+  // duplicate them into this team
+  const otherNames = new Set(ROSTER[1 - team].map((p) => p.name));
+  for (const p of PLAYER_DB) if (otherNames.has(p[0])) used.add(p);
   const draw = (role: string): DbPlayer => {
     const pool = pools[role] ?? PLAYER_DB;
     for (let tries = 0; tries < 60; tries++) {
@@ -382,12 +388,15 @@ export function randomizeRosters(): void {
     return fallback;
   };
   const roles = ["PG", "SG", "SF", "PF", "C", ...BENCH_ROLES];
-  for (let t = 0; t < 2; t++) {
-    for (let i = 0; i < ROSTER_SIZE; i++) {
-      applyDbPlayer(ROSTER[t][i], draw(roles[i]));
-      ROSTER[t][i].role = roles[i];   // pin to the slot's position (a fallback draw may differ)
-    }
+  for (let i = 0; i < ROSTER_SIZE; i++) {
+    applyDbPlayer(ROSTER[team][i], draw(roles[i]));
+    ROSTER[team][i].role = roles[i];   // pin to the slot's position (a fallback draw may differ)
   }
+}
+
+export function randomizeRosters(): void {
+  randomizeTeam(0);
+  randomizeTeam(1);   // team 1 avoids team 0's fresh draw → no shared players
 }
 
 // NBA-style 13-man roster indexed [team][idx]: idx 0..4 = starters
