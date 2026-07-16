@@ -1181,7 +1181,10 @@ export class Game {
       tx = -fz * side * 0.45 - fx * 0.06;
       tz = fx * side * 0.45 - fz * 0.06;
     }
-    const cs = (2.0 + rate(h.attr.dribbleAcc) * 5.0) * dt;   // D精度: 持ち替えの速さ
+    // 持ち替え/クロスオーバーの速さは D精度 依存。下手ほどモッサリ、上手いほど素早い
+    // (~0.9 m の左右持ち替えで下手≈1.8s / 上手≈0.45s)。全体に遅めで、持ち替えに
+    // ちゃんと「時間がかかる」よう調整した。
+    const cs = (0.5 + rate(h.attr.dribbleAcc) * 1.5) * dt;   // 0.5 .. 2.0 m/s
     h.carryX += clamp(tx - h.carryX, -cs, cs);
     h.carryZ += clamp(tz - h.carryZ, -cs, cs);
     // スティール誘い: walled off with the defender tight, a skilled handler
@@ -1403,20 +1406,68 @@ export class Game {
       }
     }
 
-    // SWARMED + can't secure it: a poor ball-handler collapsed on by 2+ close
-    // defenders GIVES IT UP — passes out to be released rather than dribble into
-    // a strip. How readily he panics is RELATIVE: a secure handler (D精度/技術/
-    // ドリブルキープ) vs weak hands keeps his poise; a poor one vs quick hands
-    // gets rid of it fast. This is the smart read that keeps a bad handler from
-    // trying to keep his dribble in a crowd.
+    // DOUBLE-TEAM / TRAP: a GENUINE trap is two men BOTH collapsed tight on the
+    // ball (not merely two defenders loosely in the area, which is constant in a
+    // half-court). Only then does the trap read take over; otherwise fall through
+    // to the normal decision. The correct read is to KICK OUT (a double team
+    // leaves a team-mate open) or keep it and reset — not bull into the wall.
     {
-      let near = 0, edge = 0;
+      const d1 = this.onBallDefender(h);
+      let tight = 0, contain = 0;
+      let d2: Player | null = null, d2d = Infinity;
       for (const dn of this.teamPlayers(1 - h.team)) {
-        if (dist2D(dn.pos, h.pos) < 2.0) { near++; edge += this.stripEdge(dn, h); }
+        const dd = dist2D(dn.pos, h.pos);
+        if (dd < 1.6) {
+          tight++;
+          contain += rate(dn.attr.defense) * 0.4 + rate(dn.attr.agility) * 0.35 + rate(dn.attr.balance) * 0.25;
+        }
+        if (dn !== d1 && dd < 1.9 && dd < d2d) { d2d = dd; d2 = dn; }
       }
-      if (near >= 2) {
-        const panic = clamp((near - 1) * 0.32 + (edge / near) * 0.85, 0, 0.9);
-        if (chance(panic) && this.pass(h)) return;
+      // real trap: two men within 1.6 m AND actual on-ball pressure (dDef tight)
+      if (tight >= 2 && dDef < 1.4) {
+        // Splitting the trap off the dribble. A designated slasher — スラッシャー
+        // special ability ("driver") OR スラッシャー offence role (offAction
+        // "slash") — does it READILY; anyone else only rarely forces it (a low,
+        // non-zero floor so the read isn't robotic). It is NOT just an ability
+        // check: a real SEAM has to exist between the two trappers, and a team-mate
+        // bodying one of them opens it up further. Success is RELATIVE to the trap.
+        if (this.canIso(h, dHoop)) {
+          // SEAM measured along the lane to the rim: split to either side → a gap
+          // down the MIDDLE; overloaded to one side → the OUTSIDE is the opening;
+          // stacked on the ball → no lane.
+          let seam = 0;
+          if (d1 && d2) {
+            let ux = rimFloor.x - h.pos.x, uz = rimFloor.z - h.pos.z;
+            const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
+            const px = -uz, pz = ux;                                    // lateral axis
+            const lat1 = (d1.pos.x - h.pos.x) * px + (d1.pos.z - h.pos.z) * pz;
+            const lat2 = (d2.pos.x - h.pos.x) * px + (d2.pos.z - h.pos.z) * pz;
+            seam = lat1 * lat2 < 0 ? Math.min(Math.abs(lat1), Math.abs(lat2)) : 0.8;
+          }
+          const seamScore = clamp((seam - 0.4) / 1.2, 0, 1);           // ~bodies..wide-open
+          // a TEAM-MATE bodying / screening one trapper occupies him, so the trap
+          // is effectively short-handed and the handler slips his mark
+          let screen = 0;
+          for (const mate of this.teamPlayers(h.team)) {
+            if (mate === h) continue;
+            if (d1 && dist2D(mate.pos, d1.pos) < 1.2) screen = Math.max(screen, 0.5);
+            if (d2 && dist2D(mate.pos, d2.pos) < 1.2) screen = Math.max(screen, 0.5);
+          }
+          const attack = rate(h.attr.handling) * 0.35 + rate(h.attr.agility) * 0.35
+            + rate(h.attr.dribbleAcc) * 0.20 + rate(h.attr.speed) * 0.10;
+          const rel = attack - contain / tight;                        // edge over the trap
+          const slasher = h.has("driver") || act === "slash";
+          const openness = seamScore * (slasher ? 0.28 : 0.14) + screen * (slasher ? 0.22 : 0.12);
+          const splitChance = slasher
+            ? clamp(0.05 + rel * 1.5 + openness, 0.03, 0.65)
+            : clamp(0.02 + rel * 0.45 + openness, 0.015, 0.24);
+          if (chance(splitChance)) { this.driveDecision(h); return; }
+        }
+        // otherwise: pass out of the trap; if nobody is open, keep it and reset
+        // out rather than advance into the double team.
+        if (this.pass(h)) return;
+        this.advanceSafely(h);
+        return;
       }
     }
 
@@ -1972,6 +2023,7 @@ export class Game {
       }
     }
 
+
     for (const d of defenders) {
       const man = offense[d.slot]; // man-to-man by matching index
       const isOnBall = man === this.handler;
@@ -2036,7 +2088,7 @@ export class Game {
               return;
             }
           }
-          if (chance((0.02 + press * 0.045) * close * dt)) { this.defensiveFoul(man); return; }
+          if (chance((0.02 + press * 0.045) * close * dt)) { this.defensiveFoul(man, d); return; }
         }
         continue;
       }
@@ -3133,7 +3185,12 @@ export class Game {
     this.contestJump(h);
     this.handler = null;
     this.pendingAssist = null;
-    h.foulReaction("hurt");   // sell the contact during the dead-ball beat
+    // knocked away from the contesting defender, harder if he's strong/aggressive
+    const fpx = od ? h.pos.x - od.pos.x : 0;
+    const fpz = od ? h.pos.z - od.pos.z : 0;
+    const fs = od ? clamp(0.3 + rate(od.attr.balance) * 0.4 + rate(od.attr.aggression) * 0.2
+      - rate(h.attr.balance) * 0.35, 0.1, 1) : 0.5;
+    h.foulReaction("hurt", fpx, fpz, fs);   // sell the contact during the dead-ball beat
     this.setEvent("SHOOTING FOUL", h.team, 1.8);
     const count = this.shotPoints;
     // hold so the foul reads, then go to the line
@@ -3230,8 +3287,17 @@ export class Game {
   }
 
   // Non-shooting (reach-in) foul: the offence keeps the ball and inbounds.
-  private defensiveFoul(victim: Player): void {
-    victim.foulReaction("hurt");   // rock back off the contact while play stops
+  private defensiveFoul(victim: Player, fouler?: Player): void {
+    // knocked AWAY from the man who hit him; how hard depends on the fouler's
+    // strength/aggression vs how well the victim keeps his balance
+    let px = 0, pz = 0, strength = 0.5;
+    if (fouler) {
+      px = victim.pos.x - fouler.pos.x;
+      pz = victim.pos.z - fouler.pos.z;
+      strength = clamp(0.3 + rate(fouler.attr.balance) * 0.4 + rate(fouler.attr.aggression) * 0.2
+        - rate(victim.attr.balance) * 0.35, 0.1, 1);
+    }
+    victim.foulReaction("hurt", px, pz, strength);   // rock off the contact while play stops
     this.setEvent("FOUL", victim.team);
     this.possession = victim.team;
     this.handler = null;

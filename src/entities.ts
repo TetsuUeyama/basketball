@@ -5,7 +5,7 @@ import {
 import { TEAM_COLORS, HUD_OPTS } from "./config";
 import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority, ROLE_BEHAVIOR,
   DEF_ROLE_BEHAVIOR, OffAction, offActionOf } from "./attributes";
-import { clamp, rand, playerLook } from "./util";
+import { clamp, rand, chance, playerLook } from "./util";
 
 // A player's box-score line for the current game. `min` is time on court in
 // game-clock seconds (shown as minutes in the result screen).
@@ -166,6 +166,15 @@ export class Player {
   private foulReactDur = 0;
   private foulReactKind: "hurt" | "and1" = "hurt";
   private flinchPitch = 0;   // extra root pitch while flinching, added in sync()
+  private flinchRoll = 0;    // extra root roll while flinching (directional foul tilt)
+  // direction the contact knocked him (world unit XZ; 0,0 = no info → back-rock),
+  // its strength (0..1), and whether it knocked him off balance into a stumble
+  private foulPushX = 0;
+  private foulPushZ = 0;
+  private foulStrength = 0;
+  private foulStumble = false;
+  private foulStaggerX = 0;
+  private foulStaggerZ = 0;
 
   // --- conditioning (スタミナ/加速) ---
   // Actual speed achieved last frame (m/s), measured from displacement; the
@@ -877,21 +886,52 @@ export class Player {
     if (this.baitT > 0) this.baitT = Math.max(0, this.baitT - dt);
     if (this.openRollT > 0) this.openRollT = Math.max(0, this.openRollT - dt);
     if (this.setupT > 0) this.setupT = Math.max(0, this.setupT - dt);
-    if (this.foulReactT > 0) this.foulReactT = Math.max(0, this.foulReactT - dt);
+    if (this.foulReactT > 0) {
+      this.foulReactT = Math.max(0, this.foulReactT - dt);
+      // stumble: an off-balance stagger step in the push direction, spent over
+      // the FIRST part of the reaction (he catches himself after)
+      if (this.foulStumble && this.foulReactDur > 0) {
+        const remain = this.foulReactT / this.foulReactDur;      // 1 → 0
+        const w = clamp((remain - 0.55) / 0.45, 0, 1);           // strong at start, gone by ~45% elapsed
+        const r = w * 2.4 * dt;
+        this.pos.x += this.foulStaggerX * r;
+        this.pos.z += this.foulStaggerZ * r;
+      }
+    }
   }
 
-  /** Kick off a foul reaction (fouled player / AND-1 scorer). */
-  foulReaction(kind: "hurt" | "and1"): void {
+  /** Kick off a foul reaction. `pushX/pushZ` is the world direction the contact
+   *  knocked him (0,0 = unknown → a plain back-rock); `strength` (0..1) scales how
+   *  hard he rocks, how long it lasts, and the chance it becomes a stumble. */
+  foulReaction(kind: "hurt" | "and1", pushX = 0, pushZ = 0, strength = 0.5): void {
     this.foulReactKind = kind;
-    this.foulReactDur = this.foulReactT = kind === "and1" ? 1.1 : 0.9;
-    if (kind === "and1") this.jump(0.22, 0.4);   // the flex hop
+    const s = clamp(strength, 0, 1);
+    this.foulStrength = s;
+    const pl = Math.hypot(pushX, pushZ);
+    if (pl > 0.01) { this.foulPushX = pushX / pl; this.foulPushZ = pushZ / pl; }
+    else { this.foulPushX = this.foulPushZ = 0; }        // no direction → back-rock
+    // a HARD, off-centre hit can BLOW him back — a little hop off his feet and a
+    // big stagger; a lighter one is just a stumble step; most are neither.
+    const hard = kind === "hurt" && pl > 0.01;
+    const knock = hard && s > 0.5 && chance((s - 0.5) * 0.8);
+    this.foulStumble = hard && (knock || chance(0.12 + s * 0.5));
+    // a harder hit sells longer; a knockback needs time to fly and land
+    this.foulReactDur = this.foulReactT =
+      kind === "and1" ? 1.1 : knock ? (1.0 + s * 0.4) : (0.6 + s * 0.6);
+    if (kind === "and1") this.jump(0.22, 0.4);           // the flex hop
+    else if (knock) this.jump(0.14 + s * 0.16, 0.5 + s * 0.2);   // popped off the floor
+    if (this.foulStumble) {
+      const step = knock ? (0.7 + s * 0.9) : (0.3 + s * 0.5);   // blown back vs a stumble
+      this.foulStaggerX = this.foulPushX * step;
+      this.foulStaggerZ = this.foulPushZ * step;
+    } else { this.foulStaggerX = this.foulStaggerZ = 0; }
   }
 
   /** One frame of the foul-reaction pose. Call AFTER runArms (it owns the
    *  arms while it runs); ticking happens in tickCooldown. */
   poseFoulReaction(): void {
     if (this.foulReactT <= 0) {
-      this.flinchPitch = 0;   // reaction over (or interrupted) — stand back up
+      this.flinchPitch = this.flinchRoll = 0;   // reaction over (or interrupted) — stand back up
       return;
     }
     const k = this.foulReactDur > 0 ? 1 - this.foulReactT / this.foulReactDur : 1;
@@ -902,12 +942,27 @@ export class Player {
       this.setArmDir(this.armPivotR, 0.7, 0.9, 0);
       this.bendElbow(this.elbowL, 1.35);
       this.bendElbow(this.elbowR, 1.35);
+      this.flinchPitch = this.flinchRoll = 0;
     } else {
-      // sold contact: arms fly out low and the body rocks back off the hit
+      // sold contact: arms fly out low to catch balance
       this.setArmDir(this.armPivotL, -1, -0.5, 0.25);
       this.setArmDir(this.armPivotR, 1, -0.5, 0.25);
       this.elbowL.rotation.x = this.elbowR.rotation.x = 0;
-      this.flinchPitch = this.numberSide * 0.22 * env;   // back = away from the chest
+      if (this.foulPushX !== 0 || this.foulPushZ !== 0) {
+        // DIRECTIONAL rock: tip the body in the direction the hit sent him, harder
+        // for a stronger contact. World push → yaw-local pitch/roll (same
+        // convention as the lean tilt) so the whole figure leans off the hit.
+        const th = this.root.rotation.y;
+        const c = Math.cos(th), s = Math.sin(th);
+        const m = (0.16 + this.foulStrength * 0.34) * env;   // tilt amount
+        const wx = this.foulPushX * m, wz = this.foulPushZ * m;
+        this.flinchPitch = wx * s + wz * c;                  // tip toward local +Z
+        this.flinchRoll = -(wx * c - wz * s);                // and toward local +X
+      } else {
+        // no direction info → the old straight back-rock
+        this.flinchPitch = this.numberSide * 0.22 * env;
+        this.flinchRoll = 0;
+      }
     }
   }
 
@@ -1259,8 +1314,9 @@ export class Player {
     this.tiltZ += (tz - this.tiltZ) * 0.25;
     this.root.rotation.x = this.tiltX + this.flinchPitch;   // + the foul-flinch rock-back
     // the acorn body waddles side to side in step with the foot flaps (eased in
-    // updateAcornFeet, zero when still/airborne or in human mode)
-    this.root.rotation.z = this.tiltZ + (HUD_OPTS.model === "acorn" ? this.acornWaddle : 0);
+    // updateAcornFeet, zero when still/airborne or in human mode); the foul-flinch
+    // roll tips him sideways off a hit that came from an angle
+    this.root.rotation.z = this.tiltZ + this.flinchRoll + (HUD_OPTS.model === "acorn" ? this.acornWaddle : 0);
   }
 
   /** Re-read name / height / role / priority / derived values from a (possibly
