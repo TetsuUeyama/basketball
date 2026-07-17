@@ -71,6 +71,9 @@ export class Game {
   // bring-up. "" = straight man-to-man (the pnr coverage above applies then).
   private zoneScheme: "" | "2-3" | "3-2" = "";
   private pressOn = false;
+  // the press trap's second man THIS frame — he hunts the ball (dig pose /
+  // steal) instead of bodying in; set by runPress, cleared every runDefense tick
+  private pressTrapper: Player | null = null;
   // ジャスト・パスレシーブ: quality of the pass currently in flight (1 = right on
   // the hands). Rolled at release from P精度 + spread; on the catch it decides
   // how quickly the receiver can move to his next action (gather time).
@@ -87,6 +90,9 @@ export class Game {
 
   // pass animation
   private passFrom = new Vector3();
+  private passCatch = new Vector3();   // the FIXED lead point the ball flies to — constant speed, no lurch
+  private passMiss = 0;                // metres the delivery lands off-target (P精度-driven) — feeds both the scatter and the catch gather
+  private passMissY = 0;               // vertical scatter of an off-target pass (high / low), from P精度
   private passTo: Player | null = null;
   private passT = 0;
   private passDur = 0;
@@ -119,10 +125,13 @@ export class Game {
   private looseOff = 0;      // the offensive team when the ball came loose (for the rebound label)
   private lastTouch: Player | null = null;   // last player to touch the ball — decides out-of-bounds throw-ins
   private looseIsRebound = false; // true when the loose ball came off a missed shot
+  private looseFromRim = false;   // true only off RIM contact — the only offensive recovery that resets the shot clock
   private looseStealBy: Player | null = null;     // defender who poked/deflected it loose
   private looseStealVictim: Player | null = null; // ball-handler/passer who lost it
   private looseAge = 0;                            // how long the ball has been loose
   private looseGrabAfter = 0;                      // delay before it can be secured (a visible scramble)
+  private blockHoldT = 0;                          // a beat where a swatted ball is pinned at the blocker's hand
+  private blockHoldVel = new Vector3();            // the deflection velocity applied when the hold ends
   private inboundT = 0;
 
   // assist bookkeeping: who threw the pass currently being shot off, and who the
@@ -157,6 +166,7 @@ export class Game {
   private oobWalker: Player | null = null;
   private oobSpot = new Vector3();
   private oobTeam = 0;
+  private oobShotClock = 0;   // the shot clock to restore on the throw-in (decided at the whistle)
   // true while the ball is physically dropping+bouncing during a dead-ball
   // pause (e.g. after a made basket it falls through the net and bounces)
   private ballFalling = false;
@@ -782,6 +792,7 @@ export class Game {
     this.subWalkers = [];
     this.subNext = null;
     this.oobWalker = null;
+    this.blockHoldT = 0;
     this.cheerT = [-1, -1];
     this.longShot = false;
     this.longShotHoldT = 0;
@@ -1089,6 +1100,20 @@ export class Game {
       // OFF THE FLOOR he can't re-orient: a jumper (shooter, contester, tip) holds
       // whatever way he was facing at take-off until he lands — no mid-air turns.
       if (p.airborne) continue;
+      // the RECEIVER squares his chest to the INCOMING ball to take it in both
+      // hands — the same chest-on snap the passer makes, so a ball arriving from
+      // behind turns him around (the torso covers what it can, the feet turn the
+      // excess; his run to the catch point is untouched — legs keep travelling).
+      // Inside ~0.5 m the bearing to the ball swings wildly frame-to-frame, so
+      // hold the last orientation for the actual catch instant.
+      if (this.ballMode === "pass" && p === this.passTo) {
+        if (dist2D(p.pos, b) > 0.5) p.faceChestToward(b.x, b.z);
+        continue;
+      }
+      // still corralling the catch (gatherT): HOLD the catch posture — he doesn't
+      // swing his chest around to the goal until the ball is actually secured
+      // (the ball wobbles at his chest and both hands stay on it meanwhile)
+      if (p === this.handler && p.gatherT > 0) continue;
       const aim = (p === this.handler || p === this.shooter) ? this.attackFloor(p.team) : b;
       // Lower body: while running, the legs face the direction of TRAVEL and the
       // torso twists toward the play (twistToward) — receiving on the move,
@@ -1152,6 +1177,23 @@ export class Game {
       this.poseOnBallHands(this.handler, b, posed);   // what the on-ball defender answers
       this.poseDenyHands(this.handler, b, posed);       // off-ball defenders denying the pass
       posed.add(this.handler);   // his dribble hand slews too (below) — don't stomp it
+      // まだ収まっていない: while the receiver is corralling a bobbled catch, the man
+      // on him DIGS at the loose ball — both arms reaching low for the exposed
+      // ball, so the steal attempt is visible (catchStrips does the step + poke).
+      if (this.handler.gatherT > 0) {
+        const d = this.onBallDefender(this.handler);
+        if (d && !d.airborne && dist2D(d.pos, this.handler.pos) < 2.0) {
+          d.reach(new Vector3(b.x, b.y, b.z), true);
+          posed.add(d);
+        }
+      }
+      // press trap: the second man doesn't body in — he stands off and DIGS at
+      // the ball, both hands hunting it, so the trap reads as a steal attempt
+      const pt = this.pressTrapper;
+      if (pt && !pt.airborne && dist2D(pt.pos, this.handler.pos) < 1.8) {
+        pt.reach(new Vector3(b.x, b.y, b.z), true);
+        posed.add(pt);
+      }
     } else if (this.ballMode === "charge" && this.shooter) {
       const cd = this.onBallDefender(this.shooter);     // a grounded contest goes STRAIGHT UP
       if (cd && !cd.airborne && dist2D(cd.pos, this.shooter.pos) < 2.2) {
@@ -1168,11 +1210,18 @@ export class Game {
     switch (this.ballMode) {
       case "held": {
         if (this.handler) {
-          // hand hovers at dribble height while the ball bounces below it —
-          // dribbled with the hand on the SAME side the ball is carried (a hip
-          // carry uses the near hand, not the far arm reaching across the body)
-          const bw = new Vector3(b.x, 0.95, b.z);
-          this.handler.reachDribble(bw, this.handler.dribbleWithRight(bw), this.dribArmRate(this.handler));
+          if (this.handler.gatherT > 0) {
+            // まだ収まっていない: the two-handed CATCH pose carries straight on —
+            // both hands stay clamped on the ball wobbling at his chest until it
+            // settles (gatherT drains); only then does he drop into the dribble
+            this.handler.reach(b, true);
+          } else {
+            // hand hovers at dribble height while the ball bounces below it —
+            // dribbled with the hand on the SAME side the ball is carried (a hip
+            // carry uses the near hand, not the far arm reaching across the body)
+            const bw = new Vector3(b.x, 0.95, b.z);
+            this.handler.reachDribble(bw, this.handler.dribbleWithRight(bw), this.dribArmRate(this.handler));
+          }
         }
         break;
       }
@@ -1184,7 +1233,12 @@ export class Game {
         this.handler?.reach(b);                      // holds the ball to throw it in
         break;
       case "shot":
-        if (this.shooter && this.shotT < this.shotDur * 0.45) this.shooter.reach(b, true);
+        // a FINISHER keeps his hand ON the ball all the way to the rim (a dunk/layup
+        // is arm-driven); a jumper only holds the release for the first beat, then
+        // follows through.
+        if (this.shooter && (this.shooterFinishing || this.shotT < this.shotDur * 0.45)) {
+          this.shooter.reach(b, true);
+        }
         this.raiseAirborne(b, this.shooter);         // contesting defenders go up
         break;
       case "freethrow":
@@ -1197,7 +1251,12 @@ export class Game {
           const pr = this.passer.pos, tp = this.passTo.pos;
           const dx = tp.x - pr.x, dz = tp.z - pr.z, dl = Math.hypot(dx, dz) || 1;
           this.passer.reach(new Vector3(pr.x + (dx / dl) * 1.2, 1.3, pr.z + (dz / dl) * 1.2), true);
-        } else if (this.passT > this.passDur * 0.6) this.passTo?.reach(b, true); // catch
+        } else if (this.passT > this.passDur * 0.45) {
+          // CATCH: the receiver puts BOTH hands out to meet the incoming ball
+          // (his chest is already squared to it — updateFacing turns him) and
+          // keeps them on it through the arrival, so the take reads two-handed
+          this.passTo?.reach(b, true);
+        }
         if (this.passSteal) this.passSteal.def.reach(b);                   // jumping the lane
         break;
       case "loose":
@@ -1360,6 +1419,8 @@ export class Game {
     if (!this.frontT && this.attackSign(h.team) * h.pos.z > 0.6) this.frontT = true;
     this.runOffense(dt, h);
     this.runDefense(dt);
+    this.catchStrips(dt);
+    if (this.ballMode !== "held") return;   // knocked loose out of a bobbled catch
     this.swarmStrips(dt);
     if (this.ballMode !== "held") return;   // a strip this frame ended the dribble
     // --- dribble CARRY position: where the live ball sits around the handler.
@@ -1398,6 +1459,49 @@ export class Game {
     const bounce = Math.abs(Math.cos(Math.PI * h.dribblePhase)); // 1 = at the hand, 0 = floor
     const y = 0.18 + (1.0 - 0.18) * bounce;
     this.ball.pos.set(h.pos.x + h.carryX, y, h.pos.z + h.carryZ);
+    // まだ収まっていない: fresh off an off-target catch the ball is NOT secured —
+    // it stays where the two-handed catch met it, OUT IN FRONT OF THE CHEST, and
+    // squirms between both palms until gatherT drains (poseHands keeps both hands
+    // reaching onto it the whole while, extending the catch animation). Only once
+    // it settles does it drop into the normal one-hand carry. The amplitude
+    // decays with the remaining 硬直.
+    if (h.gatherT > 0) {
+      const amp = Math.min(0.11, h.gatherT * 0.22);   // subtle — he has it, just settling it
+      const c = h.chestFront(0.36);
+      this.ball.pos.set(
+        c.x + rand(-1, 1) * amp,
+        1.0 + rand(-0.3, 0.25) * amp,   // chest height, jostling in the two-hand grasp
+        c.z + rand(-1, 1) * amp,
+      );
+    }
+  }
+
+  // 収まる前のスティール: while the receiver is still corralling a bobbled catch
+  // (gatherT), the ball is loose in his hands — any defender right on him can dig
+  // it out and knock it away (a live loose ball, not a clean pick). The worse the
+  // bobble (deeper into the 硬直) and the weaker his 技術 vs the defender's hands,
+  // the more likely. A clean catch (gatherT≈0) is never exposed this way.
+  private catchStrips(dt: number): void {
+    const h = this.handler;
+    if (!h || this.ballMode !== "held" || h.gatherT <= 0) return;
+    const bobble = clamp(h.gatherT * 2.4, 0.2, 1.3);       // how loose the ball still is
+    const b = this.ball.pos;
+    // the man guarding him JUMPS the bobble: he steps in and digs at the loose
+    // ball (the reach pose is in poseHands, gated on the same gatherT). A help
+    // defender close by can also poke, but only the primary lunges in.
+    const onBall = this.onBallDefender(h);
+    for (const d of this.teamPlayers(1 - h.team)) {
+      if (d.airborne) continue;
+      const gap = dist2D(d.pos, h.pos);
+      if (gap > 1.8) continue;
+      if (d === onBall && gap > 0.75) {
+        // lunge in to attack the exposed ball (don't crawl onto his back)
+        moveToward2D(d.pos, b.x, b.z, d.accelSpeed(dt, 1.2) * dt * 0.8);
+      }
+      const close = 1 - clamp(gap / 1.8, 0, 1);
+      const edge = 0.18 + this.stripEdge(d, h) * 0.65;     // defender hands vs handler security
+      if (chance(Math.max(0, edge) * close * bobble * dt)) { this.steal(d); return; }
+    }
   }
 
   private runOffense(dt: number, h: Player): void {
@@ -1898,18 +2002,21 @@ export class Game {
     else this.setDrive(h, this.attackFloor(h.team), 8);   // ~top of the key, in the frontcourt
   }
 
-  // SOLVE THE TRAP WITH PASSING: the double-team always leaves a man open — hit
-  // the most open reachable team-mate with a forced pass (bounce between them /
-  // jump over the top). passToReceiver(force) skips the usual veto so PASSING
-  // ABILITY, not caution, decides it: a great passer threads it, a poor one who
-  // forces it gets picked off.
+  // SOLVE THE TRAP WITH PASSING: the double-team leaves a man open — hit him. Only
+  // force it to a GENUINELY OPEN team-mate through a lane that isn't dead-blocked
+  // (no wild kick-outs into coverage that read as throw-aways). The forced pass
+  // still skips the normal risk gate, so a skilled passer threads a tightish lane,
+  // but a covered man / a body in the lane is never forced.
   private trapKickOut(h: Player): boolean {
-    let best: Player | null = null, bestOpen = 1.0;   // need at least a sliver of space
+    let best: Player | null = null, bestScore = 0;
     for (const mate of this.teamPlayers(h.team)) {
       if (mate === h) continue;
       if (dist2D(h.pos, mate.pos) > MAX_PASS) continue;
+      if (this.laneVetoed(h, mate)) continue;          // a defender dead in the lane → don't force it
       const open = this.nearestDefenderDist(mate);
-      if (open > bestOpen) { bestOpen = open; best = mate; }
+      if (open < 1.6) continue;                         // only a genuinely open man
+      const score = open - this.passRisk(h, mate) * 2;  // open, with the cleanest lane
+      if (score > bestScore) { bestScore = score; best = mate; }
     }
     if (!best) return false;
     h.jump(0.26, 0.5);                       // a jump pass to see over the trap
@@ -2233,6 +2340,7 @@ export class Game {
 
     // full-court press: trap the bring-up in the backcourt before the offence
     // gets it into its set. Ends the moment the ball is established up front.
+    this.pressTrapper = null;   // (re)set each tick — only a live press assigns one
     if (this.pressOn && !this.frontT && this.handler) { this.runPress(dt); return; }
 
     // a half-court zone is a different animal — no man-matching, no pick-and-roll
@@ -2677,13 +2785,19 @@ export class Game {
       moveToward2D(primary.pos, tx, tz, primary.accelToward(dt, tx, tz, 1.1) * dt);
       this.clampCourt(primary.pos);
     }
-    // TRAPPER: pincer from the OTHER side of the handler
+    // TRAPPER: closes the pincer from the OTHER side, but does NOT add a second
+    // shoving body — only the primary bodies the handler. He holds an arm's-length
+    // standoff walling the escape route and hunts the BALL from there (the dig
+    // pose is in poseHands, the rip itself in the trapped roll below), so the
+    // second man reads as a steal threat, not as another bulldozer pinning the
+    // handler into the corner until the clock dies.
     {
       const side = h.pos.x >= 0 ? 1 : -1;
-      const tx = h.pos.x + ux * 0.4 + lx * 0.55 * side;
-      const tz = h.pos.z + uz * 0.4 + lz * 0.55 * side;
+      const tx = h.pos.x + ux * 0.35 + lx * 1.0 * side;
+      const tz = h.pos.z + uz * 0.35 + lz * 1.0 * side;
       moveToward2D(trapper.pos, tx, tz, trapper.accelToward(dt, tx, tz, 1.15) * dt);
       this.clampCourt(trapper.pos);
+      this.pressTrapper = trapper;
     }
     // DENY: stand in the passing lane between the ball and your man (ball-side),
     // so a pass out of the trap has to go through you
@@ -2712,8 +2826,9 @@ export class Game {
       const secure = rate(h.attr.dribbleAcc) * 0.5 + rate(h.attr.handling) * 0.4
         + (h.has("keepDribble") ? 0.2 : 0);
       const p = Math.max(0.01, 0.06 + hands * 0.12 - secure * 0.14);
-      const taker = dist2D(primary.pos, h.pos) < dist2D(trapper.pos, h.pos) ? primary : trapper;
-      if (chance(p * dt * 6)) { this.steal(taker); return; }
+      // the TRAPPER takes it — he's the one hunting the ball with free hands
+      // (the primary is busy bodying the handler, division of labour)
+      if (chance(p * dt * 6)) { this.steal(trapper); return; }
     }
   }
 
@@ -2994,9 +3109,9 @@ export class Game {
     const d = dist2D(from.pos, to.pos);
     const block = this.laneBlock(from, to);
     let r = block ? this.interceptChance(from, to, block) : 0;
-    if (d > 9) {
-      const fade = clamp(1 - (d - 9) * 0.06, 0.6, 1);
-      const flightT = d / (PASS_SPEED * (0.8 + rate(from.attr.passSpd) * 0.5) * fade);
+    if (d > 9) {   // the read still weighs a long ball's hang, matching the flight fade
+      const fade = d > 12 ? clamp(1 - (d - 12) * 0.05, 0.85, 1) : 1;
+      const flightT = d / (PASS_SPEED * (0.6 + rate(from.attr.passSpd) * 0.95) * fade);
       r += (this.longBallBest(from, to, flightT, d)?.p ?? 0) * 0.9;
     }
     return r;
@@ -3025,7 +3140,9 @@ export class Game {
     // CATCH point, not to where he stands now — lead a sprinting receiver by
     // his velocity over the flight. Without this, a 7 m release stretches into
     // a cross-court bomb that dodges every range/interception check.
-    const zip0 = PASS_SPEED * (0.8 + rate(h.attr.passSpd) * 0.5);
+    // P速度 drives how hard the ball is zipped — a WIDE spread so a great passer
+    // fires a bullet and a poor one lobs it (0.6× .. 1.55× of PASS_SPEED).
+    const zip0 = PASS_SPEED * (0.6 + rate(h.attr.passSpd) * 0.95);
     const d0 = dist2D(h.pos, target.pos);
     const lead = d0 / zip0;                              // first-pass flight time
     const cx = target.pos.x + target.velX * lead;
@@ -3045,18 +3162,34 @@ export class Game {
     }
 
     this.passFrom.set(h.pos.x, 1.1, h.pos.z);
+    this.passCatch.set(cx, 1.1, cz);   // ball flies to this FIXED lead point → constant speed
     this.passTo = target;
     this.passer = h;
     this.passT = 0;
     // P速度: how hard this player zips the ball — but past ~9 m even a bullet
     // runs out of steam, so long balls hang in the air noticeably longer
-    const fade = d > 9 ? clamp(1 - (d - 9) * 0.06, 0.6, 1) : 1;
+    // only the LONGEST balls hang a touch (kept subtle so passes don't visibly
+    // lurch slower mid-court): full speed to ~12 m, barely fading beyond.
+    const fade = d > 12 ? clamp(1 - (d - 12) * 0.05, 0.85, 1) : 1;
     this.passDur = Math.max(0.22, d / (zip0 * fade));
     // パス品質: P精度が高いほど胸元へ「ジャスト」で届く — ただし常にブレ幅が
     // あり、名手でもズレる時はズレるし、雑なパサーがドンピシャを通す時もある。
     // ロングは収まりにくい。
     this.passQ = clamp(0.18 + rate(h.attr.passAcc) * 0.72 + rand(-0.28, 0.28)
       - Math.max(0, d - 9) * 0.03, 0, 1);
+    // P精度 = WHERE it actually lands, in METRES off the target. This is driven
+    // ALMOST ENTIRELY by P精度 (accuracy dominates, only a light jitter) so a
+    // low-accuracy passer CLEARLY sprays it while a precise one is on the money —
+    // spread ~0.2 m (elite) up to ~1.6 m (poor), long balls a touch looser. The
+    // ball lands off in a random front/back/left/right + high/low direction; the
+    // receiver then has to step/reach for it (he homes to this point in
+    // updatePass), and the harder the reach the more it breaks his balance for the
+    // next move (see the gather penalty at the catch, tied to this same passMiss).
+    const acc = rate(h.attr.passAcc);
+    this.passMiss = clamp(((1 - acc) * 3.0 + Math.max(0, d - 9) * 0.06) * rand(0.65, 1.2), 0, 3.3);
+    const ang = rand(0, Math.PI * 2);
+    this.passCatch.set(cx + Math.cos(ang) * this.passMiss, 1.1, cz + Math.sin(ang) * this.passMiss);
+    this.passMissY = rand(-1, 1) * this.passMiss * 0.55;   // a high / low delivery too
     this.passSteal = this.evalInterception(h, target);
     // a hanging long ball can be run down even when nobody sat squarely in the
     // lane at release (スライディング readers range the furthest)
@@ -3099,18 +3232,41 @@ export class Game {
     // point at full tilt, ahead of the ball arriving (he read it early)
     if (this.passSteal && this.passTo) {
       const d = this.passSteal.def;
-      const ix = this.passFrom.x + (this.passTo.pos.x - this.passFrom.x) * this.passSteal.at;
-      const iz = this.passFrom.z + (this.passTo.pos.z - this.passFrom.z) * this.passSteal.at;
+      const ix = this.passFrom.x + (this.passCatch.x - this.passFrom.x) * this.passSteal.at;
+      const iz = this.passFrom.z + (this.passCatch.z - this.passFrom.z) * this.passSteal.at;
       moveToward2D(d.pos, ix, iz, d.accelSpeed(dt, 1.08) * dt);
       this.clampCourt(d.pos);
     }
 
+    // RECEIVE THE PASS: the receiver comes to meet the ball at the catch point,
+    // so the ball actually arrives IN his hands instead of homing to a spot he
+    // never left. He covers the remaining gap over the remaining flight time
+    // (capped at a lunging sprint), and turns to face the incoming ball. An
+    // off-target delivery (low P精度) puts the catch point off his line, so he
+    // has to step/reach OFF his spot to get it — that displacement is the visible
+    // "ズレて取る", and the gather at the catch (below) is what then costs him the
+    // balance for his next move.
+    if (this.passTo) {
+      const r = this.passTo;
+      const remain = Math.max(dt, this.passDur - this.passT);
+      const gap = dist2DTo(r.pos, this.passCatch.x, this.passCatch.z);
+      if (gap > 0.02) {
+        const need = gap / remain;                        // m/s to arrive on time
+        const spd = Math.min(need, r.runSpeed * 1.35);    // up to a lunging sprint
+        moveToward2D(r.pos, this.passCatch.x, this.passCatch.z, spd * dt);
+        this.clampCourt(r.pos);
+      }
+      // (updateFacing turns him chest-on to the ball this same frame — his aim is
+      // the ball while he's the receiver — so the approach reads as a catch)
+    }
+
     this.passT += dt;
     const k = Math.min(1, this.passT / this.passDur);
-    const a = this.passFrom, b = this.passTo!.pos;
+    const a = this.passFrom, b = this.passCatch;   // FIXED lead point → the ball travels at a steady speed
+    const endY = 1.0 + this.passMissY;             // an off pass arrives high / low too
     this.ball.pos.set(
       a.x + (b.x - a.x) * k,
-      (1.1 + (1.0 - 1.1) * k) + Math.sin(k * Math.PI) * 0.4, // hand-to-hand with a slight arc
+      (1.1 + (endY - 1.1) * k) + Math.sin(k * Math.PI) * 0.4, // hand-to-hand with a slight arc
       a.z + (b.z - a.z) * k,
     );
 
@@ -3147,6 +3303,11 @@ export class Game {
 
     if (k >= 1) {
       const receiver = this.passTo!;
+      // meet the ball cleanly: nudge the receiver the last few cm onto the catch
+      // point so the held ball sits in his hands with no back-snap (the homing
+      // above keeps this tiny; the cap stops a jump if he couldn't quite get there)
+      const gap = dist2DTo(receiver.pos, this.passCatch.x, this.passCatch.z);
+      if (gap > 0.02) moveToward2D(receiver.pos, this.passCatch.x, this.passCatch.z, Math.min(gap, 0.4));
       // backstop for the rule itself: an established ball caught behind halfway
       // (e.g. the receiver drifted back) is an over-and-back violation
       if (this.frontT && this.attackSign(receiver.team) * receiver.pos.z < 0) {
@@ -3157,14 +3318,22 @@ export class Game {
       this.handler = receiver;
       this.passTo = null;
       this.ballMode = "held";
-      // ジャスト・レシーブ: a pass right on the hands lets the receiver flow
-      // into his next move; an off-target one costs a gather (持ち直し) beat —
-      // rooted while he corrals it. 技術 (handling) soaks up a bad delivery.
-      const gather = clamp(((1 - this.passQ) * 0.85 - rate(receiver.attr.handling) * 0.4)
-        * rand(0.75, 1.3), 0, 0.7);
+      // ジャスト・レシーブ: a pass right on the hands lets the receiver flow into
+      // his next move; the further off-target it lands, the longer he's FROZEN
+      // (硬直) corralling it before he can move into his next action. The freeze is
+      // proportional to how far off the ball was (passMiss, in metres), scaled by
+      // 技術(handling) about a pivot of 80: a receiver above 80 secures it FASTER
+      // (shorter freeze), below 80 takes LONGER — a great one still loses a touch
+      // on a wild pass, but far less than a clumsy one. Tied to the SAME passMiss
+      // that displaced the catch, and to the wobble/steal window below.
+      const handFactor = clamp(1 + (0.80 - rate(receiver.attr.handling)) * 2.2, 0.35, 2.2);
+      const gather = clamp(this.passMiss * 0.42 * handFactor * rand(0.85, 1.2), 0, 1.1);
       // ダイレクトプレイ: plays off the catch in one touch
       receiver.decisionT = (receiver.has("oneTouch") ? 0.08 : 0.25) + gather;
-      if (gather > 0.05) receiver.coolT = Math.max(receiver.coolT, gather);
+      if (gather > 0.02) {
+        receiver.coolT = Math.max(receiver.coolT, gather);   // 硬直: rooted this long
+        receiver.gatherT = gather;   // …and the ball is still loose in his hands this whole time
+      }
       receiver.quickT = Math.max(0.15, 0.6 - gather);   // ジャストほどワンタッチの窓が広い
       // お膳立て: a good passer hits an OPEN man in rhythm — ready to shoot with
       // nothing to do but rise. The better the passer's vision/accuracy and the
@@ -3175,9 +3344,16 @@ export class Game {
       if (passer) {
         const openAtCatch = this.nearestDefenderDist(receiver);
         const vision = rate(passer.attr.passAcc) * 0.6 + rate(passer.attr.offense) * 0.4;
+        const zip = rate(passer.attr.passSpd);   // 0 (lob) .. 1 (bullet)
         receiver.setupBonus = clamp((vision - 0.4) * 0.36
-          + clamp(openAtCatch - 1.3, 0, 2) * 0.05, 0, 0.22) * this.passQ;
-        receiver.setupT = 0.8 + rate(passer.attr.passSpd) * 0.9;   // fast pass = longer open window
+          + clamp(openAtCatch - 1.3, 0, 2) * 0.05
+          + zip * 0.10, 0, 0.28) * this.passQ;    // a bullet beats the closeout → a cleaner look
+        receiver.setupT = 0.8 + zip * 1.3;         // fast pass = longer open window
+        // SWING THE DEFENCE: a fast pass beats his man's rotation — the closeout is
+        // LATE (reactT), so a bullet to the open man really frees him. A slow lob
+        // gives the defender time to recover, so it barely helps.
+        const rd = this.onBallDefender(receiver);
+        if (rd) rd.reactT = Math.max(rd.reactT, (0.15 + zip * 0.7) * this.reactionLag(rd));
       }
       // a completed pass sets up a potential assist for whoever threw it
       this.assistFrom = this.passer;
@@ -3411,6 +3587,13 @@ export class Game {
     const near = this.nearestDefender(h);
     const contestQ = near ? clamp(1 + this.rimProtect(near, h), 0.5, 1.6) : 1;
     p -= clamp(1.1 - dDef, 0, 1.0) * 0.42 * (1 - strong * 0.7) * contestQ;
+    // FINISHING THROUGH A MARK — オフェンス helps ONLY when a defender is on him,
+    // scaled by how tight the mark is: an OPEN finish (dDef ≥ 1.5, nobody near) is
+    // UNCHANGED by offence; the tighter the mark, the more offence decides it. 75 =
+    // neutral, above → buries the contested dunk, below → the defence-first big
+    // clanks the dunk he'd otherwise mass-produce.
+    const mark = clamp((1.5 - dDef) / 1.5, 0, 1);   // 0 open .. 1 draped
+    p += (rate(h.attr.offense) - 0.75) * 1.6 * mark;
     // EACH additional body at the rim is a wall — driving into a crowd is a
     // low-percentage prayer that S威力 barely helps. This is what stops a
     // physical player bulling through 2-3 defenders for an easy bucket while
@@ -3563,9 +3746,12 @@ export class Game {
     let hx = shooter.pos.x - blocker.pos.x, hz = shooter.pos.z - blocker.pos.z;
     const hl = Math.hypot(hx, hz) || 1;
     this.ball.pos.set(blocker.pos.x + (hx / hl) * 0.45, 2.6, blocker.pos.z + (hz / hl) * 0.45);
-    // swatted mostly OUT and DOWN — it drops and rolls rather than popping up into
-    // someone's hands (a little arc, then the free-flight bounce takes it to rest)
-    this.ball.vel.set((ox + px * kick) * power, rand(-0.6, 1.0), (oz + pz * kick) * power);
+    // the ball STOPS DEAD on the hand for a beat (blockHoldT) — the contact reads —
+    // then it's swatted mostly OUT and DOWN. Hold the deflection velocity until the
+    // pin releases (updateLoose), keeping the ball pinned at the hand until then.
+    this.blockHoldVel.set((ox + px * kick) * power, rand(-0.6, 1.0), (oz + pz * kick) * power);
+    this.blockHoldT = 0.13;
+    this.ball.vel.setAll(0);
     blocker.reach(this.ball.pos, true);        // hand on the ball at contact
     this.lastTouch = blocker;                  // he last touched it → out-of-bounds stays with the offence
     // the SHOOTER can't recover it while he is still in his shot motion / landing
@@ -3773,23 +3959,21 @@ export class Game {
     this.shotT += dt;
     const k = Math.min(1, this.shotT / this.shotDur);
     const b = this.shotTarget;   // rim on a make, off-target on a miss
-    // FINISH (dunk / layup): the ball RIDES IN HIS HAND — tracking his glide to the
-    // rim and rising with him — and is only released LATE, reaching it up and into
-    // the hoop over the last stretch, rather than leaving the hand at take-off.
+    // FINISH (dunk / layup): the ball rides up out of the finisher's HAND and into
+    // the rim on ONE smooth arc — no mid-air kink. Horizontally it eases from where
+    // his hand IS (he's gliding in) to the rim; vertically it rises to a peak (a
+    // slam sits above the rim) then drops through. The arm tracks the ball the whole
+    // way (poseHands), so the hand and ball stay linked.
     if (this.shooterFinishing && this.shooter) {
       const fin = this.shooter;
-      const rel = 0.6;                       // he lets go of it at 60% of the motion
-      const topY = RIM.height + 0.2;         // hand height at the rim
-      if (k < rel) {
-        const kk = k / rel;
-        this.ball.pos.set(fin.pos.x, this.shotFrom.y + (topY - this.shotFrom.y) * kk, fin.pos.z);
-      } else {
-        const kk = (k - rel) / (1 - rel);
-        const arc = Math.sin(kk * Math.PI) * this.shotApex * 0.5;   // a soft last-touch on a layup
-        this.ball.pos.set(fin.pos.x + (b.x - fin.pos.x) * kk,
-          topY + (b.y - topY) * kk + arc,
-          fin.pos.z + (b.z - fin.pos.z) * kk);
-      }
+      const e = k * k * (3 - 2 * k);                 // smoothstep — continuous velocity
+      const top = this.shotFrom.y;                   // take-off hand height (2.6 dunk / 1.7 layup)
+      const peak = Math.max(top, b.y) + this.shotApex;
+      this.ball.pos.set(
+        fin.pos.x + (b.x - fin.pos.x) * e,
+        top + (b.y - top) * e + Math.sin(k * Math.PI) * (peak - Math.max(top, b.y)),
+        fin.pos.z + (b.z - fin.pos.z) * e,
+      );
       if (k >= 1) this.resolveShot();
       return;
     }
@@ -3883,11 +4067,16 @@ export class Game {
   // Put the ball into a free, falling, contestable state. `offense` is the team
   // that was attacking when it came loose (decides the rebound label / clock).
   private goLoose(offense: number, timeout: number,
-                  opts: { rebound?: boolean; stealBy?: Player | null; victim?: Player | null; grabAfter?: number } = {}): void {
+                  opts: { rebound?: boolean; fromRim?: boolean; stealBy?: Player | null; victim?: Player | null; grabAfter?: number } = {}): void {
     this.looseOff = offense;
     this.looseT = timeout;
     this.looseTips = 0;
     this.looseIsRebound = opts.rebound ?? false;
+    // did the ball come off the RIM (a genuine rebound)? Only then does an
+    // offensive recovery reset the shot clock (to the partial). A block, strip or
+    // fumble did NOT hit the rim, so the offence just plays on with the clock
+    // running — no reset (NBA Rule 7: the 14-second reset needs rim contact).
+    this.looseFromRim = opts.fromRim ?? false;
     this.looseStealBy = opts.stealBy ?? null;
     this.looseStealVictim = opts.victim ?? null;
     this.looseAge = 0;
@@ -3904,7 +4093,7 @@ export class Game {
     this.ball.pos.set(rim.x + rand(-0.3, 0.3), RIM.height + 0.1, rim.z + rand(-0.2, 0.2));
     // off the iron: up a touch, then outward back toward the floor
     this.ball.vel.set(rand(-2.2, 2.2), rand(1.0, 2.6), -Math.sign(rim.z || 1) * rand(0.4, 2.4));
-    this.goLoose(this.possession, 2.6, { rebound: true });
+    this.goLoose(this.possession, 2.6, { rebound: true, fromRim: true });   // came off the iron
 
     // the bigs (and anyone right at the rim) leap to fight for the board
     const rimFloor = this.attackFloor(this.possession);
@@ -3942,14 +4131,21 @@ export class Game {
   }
 
   private updateLoose(dt: number): void {
-    this.stepBallFreeFlight(dt, false);   // a live loose ball may cross the line
-    // OUT OF BOUNDS → throw-in for the team that did NOT touch it last (e.g. a
-    // block swatted out off the defender's hand stays with the offence).
-    const b = this.ball.pos;
-    if (Math.abs(b.x) > COURT.halfW || Math.abs(b.z) > COURT.halfL) {
-      const to = this.lastTouch ? 1 - this.lastTouch.team : 1 - this.looseOff;
-      this.startInboundAt(to, b.x, b.z);
-      return;
+    if (this.blockHoldT > 0) {
+      // BLOCK CONTACT: the swatted ball stops dead on the blocker's hand for a
+      // beat so the hit reads, then the deflection velocity is released.
+      this.blockHoldT -= dt;
+      if (this.blockHoldT <= 0) this.ball.vel.copyFrom(this.blockHoldVel);
+    } else {
+      this.stepBallFreeFlight(dt, false);   // a live loose ball may cross the line
+      // OUT OF BOUNDS → throw-in for the team that did NOT touch it last (e.g. a
+      // block swatted out off the defender's hand stays with the offence).
+      const b = this.ball.pos;
+      if (Math.abs(b.x) > COURT.halfW || Math.abs(b.z) > COURT.halfL) {
+        const to = this.lastTouch ? 1 - this.lastTouch.team : 1 - this.looseOff;
+        this.startInboundAt(to, b.x, b.z);
+        return;
+      }
     }
     for (const p of this.players) if (p.touchCool > 0) p.touchCool = Math.max(0, p.touchCool - dt);
 
@@ -4063,7 +4259,11 @@ export class Game {
     this.handler = p;
     this.possession = p.team;
     this.ballMode = "held";
-    this.shotClock = offensive ? Math.max(this.shotClock, SHOT_CLOCK_PARTIAL) : SHOT_CLOCK;
+    // shot clock: a change of possession is a full reset; an offensive rebound OFF
+    // THE RIM gets the partial reset; any other offensive recovery (a blocked shot,
+    // a strip, a fumble — no rim contact) just plays ON with the clock running.
+    if (!offensive) this.shotClock = SHOT_CLOCK;
+    else if (this.looseFromRim) this.shotClock = Math.max(this.shotClock, SHOT_CLOCK_PARTIAL);
     p.decisionT = 0.4;
     this.ball.vel.set(0, 0, 0);
     this.resetMotion();
@@ -4172,7 +4372,8 @@ export class Game {
   // Throw-in from where the ball went out: the taker (nearest team-mate) steps
   // just over the nearest edge — the sideline if it crossed the touchline, the
   // baseline if it crossed the endline.
-  private startInboundAt(team: number, ox: number, oz: number): void {
+  private startInboundAt(team: number, ox: number, oz: number,
+                         opts: { clock?: number; announce?: string | null } = {}): void {
     this.possession = team;
     const overSide = Math.abs(ox) - COURT.halfW;   // how far past each edge it went
     const overEnd = Math.abs(oz) - COURT.halfL;
@@ -4199,7 +4400,16 @@ export class Game {
     this.oobWalker = taker;
     this.oobSpot.set(sx, 0, sz);
     this.oobTeam = team;
-    this.setEvent("OUT OF BOUNDS", team);
+    // decide the restart shot clock NOW (it stops during the dead ball): a CHANGE
+    // of possession is a full reset; the offence RETAINING off the rim gets the
+    // partial; retaining off a block/strip (no rim) plays on with the clock as-is.
+    // …unless the CALLER already ruled on the clock (e.g. a shot-clock violation,
+    // where FIBA gives the new offence the short clock on a frontcourt throw-in)
+    this.oobShotClock = opts.clock ?? (team !== this.looseOff ? SHOT_CLOCK
+      : this.looseFromRim ? Math.max(this.shotClock, SHOT_CLOCK_PARTIAL)
+      : this.shotClock);
+    // announce (a violation restart has already put its own call on screen)
+    if (opts.announce !== null) this.setEvent(opts.announce ?? "OUT OF BOUNDS", team);
     this.pauseThen(1.5, () => this.finishOOB());
   }
 
@@ -4213,7 +4423,7 @@ export class Game {
     this.possession = this.oobTeam;
     this.ballMode = "inbound";
     this.inboundT = 0.9;
-    this.shotClock = SHOT_CLOCK;
+    this.shotClock = this.oobShotClock;   // full / partial / continued — decided at the whistle
     this.resetMotion();
     this.inboundReceiver = this.pickInboundReceiver(taker);
     this.oobWalker = null;
@@ -4267,11 +4477,13 @@ export class Game {
   private throwIn(inb: Player): void {
     const r = this.inboundReceiver ?? this.pickInboundReceiver(inb);
     this.passFrom.set(inb.pos.x, 1.3, inb.pos.z);
+    this.passCatch.set(r.pos.x, 1.3, r.pos.z);   // fixed target so the flight is steady (as for any pass)
+    this.passMiss = 0; this.passMissY = 0; // an unopposed outlet arrives clean — no scatter
     this.passTo = r;
     this.passer = inb;
     this.passT = 0;
-    // ロング: fires the outlet flat and fast down the floor
-    const spd = PASS_SPEED * (inb.has("longThrow") ? 1.35 : 1);
+    // P速度 zips the outlet like any other pass; ロング fires it flat and fast
+    const spd = PASS_SPEED * (0.6 + rate(inb.attr.passSpd) * 0.95) * (inb.has("longThrow") ? 1.3 : 1);
     this.passDur = Math.max(0.3, dist2D(inb.pos, r.pos) / spd);
     this.passSteal = null;                 // a throw-in isn't picked off here
     this.ballMode = "pass";
@@ -5000,11 +5212,20 @@ export class Game {
     off.stats.tov++;
     const offTeam = this.possession;   // the team that committed the violation
     const def = 1 - offTeam;
+    // FIBA: the throw-in is from the out-of-bounds spot NEAREST to where play was
+    // stopped (no special case for the 24-second violation) — remember it now,
+    // before the dead-ball pause moves anyone. The clock rule follows the spot:
+    // in the new offence's FRONTcourt (i.e. the violation was committed in the
+    // old offence's backcourt, a smothered bring-up) the restart clock is the
+    // short one; a backcourt throw-in restarts with the full clock.
+    const sx = this.ball.pos.x, sz = this.ball.pos.z;
+    const front = sz * this.attackSign(def) > 0;
     this.handler = null;
     // announce the OFFENSIVE violation (attributed to the offence) and hold it on
     // screen through the dead-ball pause before the defence's throw-in restart
-    this.setEvent("ショットクロック違反", offTeam, 1.8);
-    this.pauseThen(1.2, () => this.withSubs(() => this.startInbound(def)));
+    this.setEvent("ショットクロック違反", offTeam, 2.6);
+    this.pauseThen(1.2, () => this.withSubs(() => this.startInboundAt(def, sx, sz,
+      { clock: front ? SHOT_CLOCK_PARTIAL : SHOT_CLOCK, announce: null })));
   }
 
   private turnover(loser: Player, reason: string): void {

@@ -133,6 +133,10 @@ export class Player {
   // rooted: he can still shuffle, just can't leap again or take off at speed)
   landT = 0;
 
+  // 硬直: still corralling a bobbled catch. While this runs the ball wobbles in
+  // his hands (not yet secured) and a defender right on him can knock it loose.
+  // Length scales with how far off the delivery landed and his 技術 (handling).
+  gatherT = 0;
   // 特殊能力 — set of AbilityKey flags from the roster def
   abilities: Set<AbilityKey>;
   // ダイレクトプレイ: window (seconds) after catching a pass for one-touch play
@@ -185,6 +189,14 @@ export class Player {
   prevZ = 0;
   velX = 0;        // measured velocity (m/s) — used to lead a moving receiver
   velZ = 0;
+  prevVelX = 0;    // last frame's velocity, to detect a sharp change of direction
+  prevVelZ = 0;
+  // 動き直し: plant-and-repush after a hard change of direction. You can't reverse
+  // at full speed — the feet have to re-plant before pushing off the new way, and
+  // while this runs acceleration is throttled (see accelSpeed). Quick (敏捷性)
+  // players re-set fast; slow ones lose a real beat, and the faster he was moving
+  // (a dash) the bigger the plant. Set in tickMotion.
+  plantT = 0;
   private gaugeDrawn = 0;   // fatigue value last painted on the name-tag gauge
   private gaugeRev = -1;    // HUD_OPTS.rev the tag was last painted for (forces a repaint on toggle)
 
@@ -901,6 +913,8 @@ export class Player {
   /** Tick down the post-pass/shot recovery cooldown. */
   tickCooldown(dt: number): void {
     if (this.coolT > 0) this.coolT = Math.max(0, this.coolT - dt);
+    if (this.gatherT > 0) this.gatherT = Math.max(0, this.gatherT - dt);
+    if (this.plantT > 0) this.plantT = Math.max(0, this.plantT - dt);
     if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
     if (this.quickT > 0) this.quickT = Math.max(0, this.quickT - dt);
     if (this.baitT > 0) this.baitT = Math.max(0, this.baitT - dt);
@@ -995,8 +1009,9 @@ export class Player {
    */
   accelSpeed(dt: number, mult = 1): number {
     // recovering balance (post pass/shot) or still settling from a landing
-    // barely lets the feet move — the first step off a landing is sluggish
-    const rec = (this.coolT > 0 || this.landT > 0) ? 0.35 : 1;
+    // barely lets the feet move — the first step off a landing is sluggish. A
+    // 動き直し plant (after a hard cut) throttles the re-push too, a touch less hard.
+    const rec = (this.coolT > 0 || this.landT > 0) ? 0.35 : (this.plantT > 0 ? 0.45 : 1);
     const target = this.runSpeed * mult * (1 - this.fatigue * 0.2) * rec;
     const acc = 2.5 + rate(this.attr.accel) * 15;      // m/s² — sluggish .. explosive first step
     return Math.min(target, this.curSpd + acc * dt);
@@ -1083,6 +1098,40 @@ export class Player {
       this.curSpd = Math.min(moved / dt, 12);
       this.velX = (this.pos.x - this.prevX) / dt;
       this.velZ = (this.pos.z - this.prevZ) / dt;
+      // 動き直し: a sharp change of direction WHILE MOVING costs a plant-and-repush
+      // beat — you can't cut back at speed for free. The sharper the cut and the
+      // faster he was going (a dash) the longer the plant; quick (敏捷性) players
+      // re-set fast. This throttles the next steps (accelSpeed) so the reversal
+      // isn't instant. Gentle shuffles / small adjustments don't trip it.
+      if (!resting) {
+        const sp = Math.hypot(this.velX, this.velZ);
+        const psp = Math.hypot(this.prevVelX, this.prevVelZ);
+        if (sp > 2.0 && psp > 2.0) {
+          const dot = (this.velX * this.prevVelX + this.velZ * this.prevVelZ) / (sp * psp);
+          if (dot < 0.5) {                                   // turned more than ~60°
+            const sharp = (0.5 - dot) / 1.5;                 // 0 .. 1 (full reversal)
+            const speedFrac = clamp(psp / (this.runSpeed || 1), 0, 1);   // a dash costs more
+            const quick = rate(this.attr.agility);
+            const plant = sharp * speedFrac * (0.10 + (1 - quick) * 0.34); // quick ~0.10s .. slow ~0.44s
+            if (plant > this.plantT) this.plantT = plant;
+          }
+        } else if (psp > 3.0 && sp < 2.0) {
+          // 急停止: braking off a dash costs a plant too. Without this a dead stop
+          // slips through the cut detector above (sp falls under its gate) and
+          // dash → stop → go would come out FREE — quicker than cutting, which is
+          // backwards. The harder the brake (speed shed at once, relative to his
+          // top speed) the longer before the next push-off; quick (敏捷性) players
+          // re-set fast, on the same scale as the cut plant.
+          const shed = clamp((psp - sp) / (this.runSpeed || 1), 0, 1);
+          if (shed > 0.4) {                                  // easing to a stop is free
+            const quick = rate(this.attr.agility);
+            const plant = shed * (0.08 + (1 - quick) * 0.30); // quick ~0.08s .. slow ~0.38s
+            if (plant > this.plantT) this.plantT = plant;
+          }
+        }
+      }
+      this.prevVelX = this.velX;
+      this.prevVelZ = this.velZ;
     }
     if (resting) {
       // a dead ball is only a breather — it barely restores anything
@@ -1517,6 +1566,15 @@ export class Player {
     this.elbowR.rotation.x = 0;
     if (both) { this.aimArm(this.armPivotL, world); this.elbowL.rotation.x = 0; }
     else { this.armPivotL.rotationQuaternion = Quaternion.Identity(); this.bendElbow(this.elbowL, 0.28); }
+  }
+
+  /** World point straight out from the CHEST (the side opposite the number) at
+   *  `dist` metres — where a two-handed gather holds the ball. Same yaw+twist
+   *  frame as aimArm/dribbleWithRight, so it tracks the torso as he turns. */
+  chestFront(dist: number): { x: number; z: number } {
+    const th = this.root.rotation.y + this.torsoTwist;
+    const s = this.numberSide;
+    return { x: this.pos.x - s * Math.sin(th) * dist, z: this.pos.z - s * Math.cos(th) * dist };
   }
 
   /** Which side of the body a world point sits on — +x local = the body's RIGHT

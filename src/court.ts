@@ -1,7 +1,7 @@
 import {
   Scene, MeshBuilder, StandardMaterial, Color3, DynamicTexture, Vector3, Mesh,
 } from "@babylonjs/core";
-import { COURT, RIM } from "./config";
+import { COURT, RIM, THREE_DIST } from "./config";
 
 // Builds the floor (with painted markings), surrounding apron, and both hoops.
 // The animatable hoop parts a made basket lights up (swish + rim flash), one
@@ -123,17 +123,24 @@ function makeCourtTexture(scene: Scene): DynamicTexture {
     // free-throw circle
     circle(ctx, px(0), py(ftZ), 1.8 * pxPerM);
 
-    // three-point arc around the rim, facing mid-court
-    const r = 6.75 * pxPerM;
-    const cx = px(0), cy = py(rimZ);
-    ctx.beginPath();
-    if (end === 1) ctx.arc(cx, cy, r, Math.PI * 0.15, Math.PI * 0.85, false);
-    else ctx.arc(cx, cy, r, Math.PI * 1.15, Math.PI * 1.85, false);
-    ctx.stroke();
-    // corner straights from baseline to the arc
+    // THREE-POINT LINE as ONE connected path: corner straight → arc → corner
+    // straight. The corner straights sit at ±cornerX and run from the baseline to
+    // exactly where the arc (radius THREE_DIST from the rim) crosses that x, so the
+    // arc meets the straights with no gap.
+    const r3 = THREE_DIST;
     const cornerX = 6.6;
-    line(ctx, px(-cornerX), py(baseZ), px(-cornerX), py(end * (COURT.halfL - 2.9)));
-    line(ctx, px(cornerX), py(baseZ), px(cornerX), py(end * (COURT.halfL - 2.9)));
+    const tMax = Math.asin(cornerX / r3);                         // arc angle where x = ±cornerX
+    const meetZ = rimZ - end * Math.sqrt(r3 * r3 - cornerX * cornerX); // z where they join
+    ctx.beginPath();
+    ctx.moveTo(px(-cornerX), py(baseZ));
+    ctx.lineTo(px(-cornerX), py(meetZ));                          // left corner straight
+    const N = 48;
+    for (let i = 0; i <= N; i++) {                               // the arc, facing mid-court
+      const t = -tMax + (2 * tMax) * (i / N);
+      ctx.lineTo(px(r3 * Math.sin(t)), py(rimZ - end * r3 * Math.cos(t)));
+    }
+    ctx.lineTo(px(cornerX), py(baseZ));                          // right corner straight
+    ctx.stroke();
   }
 
   tex.update();

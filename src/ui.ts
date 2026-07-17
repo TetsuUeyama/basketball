@@ -456,6 +456,7 @@ export class UI {
   /** Draw a fresh random matchup from the database and rebuild the editors. */
   private newMatchup(): void {
     randomizeRosters();
+    this.optimizeLineup(0); this.optimizeLineup(1);   // strongest at each position start
     this.autoAssignRoles();        // sensible default 攻守ロール for the fresh draw
     this.autoAssignChoiceRanks();  // primary 1..5 by scoring ability (starters + bench)
     this.refreshEditors();
@@ -464,9 +465,35 @@ export class UI {
   /** Re-draw ONE team's roster (the other team is left untouched) and rebuild. */
   private randomizeOne(team: number): void {
     randomizeTeam(team);
+    this.optimizeLineup(team);         // put the strongest player at each position in the lineup
     this.autoAssignRoles(team);        // default 攻守ロール for this team's fresh draw
     this.autoAssignChoiceRanks(team);  // primary 1..5 for this team only
     this.refreshEditors();
+  }
+
+  // Optimise the STARTING FIVE from the drawn squad: at each position (PG..C) the
+  // best-fitting player starts and the rest drop to the bench, so a strong player
+  // never sits behind a weaker one at his spot. Positions are preserved (a PG slot
+  // still gets a PG) — only starter/bench order within each position changes.
+  private optimizeLineup(team: number): void {
+    const byPos: Record<string, number[]> = {};
+    ROSTER[team].forEach((d, i) => { (byPos[d.role] ??= []).push(i); });
+    for (const pos of Object.keys(byPos)) {
+      const slots = byPos[pos].slice().sort((a, b) => a - b);   // starter slot (lowest index) first
+      const defs = slots.map((i) => ROSTER[team][i])
+        .sort((a, b) => this.posValue(b, pos) - this.posValue(a, pos)); // strongest first
+      slots.forEach((slot, k) => { ROSTER[team][slot] = defs[k]; });
+    }
+  }
+
+  // How well a player fits a POSITION — his six-axis digest weighted by the
+  // position's needs plus its height premium (same weights the strength bars use).
+  private posValue(def: PlayerDef, pos: string): number {
+    const w = UI.ROLE_W[pos] ?? UI.ROLE_W.SF;
+    const ax = this.axesOf(def);
+    let s = 0;
+    for (let k = 0; k < ax.length; k++) s += w.ax[k] * ax[k];
+    return s + w.ht * UI.heightValue(def.height * 100);
   }
 
   /** Re-optimise ONE team's 攻守ロール + primary order for its CURRENT roster —
