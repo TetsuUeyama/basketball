@@ -488,7 +488,7 @@ export class Game {
   private updateSubs(dt: number): void {
     this.subT += dt;
     for (const e of this.subEvents) e.ttl = Math.max(e.ttl, 1.2); // hold the chips
-    this.ball.pos.y = Math.max(0.3, this.ball.pos.y - 3 * dt);    // ball rests
+    this.ball.pos.y = Math.max(0.12, this.ball.pos.y - 3 * dt);   // settles onto the floor
 
     const timedOut = this.subT >= 6;   // safety: never let a walk stall the game
     let done = true;
@@ -1151,6 +1151,10 @@ export class Game {
     }
   }
 
+  /** Push the logical state to the meshes WITHOUT advancing the sim — the
+   *  pregame camera tour renders players while the game itself is on hold. */
+  syncVisuals(): void { this.syncAll(); }
+
   private syncAll(): void {
     for (const p of this.players) p.sync();
     this.ball.sync();
@@ -1212,9 +1216,9 @@ export class Game {
         if (this.handler) {
           if (this.handler.gatherT > 0) {
             // まだ収まっていない: the two-handed CATCH pose carries straight on —
-            // both hands stay clamped on the ball wobbling at his chest until it
-            // settles (gatherT drains); only then does he drop into the dribble
-            this.handler.reach(b, true);
+            // the ball sits BETWEEN the palms (one hand each side) and the whole
+            // hold shakes as one until it settles; then he drops into the dribble
+            this.handler.holdBallHands(b);
           } else {
             // hand hovers at dribble height while the ball bounces below it —
             // dribbled with the hand on the SAME side the ball is carried (a hip
@@ -1253,9 +1257,9 @@ export class Game {
           this.passer.reach(new Vector3(pr.x + (dx / dl) * 1.2, 1.3, pr.z + (dz / dl) * 1.2), true);
         } else if (this.passT > this.passDur * 0.45) {
           // CATCH: the receiver puts BOTH hands out to meet the incoming ball
-          // (his chest is already squared to it — updateFacing turns him) and
-          // keeps them on it through the arrival, so the take reads two-handed
-          this.passTo?.reach(b, true);
+          // (his chest is already squared to it — updateFacing turns him), one
+          // palm to each side of it, ready to take it BETWEEN the hands
+          this.passTo?.holdBallHands(b);
         }
         if (this.passSteal) this.passSteal.def.reach(b);                   // jumping the lane
         break;
@@ -1460,18 +1464,21 @@ export class Game {
     const y = 0.18 + (1.0 - 0.18) * bounce;
     this.ball.pos.set(h.pos.x + h.carryX, y, h.pos.z + h.carryZ);
     // まだ収まっていない: fresh off an off-target catch the ball is NOT secured —
-    // it stays where the two-handed catch met it, OUT IN FRONT OF THE CHEST, and
-    // squirms between both palms until gatherT drains (poseHands keeps both hands
-    // reaching onto it the whole while, extending the catch animation). Only once
-    // it settles does it drop into the normal one-hand carry. The amplitude
-    // decays with the remaining 硬直.
+    // it stays where the two-handed catch met it, OUT IN FRONT OF THE CHEST,
+    // held BETWEEN both palms. The shake is a SMOOTH low-frequency sway (phased
+    // off the draining gatherT, no per-frame noise): the hands are aimed at the
+    // same swaying point (holdBallHands in poseHands), so ball and arms move as
+    // ONE unit — the tremble reads in the upper arms, not as the ball rattling
+    // loose between static palms. Decays as the 硬直 drains, then the normal
+    // one-hand carry takes over.
     if (h.gatherT > 0) {
-      const amp = Math.min(0.11, h.gatherT * 0.22);   // subtle — he has it, just settling it
+      const amp = Math.min(0.09, h.gatherT * 0.18);
+      const ph = h.gatherT * 22 + h.idx;              // smooth sweep as gatherT drains
       const c = h.chestFront(0.36);
       this.ball.pos.set(
-        c.x + rand(-1, 1) * amp,
-        1.0 + rand(-0.3, 0.25) * amp,   // chest height, jostling in the two-hand grasp
-        c.z + rand(-1, 1) * amp,
+        c.x + Math.sin(ph) * amp,
+        1.0 + Math.sin(ph * 1.7 + 0.9) * amp * 0.45,  // chest height, gentle vertical bob
+        c.z + Math.sin(ph * 1.35 + 2.1) * amp,
       );
     }
   }
@@ -1589,16 +1596,24 @@ export class Game {
       this.setDrive(h, rimFloor, dist2D(h.pos, rimFloor) + 0.5); // retreat dribble
       moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelToward(dt, h.driveTarget.x, h.driveTarget.z, 0.5) * dt);
     } else {
-      // probing dribble between moves — a body in the lane holds him up (balance
-      // battle), but this is just jostling, not a committed attack
+      // probing dribble between moves. A big backing his man down keeps the
+      // grind (the balance battle is the point of a post-up); anyone else READS
+      // the body in his lane and steps AROUND it instead of ploughing straight
+      // into the jostle and letting the collision push sort it out.
       const imp = this.driveImpeder(h);
-      if (imp) {
+      const posting = this.isBig(h) || h.has("post");
+      let tx = h.driveTarget.x, tz = h.driveTarget.z;
+      if (imp && posting) {
         const edge = clamp(rate(h.attr.balance) - rate(imp.attr.balance)
           + (h.has("post") ? 0.12 : 0), -0.6, 1);
         const base = this.isBig(h) ? 0.34 : 0.38;
         mult *= clamp(base + edge * 0.6, 0.2, 0.95);
+      } else {
+        const av = this.steerAround(h, tx, tz, true);
+        tx = av.x; tz = av.z;
+        if (imp) mult *= 0.8;   // brushing right past a body still isn't free
       }
-      moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelToward(dt, h.driveTarget.x, h.driveTarget.z, mult) * dt);
+      moveToward2D(h.pos, tx, tz, h.accelToward(dt, tx, tz, mult) * dt);
     }
     this.clampCourt(h.pos);
     // once established, the handler must not dribble back across halfway
@@ -2023,14 +2038,32 @@ export class Game {
     return this.passToReceiver(h, best, true);
   }
 
-  // EVADE THE TRAP: retreat-dribble AWAY from the two nearest defenders to break
-  // the double-team and open a passing angle, instead of standing in it.
+  // EVADE THE TRAP: retreat-dribble to open floor to break the double-team and
+  // open a passing angle, instead of standing in it. NOT simply "away from the
+  // defenders": for a handler herded into a corner that direction points OUT OF
+  // BOUNDS, and the court clamp then pins him on the corner exactly as the trap
+  // wants — the classic 角で固められる. Instead sample legal headings and take
+  // the one that actually gains separation while staying on the floor (biased
+  // a touch toward the middle / up-court, where his outlets live).
   private retreatFromTrap(h: Player): void {
     const defs = this.teamPlayers(1 - h.team).slice()
       .sort((a, b) => dist2D(a.pos, h.pos) - dist2D(b.pos, h.pos));
     const a = defs[0], b2 = defs[1] ?? defs[0];
-    const centroid = new Vector3((a.pos.x + b2.pos.x) / 2, 0, (a.pos.z + b2.pos.z) / 2);
-    this.setDrive(h, centroid, dist2D(h.pos, centroid) + 3);   // target lands beyond h, away from the trap
+    const s = this.attackSign(h.team);
+    let bx = 0, bz = this.frontT ? s * 2 : 0;   // fallback: head for centre floor
+    let bestScore = -Infinity;
+    for (let i = 0; i < 12; i++) {
+      const ang = (i / 12) * Math.PI * 2;
+      const tx = h.pos.x + Math.cos(ang) * 3.0;
+      const tz = h.pos.z + Math.sin(ang) * 3.0;
+      if (Math.abs(tx) > COURT.halfW - 0.7 || Math.abs(tz) > COURT.halfL - 0.7) continue;
+      if (this.frontT && s * tz < 0.5) continue;   // never retreat into a backcourt violation
+      const sep = Math.min(dist2DTo(a.pos, tx, tz), dist2DTo(b2.pos, tx, tz));
+      let score = sep - Math.abs(tx) * 0.08;       // slight pull off the sideline
+      if (!this.frontT) score += s * (tz - h.pos.z) * 0.10;   // bringing it up: prefer forward escapes
+      if (score > bestScore) { bestScore = score; bx = tx; bz = tz; }
+    }
+    h.driveTarget.set(bx, 0, bz);
   }
 
   // Open a fast-break window after a live-ball change of possession, if the
@@ -2319,6 +2352,44 @@ export class Game {
 
   // Aim the handler at a point `standoff` metres out from the rim along the
   // line rim->handler (so they drive toward the basket but stop short).
+  // STEER AROUND a body standing in the straight path to (tx,tz): when the
+  // first few metres of the corridor ahead hold another player, aim at a
+  // side-step point beside him instead of ploughing into the contact and
+  // letting the collision push sort it out. Deliberate-contact moves (a post
+  // grind, a screen, the on-ball duel) never call this. `opponentsOnly` leaves
+  // brushing past a team-mate (screens, hand-offs) untouched.
+  private steerAround(p: Player, tx: number, tz: number, opponentsOnly = false): { x: number; z: number } {
+    const dx = tx - p.pos.x, dz = tz - p.pos.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 1.0) return { x: tx, z: tz };       // arriving — no room to swerve
+    const ux = dx / dist, uz = dz / dist;
+    let bestT = Infinity, ob: Player | null = null, obLat = 0;
+    for (const q of this.players) {
+      if (q === p) continue;
+      if (opponentsOnly && q.team === p.team) continue;
+      const rx = q.pos.x - p.pos.x, rz = q.pos.z - p.pos.z;
+      const t = rx * ux + rz * uz;                 // how far ahead along the path
+      if (t < 0.3 || t > Math.min(dist - 0.4, 3.2)) continue;
+      const lat = -rx * uz + rz * ux;              // signed offset from the path
+      if (Math.abs(lat) > 0.7) continue;           // not actually in the corridor
+      if (t < bestT) { bestT = t; ob = q; obLat = lat; }
+    }
+    if (!ob) return { x: tx, z: tz };
+    // pass on the side the blocker is NOT already shading toward (deterministic
+    // tie-break so the swerve doesn't flicker frame to frame)
+    const side = obLat > 0.05 ? -1 : obLat < -0.05 ? 1 : (p.idx % 2 ? 1 : -1);
+    const sx = ob.pos.x - uz * side, sz = ob.pos.z + ux * side;
+    // the DODGED DEFENDER answers: for a beat he slides across to wall off the
+    // mouth of the NEW lane (runDefense executes the slide) — a step battle the
+    // quicker man wins, since both moves run through accelToward/plant
+    if (this.ballMode === "held" && ob.team !== p.team && ob.team !== this.possession) {
+      ob.wallT = Math.max(ob.wallT, 0.25);
+      ob.wallX = sx;
+      ob.wallZ = sz;
+    }
+    return { x: sx, z: sz };
+  }
+
   private setDrive(h: Player, rimFloor: Vector3, standoff: number): void {
     const dx = h.pos.x - rimFloor.x, dz = h.pos.z - rimFloor.z;
     const len = Math.hypot(dx, dz) || 1;
@@ -2482,6 +2553,16 @@ export class Game {
         }
       }
 
+      // 通路ブロック: an attacker just side-stepped around this defender — answer
+      // by sliding across into the mouth of the new lane. His own quickness
+      // (accelToward → turnFactor / 動き直し) decides whether the step lands.
+      if (d.wallT > 0) {
+        moveToward2D(d.pos, d.wallX, d.wallZ,
+          d.accelToward(dt, d.wallX, d.wallZ, 1.05 * Math.max(this.defEffort(d, protect), 0.85)) * dt);
+        this.clampCourt(d.pos);
+        continue;
+      }
+
       // transition: caught up-court when possession flipped — get back FIRST
       if (this.getBackOnDefense(dt, d, man)) continue;
 
@@ -2496,7 +2577,20 @@ export class Game {
         * (1 - this.denyIntensity(defTeam) * 0.8);
       const dx = protect.x - man.pos.x, dz = protect.z - man.pos.z;
       const len = Math.hypot(dx, dz) || 1;
-      const stx = man.pos.x + (dx / len) * sag, stz = man.pos.z + (dz / len) * sag;
+      let stx = man.pos.x + (dx / len) * sag, stz = man.pos.z + (dz / len) * sag;
+      // PATH DENIAL: a man on the MOVE (a cutter, a runner bending around
+      // traffic) is shadowed where he is GOING, not where he was — the defender
+      // steps into the corridor AHEAD of the run (still goal-side via the sag),
+      // so a side-step around one body meets the marker already sliding across
+      // to wall the new lane. How far ahead he reads scales with 反応/守判断;
+      // the lead is capped so nobody teleports in front of a sprinter.
+      const mSpd = Math.hypot(man.velX, man.velZ);
+      if (mSpd > 2.5) {
+        const read = 0.15 + rate(d.attr.reaction) * 0.22 + rate(d.attr.defense) * 0.10;
+        const cap = Math.min(1, 2.0 / (mSpd * read || 1));   // lead at most ~2 m ahead
+        stx += man.velX * read * cap;
+        stz += man.velZ * read * cap;
+      }
       // off-ball shadowing runs at the defender's effort — a star jogs it
       moveToward2D(d.pos, stx, stz, d.accelToward(dt, stx, stz, this.defEffort(d, protect)) * dt);
       this.clampCourt(d.pos);
@@ -2855,7 +2949,8 @@ export class Game {
       // the C parks right under the goal; a PF holds a step higher up the lane
       const depth = d.role === "C" ? 1.6 : 3.0;
       const tz = s * (RIM.z - depth);
-      moveToward2D(d.pos, 0, tz, d.accelToward(dt, 0, tz, 1.15) * dt);
+      const gb = this.steerAround(d, 0, tz);   // sprint home AROUND bodies, not through
+      moveToward2D(d.pos, gb.x, gb.z, d.accelToward(dt, gb.x, gb.z, 1.15) * dt);
       this.clampCourt(d.pos);
       return true;
     }
@@ -2863,8 +2958,8 @@ export class Game {
       // he and his man are BOTH still up-court: sprint goal-side (top of the
       // key, shaded toward his man's lane) instead of jogging beside a trailer
       // while the ball attacks an open basket
-      const tx = man.pos.x * 0.4, tz = s * (RIM.z - 7);
-      moveToward2D(d.pos, tx, tz, d.accelToward(dt, tx, tz, 1.12) * dt);
+      const gb = this.steerAround(d, man.pos.x * 0.4, s * (RIM.z - 7));
+      moveToward2D(d.pos, gb.x, gb.z, d.accelToward(dt, gb.x, gb.z, 1.12) * dt);
       this.clampCourt(d.pos);
       return true;
     }
@@ -4217,7 +4312,10 @@ export class Game {
 
     for (const p of this.players) {
       if (contest.has(p)) {
-        moveToward2D(p.pos, bx, bz, p.accelSpeed(dt, this.isBig(p) ? 1.0 : 0.9) * dt);
+        // chase the ball AROUND bodies in the way — a scramble is still not a
+        // licence to run straight through someone's back
+        const cv = this.steerAround(p, bx, bz);
+        moveToward2D(p.pos, cv.x, cv.z, p.accelSpeed(dt, this.isBig(p) ? 1.0 : 0.9) * dt);
         this.clampCourt(p.pos);
         // time a jump to a ball that's up in the air and within a stride
         if (!p.airborne && this.ball.pos.y > 1.7 && distToBall(p) < 1.3) {
@@ -4563,8 +4661,8 @@ export class Game {
       if (this.pushT > 0 && this.handler && p !== this.handler && !this.isBig(p)) {
         const s = this.attackSign(team);
         const side = p.pos.x >= 0 ? 1 : -1;
-        const tx = side * 4.5, tz = s * (RIM.z - 1.5);
-        moveToward2D(p.pos, tx, tz, p.accelToward(dt, tx, tz, 1.25) * dt);
+        const fb = this.steerAround(p, side * 4.5, s * (RIM.z - 1.5));   // fill the lane around traffic
+        moveToward2D(p.pos, fb.x, fb.z, p.accelToward(dt, fb.x, fb.z, 1.25) * dt);
         this.clampCourt(p.pos);
         continue;
       }
@@ -4580,9 +4678,12 @@ export class Game {
         this.updateScreen(dt, p);
       } else if (p.cutting) {
         // sprint along the cut; cutters move a touch faster than they jog spots
-        // (a ラインポジ cutter bursts hard enough to lose his mark)
-        moveToward2D(p.pos, p.offTarget.x, p.offTarget.z,
-          p.accelToward(dt, p.offTarget.x, p.offTarget.z, p.has("lineMove") ? 1.22 : 1.08) * dt);
+        // (a ラインポジ cutter bursts hard enough to lose his mark) — bending
+        // around any DEFENDER standing in the runway (team-mates are handled by
+        // the spacing nudge below; a screen is meant to be shaved)
+        const ct = this.steerAround(p, p.offTarget.x, p.offTarget.z, true);
+        moveToward2D(p.pos, ct.x, ct.z,
+          p.accelToward(dt, ct.x, ct.z, p.has("lineMove") ? 1.22 : 1.08) * dt);
         // bend the run around bodies (the post big, the handler) instead of
         // slicing straight through them — personal space only, the cut still goes
         this.spacingNudge(dt, p, 1.7);
@@ -4637,7 +4738,8 @@ export class Game {
           p.spotIdx = this.bestOpenSpot(team, spots, p);
           spot = spots[p.spotIdx];
         }
-        moveToward2D(p.pos, spot.x, spot.z, p.accelToward(dt, spot.x, spot.z) * dt);
+        const sj = this.steerAround(p, spot.x, spot.z, true);   // jog around, not through
+        moveToward2D(p.pos, sj.x, sj.z, p.accelToward(dt, sj.x, sj.z) * dt);
         // continuous separation: ease out of any team-mate's personal space so
         // spacing holds between spot re-reads (real off-ball players never let a
         // team-mate crowd them)
@@ -5469,6 +5571,12 @@ export class Game {
       const dir = p.team === 0 ? -1 : 1;      // each team's bench half
       this.subWalkers.push({ p, tx: COURT.halfW + 0.6, tz: dir * (8 + p.slot * 0.9) });
     }
+    // the ball doesn't stay lying where the period died — it's placed at the
+    // NEXT period's throw-in spot (centre line, left sideline — where the taker
+    // will stand) before the players head for their benches, like an official
+    // setting it for the restart.
+    this.ball.pos.set(-(COURT.halfW + 0.3), 0.12, 0);
+    this.ball.vel.set(0, 0, 0);
     this.subNext = next;
     this.subT = 0;
     this.ballMode = "subs";

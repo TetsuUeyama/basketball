@@ -137,6 +137,13 @@ export class Player {
   // his hands (not yet secured) and a defender right on him can knock it loose.
   // Length scales with how far off the delivery landed and his 技術 (handling).
   gatherT = 0;
+  // 通路ブロック: an attacker just side-stepped around THIS defender — for a
+  // beat he slides toward (wallX, wallZ), the mouth of the NEW lane, to wall it
+  // off again. Set by steerAround; the slide itself runs through accelToward,
+  // so quickness (turnFactor / 動き直し plant) decides who wins the step battle.
+  wallT = 0;
+  wallX = 0;
+  wallZ = 0;
   // 特殊能力 — set of AbilityKey flags from the roster def
   abilities: Set<AbilityKey>;
   // ダイレクトプレイ: window (seconds) after catching a pass for one-touch play
@@ -913,6 +920,7 @@ export class Player {
   /** Tick down the post-pass/shot recovery cooldown. */
   tickCooldown(dt: number): void {
     if (this.coolT > 0) this.coolT = Math.max(0, this.coolT - dt);
+    if (this.wallT > 0) this.wallT = Math.max(0, this.wallT - dt);
     if (this.gatherT > 0) this.gatherT = Math.max(0, this.gatherT - dt);
     if (this.plantT > 0) this.plantT = Math.max(0, this.plantT - dt);
     if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
@@ -1481,6 +1489,13 @@ export class Player {
     this.gaugeRev = HUD_OPTS.rev;
   }
 
+  /** Hide / show the floating name tag regardless of the HUD option — the
+   *  pregame intro replaces the tags with its own caption board. Restoring with
+   *  `true` still respects the user's HUD_OPTS.showNames setting. */
+  setNameTagVisible(v: boolean): void {
+    this.namePlane.isVisible = v && HUD_OPTS.showNames;
+  }
+
   /** Zero this player's box score and conditioning (start of a game). */
   resetStats(): void {
     const s = this.stats;
@@ -1568,6 +1583,24 @@ export class Player {
     else { this.armPivotL.rotationQuaternion = Quaternion.Identity(); this.bendElbow(this.elbowL, 0.28); }
   }
 
+  /** Two-handed HOLD: the palms cup the ball from BOTH SIDES — one hand on each
+   *  side of the ball, a ball's width apart — instead of both arms aiming at the
+   *  same point (palms touching THROUGH the ball). Used for the catch and the
+   *  gather, so the ball sits BETWEEN the hands and moves WITH the arms. */
+  holdBallHands(world: Vector3, sep = 0.16): void {
+    const dx = world.x - this.pos.x, dz = world.z - this.pos.z;
+    const l = Math.hypot(dx, dz) || 1;
+    let lx = -dz / l, lz = dx / l;                      // horizontal perpendicular to the hold
+    // point the lateral toward the body's RIGHT (local +X → world (cosθ, -sinθ),
+    // the same frame aimArm uses) so the hands never cross
+    const th = this.root.rotation.y + this.torsoTwist;
+    if (lx * Math.cos(th) - lz * Math.sin(th) < 0) { lx = -lx; lz = -lz; }
+    this.aimArm(this.armPivotR, new Vector3(world.x + lx * sep, world.y, world.z + lz * sep));
+    this.aimArm(this.armPivotL, new Vector3(world.x - lx * sep, world.y, world.z - lz * sep));
+    this.elbowR.rotation.x = 0;
+    this.elbowL.rotation.x = 0;
+  }
+
   /** World point straight out from the CHEST (the side opposite the number) at
    *  `dist` metres — where a two-handed gather holds the ball. Same yaw+twist
    *  frame as aimArm/dribbleWithRight, so it tracks the torso as he turns. */
@@ -1575,6 +1608,24 @@ export class Player {
     const th = this.root.rotation.y + this.torsoTwist;
     const s = this.numberSide;
     return { x: this.pos.x - s * Math.sin(th) * dist, z: this.pos.z - s * Math.cos(th) * dist };
+  }
+
+  /** Horizontal unit vector from the body centre THROUGH THE FACE — taken from
+   *  the EYE MESHES' actual rendered positions (midpoint of both eyes), so it is
+   *  ground truth for a camera that must film the face, robust to every
+   *  numberSide / yaw convention. Falls back to the chest frame while the world
+   *  matrices haven't been computed yet (first frame, headless). */
+  faceDirWorld(): { x: number; z: number } {
+    if (this.eyeL && this.eyeR && typeof this.eyeL.getAbsolutePosition === "function") {
+      const a = this.eyeL.getAbsolutePosition(), b = this.eyeR.getAbsolutePosition();
+      const ex = (a.x + b.x) / 2 - this.root.position.x;
+      const ez = (a.z + b.z) / 2 - this.root.position.z;
+      const l = Math.hypot(ex, ez);
+      if (l > 1e-3) return { x: ex / l, z: ez / l };
+    }
+    const th = this.root.rotation.y + this.torsoTwist;
+    const s = this.numberSide;
+    return { x: -s * Math.sin(th), z: -s * Math.cos(th) };
   }
 
   /** Which side of the body a world point sits on — +x local = the body's RIGHT
