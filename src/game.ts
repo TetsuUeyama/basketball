@@ -2587,11 +2587,20 @@ export class Game {
     // body up tight on a big posting up / pushing near the rim, to contest the
     // push. Aggressive game plans — and a マンマーク specialist — close the gap.
     const postUp = (this.isBig(man) || man.has("post")) && dist2D(man.pos, protect) < 5.5;
+    // 密着限界: how close he DARES to press is his ディフェンス能力 vs the man's
+    // オフェンス能力 — outmatched (diff −) he gives ground so he isn't just blown
+    // by, superior (diff +) he crawls right up — and the DEEPER the ball (nearer
+    // the defended goal) the tighter every defender bodies up regardless: layup
+    // range is never conceded, while way out high a mismatch shows as a big sag.
+    const diff = clamp(rate(d.attr.defense) - rate(man.attr.offense), -0.5, 0.5);
+    const depth = clamp((dist2D(man.pos, protect) - 3) / 6, 0, 1);  // 0 at the rim .. 1 beyond ~9 m
     let gap = postUp
       ? 0.45 - this.tactics[d.team].defense.pressure * 0.1   // ~0.35 (tight) on the post
-      : 1.25 - this.tactics[d.team].defense.pressure * 0.35; // ~0.9 .. 1.25 cushion otherwise
+      : (1.25 - this.tactics[d.team].defense.pressure * 0.35 - diff * 0.7)
+        * (0.45 + 0.55 * depth);   // ability gap sets the standoff, depth squeezes it
     if (d.has("manMark")) gap *= 0.85;
     if (d.evalRole === "ロックダウン") gap *= 0.85;   // the stopper crawls into his shirt
+    gap = clamp(gap, 0.3, 2.1);
     // DENY (late shot clock): crawl in to smother the look and run the clock out.
     // The RISK: overplaying is beatable — a live handler blows past for a rim
     // finish (the price of gambling for a shot-clock violation).
