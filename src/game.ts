@@ -3154,8 +3154,12 @@ export class Game {
     const zip0 = PASS_SPEED * (0.6 + rate(h.attr.passSpd) * 0.95);
     const d0 = dist2D(h.pos, target.pos);
     const lead = d0 / zip0;                              // first-pass flight time
-    const cx = target.pos.x + target.velX * lead;
-    const cz = target.pos.z + target.velZ * lead;
+    // never AIM out of bounds: a receiver sprinting the sideline is led ALONG
+    // the line, not past it — the intended catch point stays a step inside the
+    // court (only the P精度 scatter below can still carry the ball out, and that
+    // sails away as a throw-away, not a catch)
+    const cx = clamp(target.pos.x + target.velX * lead, -(COURT.halfW - 0.35), COURT.halfW - 0.35);
+    const cz = clamp(target.pos.z + target.velZ * lead, -(COURT.halfL - 0.35), COURT.halfL - 0.35);
     const d = Math.hypot(cx - h.pos.x, cz - h.pos.z);    // true flight distance
     if (d > MAX_PASS + 1.5) return false;                // the bomb isn't on — keep it
 
@@ -3312,6 +3316,18 @@ export class Game {
 
     if (k >= 1) {
       const receiver = this.passTo!;
+      // スローアウェイ: the scattered delivery sailed OUT OF BOUNDS — the receiver
+      // chased but clampCourt held him inbounds, and a ball landing past the line
+      // is NOT dragged into his hands (that read as a magic catch from outside).
+      // It's dead where it crossed: turnover on the passer, throw-in the other way.
+      if (Math.abs(this.passCatch.x) > COURT.halfW || Math.abs(this.passCatch.z) > COURT.halfL) {
+        if (this.passer) { this.passer.stats.tov++; this.lastTouch = this.passer; }
+        const to = 1 - this.possession;
+        this.passTo = null;
+        this.passSteal = null;
+        this.startInboundAt(to, this.passCatch.x, this.passCatch.z, { clock: SHOT_CLOCK });
+        return;
+      }
       // meet the ball cleanly: nudge the receiver the last few cm onto the catch
       // point so the held ball sits in his hands with no back-snap (the homing
       // above keeps this tiny; the cap stops a jump if he couldn't quite get there)
