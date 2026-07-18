@@ -1,6 +1,7 @@
 import { Game } from "./game";
 import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS } from "./config";
-import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "./attributes";
+import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, clubTeam, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "./attributes";
+import { CLUBS } from "./clubdb";
 import { PLAYER_DB, type DbPlayer } from "./playerdb";
 import { playerLook } from "./util";
 
@@ -89,6 +90,9 @@ export class UI {
   private rolePickerCloser: ((e: PointerEvent) => void) | null = null;
   private detailModal: HTMLDivElement | null = null;             // full-ratings modal
   private playerPicker: HTMLDivElement | null = null;            // 4000+選手データベースからの選手交代モーダル
+  private clubPicker: HTMLDivElement | null = null;              // 実クラブでロスターを組むモーダル
+  // the built-in team names, captured before any club rename so ランダム編成 can restore them
+  private static readonly DEFAULT_NAMES = [TEAM_NAMES[0], TEAM_NAMES[1]];
   // Cached, OVR-sorted view of the whole database (built once on first open):
   // { p, ovr, lower(name) } so keystroke filtering is a plain array scan.
   private dbIndex: { p: DbPlayer; ovr: number; lower: string }[] | null = null;
@@ -455,6 +459,8 @@ export class UI {
 
   /** Draw a fresh random matchup from the database and rebuild the editors. */
   private newMatchup(): void {
+    TEAM_NAMES[0] = UI.DEFAULT_NAMES[0];   // a random draw is BLAZE/WAVE again
+    TEAM_NAMES[1] = UI.DEFAULT_NAMES[1];
     randomizeRosters();
     this.optimizeLineup(0); this.optimizeLineup(1);   // strongest at each position start
     this.autoAssignRoles();        // sensible default 攻守ロール for the fresh draw
@@ -464,6 +470,7 @@ export class UI {
 
   /** Re-draw ONE team's roster (the other team is left untouched) and rebuild. */
   private randomizeOne(team: number): void {
+    TEAM_NAMES[team] = UI.DEFAULT_NAMES[team];   // back from a club name
     randomizeTeam(team);
     this.optimizeLineup(team);         // put the strongest player at each position in the lineup
     this.autoAssignRoles(team);        // default 攻守ロール for this team's fresh draw
@@ -564,6 +571,7 @@ export class UI {
     this.closeRolePicker();
     this.closeDetailModal();
     this.closePlayerPicker();
+    this.closeClubPicker();
     const sideBySide = this.rostersFitSideBySide();
     this.pregameMode = sideBySide ? "desktop" : "phone";
     // side-by-side: hug the two-column content; toggle view: a fixed comfortable
@@ -1238,6 +1246,7 @@ export class UI {
       b.onclick = onClick;
       return b;
     };
+    const clubBtn = ctrlBtn("クラブ", false, () => this.openClubPicker(team));
     const genBtn = ctrlBtn("ランダム編成", false, () => this.randomizeOne(team));
     const roleBtn = ctrlBtn("役割再設定", false, () => this.reassignRoles(team));
     const swapBtn = ctrlBtn("選手を交代", false, () => this.openPlayerPicker(team));
@@ -1245,7 +1254,7 @@ export class UI {
     // a slightly longer team name (BLAZE vs WAVE) no longer wraps them to two.
     const btns = document.createElement("div");
     Object.assign(btns.style, { display: "flex", gap: "5px", flexWrap: "nowrap", justifyContent: "space-between", margin: "0 0 3px" } as Partial<CSSStyleDeclaration>);
-    btns.append(genBtn, roleBtn, swapBtn);
+    btns.append(clubBtn, genBtn, roleBtn, swapBtn);
     head.append(teamName);
     wrap.appendChild(head);
     wrap.appendChild(btns);
@@ -1932,6 +1941,120 @@ export class UI {
   private closePlayerPicker(): void {
     if (this.playerPicker) { this.playerPicker.remove(); this.playerPicker = null; }
     this.hideTip();
+  }
+
+  // クラブ編成: pick one of the 172 REAL clubs (from the master-league sheet) and
+  // rebuild this team's 13 as that club — the squad's best at each basketball
+  // slot, nearest-position fallback for roles the squad lacks (attributes.clubTeam).
+  // The team NAME becomes the club's; ランダム編成 restores the built-in name.
+  private openClubPicker(team: number): void {
+    this.closeRolePicker();
+    this.hidePlayerCard();
+    this.closePlayerPicker();
+    this.closeClubPicker();
+    this.cancelCarry();
+    const color = colorOf(team);
+    const phone = window.innerWidth < 640;
+
+    const overlay = document.createElement("div");
+    Object.assign(overlay.style, {
+      position: "fixed", inset: "0", zIndex: "88", background: "rgba(0,0,0,0.6)",
+      display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "auto",
+      fontFamily: "Segoe UI, system-ui, sans-serif", color: "#fff",
+    } as Partial<CSSStyleDeclaration>);
+    overlay.onclick = (e) => { if (e.target === overlay) this.closeClubPicker(); };
+
+    const panel = document.createElement("div");
+    Object.assign(panel.style, {
+      background: "rgba(12,15,22,0.98)", border: `1px solid ${color}`,
+      borderRadius: "14px", padding: phone ? "12px 10px" : "14px 16px",
+      boxShadow: "0 16px 48px rgba(0,0,0,0.65)",
+      width: phone ? "96vw" : "480px", maxWidth: "96vw", height: "82vh", maxHeight: "82vh",
+      boxSizing: "border-box", display: "flex", flexDirection: "column", gap: "9px", textAlign: "left",
+    } as Partial<CSSStyleDeclaration>);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+    this.clubPicker = overlay;
+
+    const title = document.createElement("div");
+    Object.assign(title.style, { fontSize: "15px", fontWeight: "800", color });
+    title.textContent = `クラブで編成 — ${CLUBS.length}クラブ`;
+
+    const search = document.createElement("input");
+    search.type = "text";
+    search.placeholder = "クラブ名で検索…";
+    Object.assign(search.style, {
+      width: "100%", boxSizing: "border-box", padding: "8px 10px", fontSize: "14px",
+      borderRadius: "8px", border: "1px solid rgba(255,255,255,0.25)",
+      background: "rgba(255,255,255,0.06)", color: "#fff", outline: "none",
+    } as Partial<CSSStyleDeclaration>);
+
+    const list = document.createElement("div");
+    Object.assign(list.style, {
+      flex: "1 1 auto", overflowY: "auto", display: "flex", flexDirection: "column", gap: "2px",
+      border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", padding: "4px", minHeight: "0",
+    } as Partial<CSSStyleDeclaration>);
+
+    const pickClub = (idx: number): void => {
+      this.closeClubPicker();
+      clubTeam(team, idx);
+      TEAM_NAMES[team] = CLUBS[idx][0];
+      this.optimizeLineup(team);
+      this.autoAssignRoles(team);
+      this.autoAssignChoiceRanks(team);
+      this.refreshEditors();
+    };
+
+    const render = (): void => {
+      const q = search.value.trim().toLowerCase();
+      list.replaceChildren();
+      let lastLeague = "";
+      CLUBS.forEach(([name, league, members], idx) => {
+        if (q && !name.toLowerCase().includes(q) && !league.toLowerCase().includes(q)) return;
+        if (league !== lastLeague) {
+          lastLeague = league;
+          const hd = document.createElement("div");
+          hd.textContent = league;
+          Object.assign(hd.style, {
+            fontSize: "10px", fontWeight: "800", letterSpacing: "2px", color,
+            opacity: "0.8", padding: "6px 4px 2px",
+          } as Partial<CSSStyleDeclaration>);
+          list.appendChild(hd);
+        }
+        const r = document.createElement("div");
+        Object.assign(r.style, {
+          display: "grid", gridTemplateColumns: "1fr 44px 48px", gap: "8px",
+          alignItems: "center", padding: "6px 8px", borderRadius: "6px", cursor: "pointer",
+          background: "rgba(255,255,255,0.04)",
+        } as Partial<CSSStyleDeclaration>);
+        const nm = document.createElement("span");
+        Object.assign(nm.style, { fontSize: "13px", fontWeight: "700", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+        nm.textContent = name;
+        const n = document.createElement("span");
+        Object.assign(n.style, { fontSize: "11px", opacity: "0.6", textAlign: "right" });
+        n.textContent = `${members.length}人`;
+        const pick = this.button("選ぶ");
+        Object.assign(pick.style, { fontSize: "11px", fontWeight: "800", padding: "3px 0", background: color, color: "#0d1016", border: `1px solid ${color}` });
+        pick.onclick = (ev) => { ev.stopPropagation(); pickClub(idx); };
+        r.onclick = () => pickClub(idx);
+        r.onmouseenter = () => { r.style.background = "rgba(90,140,255,0.18)"; };
+        r.onmouseleave = () => { r.style.background = "rgba(255,255,255,0.04)"; };
+        r.append(nm, n, pick);
+        list.appendChild(r);
+      });
+    };
+    search.oninput = render;
+    render();
+
+    const close = this.button("閉じる");
+    Object.assign(close.style, { fontSize: "12px", padding: "6px 0" });
+    close.onclick = () => this.closeClubPicker();
+    panel.append(title, search, list, close);
+    search.focus();
+  }
+
+  private closeClubPicker(): void {
+    if (this.clubPicker) { this.clubPicker.remove(); this.clubPicker = null; }
   }
 
   // Carry an incoming DB player on the cursor after the picker closes. A plain

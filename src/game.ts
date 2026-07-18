@@ -598,9 +598,12 @@ export class Game {
       ];
     }
     return [
-      new Vector3(0, 0, hz + dir * 7.5),     // top
-      new Vector3(-5, 0, hz + dir * 6),      // left wing
-      new Vector3(5, 0, hz + dir * 6),       // right wing
+      // perimeter spots HUG the arc (line 6.75 m): a catch there is a three taken
+      // from as close as the line allows — max percentage. Only a deep-range
+      // elite drifts further out (see the spot jog in updateOffBallMotion).
+      new Vector3(0, 0, hz + dir * 7.1),     // top (7.1 m out)
+      new Vector3(-4.7, 0, hz + dir * 5.3),  // left wing (~7.08 m out)
+      new Vector3(4.7, 0, hz + dir * 5.3),   // right wing
       // DEEP corners: down on the corner three near the baseline (where the
       // 3&D / spot-up shooters wait), stretching the floor wider than the old
       // 2.5 m-out spot and keeping them a comfortable three
@@ -644,12 +647,15 @@ export class Game {
   // low. Centred so a run-of-the-mill contest ≈ 0. This is what makes "keep your
   // big home" real interior defence and a guard caught on the roll a layup line.
   private rimProtect(d: Player, shooter: Player): number {
+    // 守判断 weight raised 0.2→0.35 (centre re-tuned so a flat-70 contest is
+    // unchanged): attr-impact audit showed DEF+20 moved opponent FG% by ~0 —
+    // the judgement stat now steepens the QUALITY of the same contest.
     return clamp(
       (d.height - shooter.height) * 0.5
       + rate(d.attr.dunk) * 0.35            // ヘッド = rim protection / shot-blocking
       + rate(d.attr.jump) * 0.25
-      + rate(d.attr.defense) * 0.2
-      - 0.4,                                // baseline: an average contest sits near 0
+      + rate(d.attr.defense) * 0.35
+      - 0.505,                              // baseline: an average contest sits near 0
       -0.4, 0.6);
   }
 
@@ -660,10 +666,12 @@ export class Game {
   // your big onto a guard, or play slow-footed defenders out top, and the threes
   // fall.
   private perimContest(d: Player, shooter: Player): number {
+    // 守判断 weight raised 0.3→0.5 (centre re-tuned, flat-70 unchanged) — see
+    // rimProtect note; the audit demanded DEF actually move opponents' FG%.
     return clamp(
-      rate(d.attr.reaction) * 0.35 + rate(d.attr.agility) * 0.3 + rate(d.attr.defense) * 0.3
+      rate(d.attr.reaction) * 0.35 + rate(d.attr.agility) * 0.3 + rate(d.attr.defense) * 0.5
       + (d.height - shooter.height) * 0.15
-      - 0.5,
+      - 0.64,
       -0.35, 0.4);
   }
 
@@ -700,6 +708,18 @@ export class Game {
   private gatherFor(p: Player, dHoop: number): number {
     const over = dHoop - this.shootRangeOf(p);
     return over <= 0 ? 0 : over * 0.22;   // ~0.22 s per metre beyond range
+  }
+
+  // ディープ3の資格: L精度とL速度がともに90以上のエリートだけが、ラインの遥か
+  // 外から放つ価値がある。それ以外の選手の深い3は確率を捨てるだけなので、
+  // シュート判断はライン際(+0.55m)までに制限され、まずラインへ寄ってから打つ
+  // （成功率最優先）。物理的な射程・ブザー間際の苦し紛れはゲートしない。
+  private deepThreeOK(p: Player): boolean {
+    return p.attr.threeAcc >= 90 && p.attr.threeRange >= 90;
+  }
+  private effShootRange(p: Player): number {
+    const r = this.shootRangeOf(p);
+    return this.deepThreeOK(p) ? r : Math.min(r, THREE_DIST + 0.55);
   }
 
   // How long this player would GATHER this shot (the overhead load before release).
@@ -1653,6 +1673,13 @@ export class Game {
       this.shoot(h, dHoop, dDef); return;
     }
 
+    // ゴール至近でフリーで受けた: 迷わずフィニッシュ。ここから外へ持ち出して
+    // ゴールに向き直る「時間をかける攻め」は不要 — マークが居ないなら即アタック。
+    if (dDef > 1.0 && this.frontT) {
+      if (dHoop <= 2.3) { this.finishAtRim(h, dDef); return; }
+      if (dHoop <= 4.0 && this.laneClear(h, rimFloor)) { this.setDrive(h, rimFloor, 1.2); return; }
+    }
+
     // change of possession: the ball has to be carried up, and that's a guard's
     // job. A PF/C who ends up with it before the frontcourt is set looks for the
     // point guard first, then the shooting guard, and hands it off rather than
@@ -1805,8 +1832,14 @@ export class Game {
       // ハンドラー/フロアジェネラル/ハブビッグ: まず配球。ただし「打たずにパス回し
       // だけ」にならないよう、空いた球は打ち、レーンが開けば仕掛けてギャップを作る。
       if (!this.frontT) { this.bringUpLane(h); return; }
-      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && canGather && !this.wontLoadUp(h, dHoop, dDef) && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
-      const inRange = dHoop <= this.shootRangeOf(h) + 0.3;
+      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && canGather && !this.wontLoadUp(h, dHoop, dDef) && !this.denySmother(h, dDef)) {
+        // ヒーブを投げ捨てる前に: まだ1秒以上あるなら、まずラインまで急いで寄る
+        // （深い3は効き射程外＝確率を捨てるだけ）。1秒を切ったら腹を括って打つ。
+        if (dHoop > this.effShootRange(h) + 0.6 && this.shotClock > 1.0) { this.setDrive(h, rimFloor, THREE_DIST + 0.2); return; }
+        this.shoot(h, dHoop, dDef);
+        return;
+      }
+      const inRange = dHoop <= this.effShootRange(h) + 0.3;
       const clockPush = clamp((SHOT_CLOCK * 0.5 - this.shotClock) / (SHOT_CLOCK * 0.5), 0, 1);   // 遅いほど打つ(残半分から)
       // a clean lane → attack to bend the defence (a big posts instead of dribbling)
       if (this.laneClear(h, rimFloor) && dHoop <= 8 && this.canIso(h, dHoop)
@@ -1818,7 +1851,7 @@ export class Game {
       const pS = clamp(0.16 + rate(h.attr.threeAcc) * 0.28 + (dDef - 1.7) * 0.2 + clockPush * 0.5, 0.04, 0.9);
       if (inRange && open && chance(pS)) { this.shoot(h, dHoop, dDef); return; }
       if (this.pass(h)) return;
-      this.setDrive(h, rimFloor, 4.5);   // no outlet yet — probe/reset
+      this.setDrive(h, rimFloor, Math.min(4.5, Math.max(dHoop, 1.2)));   // probe/reset — never backs a man OUT of the paint
       return;
     }
     if (noCreate) {
@@ -1826,8 +1859,14 @@ export class Game {
       // 基本。無理な単独クリエイトはしないが、「クローズアウトには仕掛ける」ことで
       // ギャップを作り、開いた球はしっかり打つ（打たずに回すだけにしない）。
       if (!this.frontT) { this.bringUpLane(h); return; }
-      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && canGather && !this.wontLoadUp(h, dHoop, dDef) && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
-      const inRange = dHoop <= this.shootRangeOf(h) + 0.3;
+      if (this.shotClock < SHOT_CLOCK * 0.3 && dHoop > 1.8 && canGather && !this.wontLoadUp(h, dHoop, dDef) && !this.denySmother(h, dDef)) {
+        // ヒーブを投げ捨てる前に: まだ1秒以上あるなら、まずラインまで急いで寄る
+        // （深い3は効き射程外＝確率を捨てるだけ）。1秒を切ったら腹を括って打つ。
+        if (dHoop > this.effShootRange(h) + 0.6 && this.shotClock > 1.0) { this.setDrive(h, rimFloor, THREE_DIST + 0.2); return; }
+        this.shoot(h, dHoop, dDef);
+        return;
+      }
+      const inRange = dHoop <= this.effShootRange(h) + 0.3;
       const clockPush = clamp((SHOT_CLOCK * 0.5 - this.shotClock) / (SHOT_CLOCK * 0.5), 0, 1);
       // ATTACK THE CLOSEOUT: a shooter with a live handle drives past a defender
       // flying at him — the main way an off-ball scorer creates a gap.
@@ -1846,7 +1885,7 @@ export class Game {
         + (isThreeL ? tac.threeBias * 0.2 * this.twWeight(h) : 0.12) + clockPush * 0.4, 0.06, 0.95);
       if (inRange && open && chance(pS)) { this.shoot(h, dHoop, dDef); return; }
       if (this.pass(h)) return;
-      this.setDrive(h, rimFloor, 4.5);
+      this.setDrive(h, rimFloor, Math.min(4.5, Math.max(dHoop, 1.2)));
       return;
     }
 
@@ -1866,7 +1905,19 @@ export class Game {
     // 残クロックに対する相対しきい値(SHOT_CLOCK 依存)。7秒クロックでは ~2.5秒前後で
     // 初めて「打ち急ぎ」に入る（up-tempo は少し早い）。絶対秒だと短クロックで早過ぎた。
     const urgent = this.shotClock < SHOT_CLOCK * (0.28 + tac.pace * 0.14 * this.twWeight(h));
-    if (urgent && canGather && !this.wontLoadUp(h, dHoop, dDef) && !this.denySmother(h, dDef)) { this.shoot(h, dHoop, dDef); return; }
+    // 打ち急ぎ圏でギャザーが間に合わない（深すぎる）: 外で持て余さず、ワインド
+    // アップの要らないレイアップを狙ってリムへ切り込む
+    if (urgent && this.shotClock > 0.8 && this.wontLoadUp(h, dHoop, dDef)) {
+      this.driveDecision(h);
+      return;
+    }
+    if (urgent && canGather && !this.wontLoadUp(h, dHoop, dDef) && !this.denySmother(h, dDef)) {
+      // 打ち急ぎでも深い3は投げ捨てない: 効き射程の外に居てまだ1秒以上あるなら、
+      // まずラインへ寄る（1秒を切ったらどこからでも打つ）
+      if (dHoop > this.effShootRange(h) + 0.6 && this.shotClock > 1.0) { this.setDrive(h, rimFloor, THREE_DIST + 0.2); return; }
+      this.shoot(h, dHoop, dDef);
+      return;
+    }
 
     // desire to do each thing = personality + skill + tactics(×連携) + scoring
     // role + 特殊能力 (ドリブラー/ストライカー/ドリブルキープ)
@@ -1887,7 +1938,7 @@ export class Game {
     // unless a pass-first player kicks it or an elite shooter has a wide-open look
     if ((beaten || laneOpen) && dHoop <= 9) {
       if (!beaten && isThree && dDef > 2.0 && rate(h.attr.threeAcc) > 0.65
-          && dHoop <= this.shootRangeOf(h) + 0.3            // must be within his L速度 range
+          && dHoop <= this.effShootRange(h) + 0.3           // within his EFFECTIVE range (deep 3 = elite only)
           && chance(0.25 + tac.threeBias * 0.4 * tw)) { this.shoot(h, dHoop, dDef); return; }
       const driveChance = beaten ? 1 : clamp(0.35 + driveDesire * 0.55, 0.25, 0.95);
       if (chance(driveChance)) { this.driveDecision(h); return; }
@@ -1899,7 +1950,7 @@ export class Game {
     // no clean lane: an open look is taken (the primary option most readily);
     // a tough, contested look is swung to a higher scoring option if one is open.
     // L速度 (range) decides how far out this player is a willing shooter.
-    if (dHoop <= this.shootRangeOf(h) + 0.3) {
+    if (dHoop <= this.effShootRange(h) + 0.3) {
       // 1対1シュート: happy to rise over a single defender
       const open = dDef > (h.has("isoShooter") ? 1.4 : 1.8);
       let pShoot = 0.12 + shootDesire * 0.55 - (dHoop - 2) * 0.05 + (dDef - 1) * 0.28;
@@ -1939,7 +1990,7 @@ export class Game {
     // still bringing it up (backcourt) → carry it up a SIDE lane, not the gut;
     // in the frontcourt it's just a reset probe toward the rim
     if (!this.frontT) this.bringUpLane(h);
-    else this.setDrive(h, rimFloor, 4.5);
+    else this.setDrive(h, rimFloor, Math.min(4.5, Math.max(dHoop, 1.2)));
   }
 
   // The side (−1 left / +1 right) with more room — fewer team-mates on it — so
@@ -2142,14 +2193,14 @@ export class Game {
     const speedEdge = rate(h.attr.handling) * 0.45 + rate(h.attr.agility) * 0.35
       + rate(h.attr.dribbleAcc) * 0.2 + (h.has("driver") ? 0.1 : 0)
       - (rate(d.attr.agility) * 0.62 + rate(d.attr.reaction) * 0.4
-        + rate(d.attr.defense) * 0.42 + (d.has("manMark") ? 0.12 : 0));
+        + rate(d.attr.defense) * 0.55 + (d.has("manMark") ? 0.12 : 0));   // 守判断を増強(基準は pBeat 側で再センタ)
     // POWER is a physical battle — but it still takes HANDLE to keep the ball on
     // a string while bulling in; a strong but clumsy player (a defender-type big
     // with low 技術/D精度) can't just steamroll to the rim. The defender resists
     // mostly with ボディバランス (raw strength) plus 守判断.
     const powerEdge = rate(h.attr.balance) * 0.55 + rate(h.attr.aggression) * 0.2
       + rate(h.attr.dribbleAcc) * 0.2 + rate(h.attr.handling) * 0.15 + (h.has("post") ? 0.15 : 0)
-      - (rate(d.attr.balance) * 1.05 + rate(d.attr.defense) * 0.45);
+      - (rate(d.attr.balance) * 1.05 + rate(d.attr.defense) * 0.60);   // 守判断を増強(基準は pPower 側で再センタ)
 
     // a player's OWN tools set his style first: a strong, physical player (high
     // ボディバランス, aggressive) bullies his way in; a quick, high-handle player
@@ -2164,7 +2215,7 @@ export class Game {
       // POWER: shoulder into the defender. Win the strength battle and he drives
       // the man back to the rim; lose it and he's walled off and must reset.
       h.driveSide = d.shadeSide !== 0 ? -d.shadeSide : this.pickSide(h);
-      const pPower = clamp(0.40 + powerEdge * 1.25, 0.03, 0.9);
+      const pPower = clamp(0.53 + powerEdge * 1.25, 0.03, 0.9);   // +0.13 = 守判断重み増のフラット70補償
       if (chance(pPower)) {
         h.powerT = rand(0.55, 0.9) * (1 + Math.max(0, powerEdge) * 0.4);
         d.lean = clamp(d.lean * 0.4, -1, 1);             // knocked off his base
@@ -2258,7 +2309,7 @@ export class Game {
     // (base lowered when the GO move learned to read the lean — keeps the
     // overall blow-by rate at the previously tuned level)
     const wrongWay = clamp(-d.lean * go, 0, 1);
-    const pBeat = clamp(0.38 + speedEdge * 1.2 + wrongWay * 0.45, 0.02, 0.95);
+    const pBeat = clamp(0.49 + speedEdge * 1.2 + wrongWay * 0.45, 0.02, 0.95);   // +0.11 = 守判断重み増のフラット70補償
     if (chance(pBeat)) {
       // the burst carries ALL THE WAY to the rim — a blow-by that dies at the
       // free-throw line isn't a blow-by. Time is scaled to the ground the
@@ -2631,8 +2682,11 @@ export class Game {
   // up only late in the shot clock (when running the clock out is worth the
   // gamble). 0 early in the clock, → deny value as it nears expiry.
   private denyIntensity(defTeam: number): number {
-    const t = this.tactics[defTeam].defense.deny;
-    if (t <= 0 || !this.frontT) return 0;
+    // EVERY defence reads the dying clock and crowds the shooter — the deny
+    // tactic only raises it beyond the universal floor (0.35). The offence being
+    // forced up late is the whole point of defending the clock.
+    const t = Math.max(this.tactics[defTeam].defense.deny, 0.28);
+    if (!this.frontT) return 0;
     const late = this.shotClock < 4.5 ? (4.5 - this.shotClock) / 4.5 : 0;
     return t * late;
   }
@@ -2721,7 +2775,7 @@ export class Game {
     if (!d.airborne && d.landT <= 0
         && man.beatenT <= 0 && man.powerT <= 0 && man.jukeT <= 0
         && dist2D(d.pos, man.pos) < 1.7
-        && dist2D(man.pos, protect) <= this.shootRangeOf(man) + 0.3) {
+        && dist2D(man.pos, protect) <= this.effShootRange(man) + 0.3) {
       const threat = Math.max(rate(man.attr.threeAcc), rate(man.attr.midAcc));
       const gamble = (0.015 + rate(d.attr.aggression) * 0.045
         + this.tactics[d.team].defense.pressure * 0.02) * threat;
@@ -3089,7 +3143,7 @@ export class Game {
       // お膳立て: a good passer HUNTS the open shooter — the better his vision
       // (P精度), the more he prioritises hitting a free man in range with a
       // catch-and-shoot, so his teammates' looks come created rather than forced.
-      if (open > 1.8 && dist2D(p.pos, rimFloor) <= this.shootRangeOf(p) + 0.3) {
+      if (open > 1.8 && dist2D(p.pos, rimFloor) <= this.effShootRange(p) + 0.3) {
         value += (0.5 + rate(h.attr.passAcc) * 1.3) * clamp((open - 1.8) / 2, 0, 1);
       }
       // INSIDE-OUT vs zone: swing to the open man the zone can't rotate to (an
@@ -3257,6 +3311,11 @@ export class Game {
     const cz = clamp(target.pos.z + target.velZ * lead, -(COURT.halfL - 0.35), COURT.halfL - 0.35);
     const d = Math.hypot(cx - h.pos.x, cz - h.pos.z);    // true flight distance
     if (d > MAX_PASS + 1.5) return false;                // the bomb isn't on — keep it
+
+    // クロック終盤の現実チェック: このパスの滞空後、受け手に撃つ時間(判断+ワインド
+    // アップ≈0.9s)が残らないなら「回しても間に合わない」— 投げずに自分で打つ/
+    // 切り込む判断へ返す。時間を捨てるパス回しをしない。
+    if (this.shotClock < 2.2 && this.shotClock - d / zip0 < 0.9) return false;
 
     // FINAL safety gate for every pass, whatever read chose it (outlet after a
     // rebound, kick-out, swing): a defender standing in the lane, or a full
@@ -3450,6 +3509,14 @@ export class Game {
       const gather = clamp(this.passMiss * 0.42 * handFactor * rand(0.85, 1.2), 0, 1.1);
       // ダイレクトプレイ: plays off the catch in one touch
       receiver.decisionT = (receiver.has("oneTouch") ? 0.08 : 0.25) + gather;
+      // ゴール下でフリーで受けた: 考えない — キャッチ即フィニッシュの本能
+      // (ここでの逡巡が「ゴールから離れて向き直る」不自然さの正体)
+      {
+        const rimF = this.attackFloor(receiver.team);
+        if (dist2D(receiver.pos, rimF) < 2.6 && this.nearestDefenderDist(receiver) > 1.0) {
+          receiver.decisionT = 0.06 + gather * 0.5;   // even a bobble settles quicker under the rim
+        }
+      }
       if (gather > 0.02) {
         receiver.coolT = Math.max(receiver.coolT, gather);   // 硬直: rooted this long
         receiver.gatherT = gather;   // …and the ball is still loose in his hands this whole time
@@ -4738,7 +4805,19 @@ export class Game {
           p.spotIdx = this.bestOpenSpot(team, spots, p);
           spot = spots[p.spotIdx];
         }
-        const sj = this.steerAround(p, spot.x, spot.z, true);   // jog around, not through
+        // ディープシューター(L精度/L速度とも90+)だけはスポットより一歩外に張り、
+        // ロゴ3の脅威でフロアを広げる。他の全員はライン際の形どおりに立つ。
+        let spx = spot.x, spz = spot.z;
+        if (this.deepThreeOK(p)) {
+          const dxs = spot.x - rim.x, dzs = spot.z - rim.z;
+          const dl = Math.hypot(dxs, dzs);
+          if (dl > THREE_DIST - 0.4) {
+            const k = (dl + 1.1) / dl;
+            spx = rim.x + dxs * k;
+            spz = rim.z + dzs * k;
+          }
+        }
+        const sj = this.steerAround(p, spx, spz, true);   // jog around, not through
         moveToward2D(p.pos, sj.x, sj.z, p.accelToward(dt, sj.x, sj.z) * dt);
         // continuous separation: ease out of any team-mate's personal space so
         // spacing holds between spot re-reads (real off-ball players never let a

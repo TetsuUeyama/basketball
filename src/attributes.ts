@@ -1,5 +1,6 @@
 import { clamp } from "./util";
 import { PLAYER_DB, DbPlayer } from "./playerdb";
+import { CLUBS } from "./clubdb";
 
 // ---------------------------------------------------------------------------
 // Player attributes. All ratings are 0..100. The 25-item schema follows the
@@ -397,6 +398,64 @@ export function randomizeTeam(team: number): void {
 export function randomizeRosters(): void {
   randomizeTeam(0);
   randomizeTeam(1);   // team 1 avoids team 0's fresh draw → no shared players
+}
+
+// ---- club reproduction ----------------------------------------------------
+// Build ONE team's 13-man roster from a REAL club's squad (clubdb, extracted
+// from the same master-league sheet). Each slot takes the best remaining squad
+// member whose converted role matches; a role the squad lacks falls back to
+// the NEAREST basketball position (PF↔C, SG↔SF …) — e.g. a club with no
+// converted PF plays a second CB there, like a twin-towers line-up.
+const ROLE_FALLBACK: Record<string, string[]> = {
+  PG: ["SG", "SF", "PF", "C"],
+  SG: ["SF", "PG", "PF", "C"],
+  SF: ["SG", "PF", "PG", "C"],
+  PF: ["C", "SF", "SG", "PG"],
+  C:  ["PF", "SF", "SG", "PG"],
+};
+// What each basketball slot VALUES (indices into the 25-rating array, ATTR_META
+// order). A flat 25-average buries a spiky star under a do-everything role
+// player (メッシ losing the SG spot to ダニエウ・アウベス), so the slot value is
+// half overall, half the slot's key attributes.
+const ROLE_KEY_ATTRS: Record<string, number[]> = {
+  PG: [10, 11, 0, 21, 7],        // P精度 P速度 オフェンス 技術 敏捷性
+  SG: [14, 12, 0, 4, 7, 21],     // S精度 L精度 オフェンス 速度 敏捷性 技術
+  SF: [14, 0, 20, 2, 21],        // S精度 オフェンス ジャンプ バランス 技術
+  PF: [1, 2, 20, 19, 15],        // ディフェンス バランス ジャンプ ヘッド S威力
+  C:  [1, 2, 20, 19, 15],
+};
+const slotValue = (p: DbPlayer, role: string): number => {
+  const r = p[3];
+  const avg = r.reduce((a, b) => a + b, 0) / r.length;
+  const keys = ROLE_KEY_ATTRS[role] ?? [];
+  const key = keys.length ? keys.reduce((a, k) => a + (r[k] ?? 50), 0) / keys.length : avg;
+  return avg * 0.5 + key * 0.5;
+};
+
+export function clubTeam(team: number, clubIdx: number): void {
+  const club = CLUBS[clubIdx];
+  if (!club) return;
+  const squad = club[2].map((i) => PLAYER_DB[i]).filter(Boolean);
+  const used = new Set<DbPlayer>();
+  const pick = (role: string): DbPlayer => {
+    for (const r of [role, ...ROLE_FALLBACK[role]]) {
+      const cands = squad.filter((p) => !used.has(p) && p[1] === r);
+      if (cands.length) {
+        const best = cands.reduce((a, b) => (slotValue(b, role) > slotValue(a, role) ? b : a));
+        used.add(best);
+        return best;
+      }
+    }
+    const rest = squad.filter((p) => !used.has(p));
+    const best = rest.reduce((a, b) => (slotValue(b, role) > slotValue(a, role) ? b : a));
+    used.add(best);
+    return best;
+  };
+  const roles = ["PG", "SG", "SF", "PF", "C", ...BENCH_ROLES];
+  for (let i = 0; i < ROSTER_SIZE; i++) {
+    applyDbPlayer(ROSTER[team][i], pick(roles[i]));
+    ROSTER[team][i].role = roles[i];   // he plays the slot's position
+  }
 }
 
 // NBA-style 13-man roster indexed [team][idx]: idx 0..4 = starters
