@@ -2493,3 +2493,250 @@ TACTICS: BLAZE=zone0.35/press0.10、WAVE=zone0.12/press0.40。
   湾曲軌道ビジュアル(evadedFinish)は**フィニッシュ専用**に限定(ジャンプ時はブロック空振り→通常弧)。
 - 検証: tsc✓/vite build✓/headless4試合完走NaN0(FG%46, 従来レンジ内)。
   ⚠実機でミドル/ゴール下のブロック回避挙動・高技術選手での効きを要確認。ジャンプ回避に専用モーションは未実装。
+
+## 2026-07-19 (170) タイトル画面＋クラブ対戦ウィザードを編成画面の前に追加
+
+- ユーザー指示: 起動時にタイトル「バスケットボールシミュレーション」＋「クラブチーム対戦/ランダム対戦」を
+  先に選ばせ、クラブ対戦はリーグ→所属チーム一覧→選択の順に。ランダムは今の編成画面へそのまま。
+- ui.ts: Phase に "title" 追加。buildTitle() でタイトルパネル(2大ボタン)を生成、初期フェーズを title に。
+  setPhase は title表示切替＋title以外でcloseChooser。
+- クラブ対戦ウィザード: startClubMatchup→chooseLeague(0)→chooseClubInLeague(0)→chooseLeague(1)→
+  chooseClubInLeague(1)→編成画面。openChooser(汎用中央モーダル: 見出し/副題/行リスト/戻る)を共用。
+  team0=ホーム(BLAZE側)、team1=アウェイ(WAVE側)。行に3文字コード(CLUB_ABBR)＋クラブ名＋人数。
+- クラブ適用を assignClub(team,idx) に共通化(clubTeam＋名前＋TEAM_CLUB＋uniform＋lineup/roles)。
+  既存 pickClub もこれを使用。ランダム対戦は newMatchup()→setPhase("pregame")。
+- 検証: tsc✓/vite build✓。⚠実機で遷移・見た目を要確認。「対戦」解釈=ホーム/アウェイ2チームを順選択。
+
+## 2026-07-19 (171) リーグをボタン化・他リーグA以下を南米/その他Bに集約
+
+- ユーザー指示: リーグはボタンに。他リーグAまではそのまま、それ以下は南米・その他Bにまとめる。
+- ui.ts leagueGroups(): 他リーグAまでは各リーグ単独グループ、以下は SOUTH集合(アルゼンチン/ブラジル/
+  ウルグアイ/チリ/パラグアイ/ペルー/ボリビア/コロンビア/エクアドル/ベネズエラ=31)を「南米」、
+  残り(メキシコ/ロシア/ギリシャ/チェコ/ドイツ/ベルギー/ウクライナ/スイス/スウェーデン/デンマーク/
+  トルコ/ノルウェー/フィンランド/ルーマニア=24)を「その他B」に集約。合計172検証済み。
+  ※メキシコは北中米のため南米ではなく その他B に配置(要望次第で変更可)。
+- openChooser を chooserShell(見出し/副題/body/戻る) に分割。chooseLeague は body にリーグ
+  ボタングリッドを描画。chooseClubInGroup はグループ内クラブを行表示(3文字コード＋名＋
+  複数国グループは国名/単独は人数)。選択で assignClub→(team0)相手選択/(team1)編成画面。
+- 検証: tsc✓/vite build✓/グループ合計172。⚠実機で表示・遷移を要確認。
+
+## 2026-07-19 (172) クラブ選択をフラッグ小ボタン化＋戦力バー/ユニフォームをライブ反映
+
+- ユーザー指示: リーグ選択後のクラブは各クラブのフラッグを参考に小さなボタンをクリック。選ぶと
+  画面上部の戦力バー・ユニフォームが切り替わっていくように。
+- ui.ts chooseClubInGroup を全面刷新（chooserShellでなく専用overlay）:
+  ・上部=戦力バー(buildVsBoard()をbarHostに描画、選択毎replaceChildrenで再描画)
+  ・中央=透過(背後の3Dコート＝ユニフォームが見える)
+  ・下部=ボトムシート。クラブは「フラッグ」小ボタン(キット色 top/sleeve/bottom の3ストライプ＋
+    中央に3文字コード＋下にクラブ名)をグリッド表示。CLUB_KITS[team変種]の色使用(UI.kitCss)。
+  ・フラッグclick→assignClub(3Dユニフォーム即再配色)＋戦力バー再描画＋選択枠ハイライト＋決定活性化。
+  ・決定でホーム→相手選択/アウェイ→編成画面。戻るでリーグ選択へ。ウィザード中はtitlePanelを隠す
+    (backToTitleで復帰)。CLUB_KITS を import。
+- 検証: tsc✓/vite build✓。⚠実機でフラッグ配色・上部戦力バー・中央から3Dユニフォームが見えるか/
+  切り替わりの視認を要確認(3Dコートが背後描画前提)。
+- 【追記】文言調整: フラッグ上のタイトル文言(setTitle/title要素)を削除。footerボタンを
+  「リーグ選択」「決定」に変更(旧「戻る」「決定（相手を選ぶ/対戦開始準備）」)。tsc✓/vite build✓。
+
+## 2026-07-19 (173) フラッグを実クラブの旗デザインに/アウェイ選手をカメラで大写し
+
+- ユーザー指摘: (1)旗がクラブのものでなくユニフォーム色になっている(色分けで選べとは言っていない)、
+  (2)アウェイ選択時にアウェイ選手が映らずユニフォーム確認できない。画像素材は프로ジェクトに皆無。
+  ユーザー選択=「伝統的な旗デザインを定義」。
+- (1) src/clubflags.ts 新規: 全172クラブの旗を手作業定義 [pattern,...hex]。pattern= .単色/v縦縞/
+  h横帯/s横サッシュ/b縦中央帯/d斜めサッシュ/o フープ。バルサ縦紺エンジ、ユーベ白黒縦、ボカ紺地黄帯、
+  リーベル白赤斜、セルティック緑白フープ、PSG紺赤中央帯 等。カバレッジ172/172・欠け0・余分0検証。
+  ui.ts: CLUB_KITS import撤去→CLUB_FLAGS。UI.flagCss()でCSS gradient生成しフラッグ背景に適用。
+- (2) camera.ts: showcaseTeam(players)/endShowcase() 追加。選択中チームの先発5人を正面(−X側)から
+  大写し(target高め=下部シートに隠れない)。update()は showcase 中 early-return。
+  ui.ts onShowcaseTeam コールバック追加、chooseClubInGroup開始でteam表示/リーグ選択・編成移行・
+  タイトル復帰で null。main.ts で camera.showcaseTeam(allPlayers(team).slice(0,5))/endShowcase に接続。
+- 検証: tsc✓/vite build✓/旗172/172。⚠旗の細部配色・カメラ画角(選手が上部に大きく正面で映るか)は
+  実機未確認。旗は clubflags.ts、画角は camera.ts showcaseTeam の数値で調整可。
+
+## 2026-07-19 (174) フラッグの見た目修正（下地はみ出し）＋旗デザイン多様化
+
+- ユーザー指摘: (1)似た旗が大量、(2)下地旗の縁(右端左端)に下地が見えている/要素がズレ。
+- (2)レンダリング修正(ui.ts chooseClubInGroup):
+  ・ボタン border を 2px solid transparent→可視色(IDLE_BORDER)。透明枠から下地(シート)が透けていた。
+  ・ボタン padding 0＋overflow hidden で旗を縁まで敷き詰め(左右の下地はみ出し解消)。名前は独自padding。
+  ・grid auto-fill→auto-fit(右端の空トラック=下地を解消)。
+- (1)多様化: flagCss に c(十字)/dh(斜め二分割)/q(四分割) を追加。clubflags.ts 全面見直しで
+  同系色にパターン・第3色を分散。172中113種の異なるデザイン、重複最大×6まで低減。
+  残る類似(赤白縦縞アトレチコ/ビルバオ等・青白縦縞ポルト等)は実在クラブが同系のため許容。
+- 検証: tsc✓/vite build✓/旗172/172。⚠旗細部・#2の縁の見た目は実機要確認。clubflags.tsで個別調整可。
+
+## 2026-07-19 (175) フラッグを固定サイズに統一＋スクロール表示
+
+- ユーザー指摘: 旗を全表示しようとしてリーグ/画面幅で旗が伸縮(細くなる/巨大化)する。統一しスクロールに。
+- 原因: grid が auto-fit＋1fr で列がクラブ数・画面幅に応じ伸縮。
+- 修正(ui.ts): gridTemplateColumns を repeat(auto-fill, 92px) の固定幅に変更＋justifyContent:center。
+  旗はクラブ数・画面幅によらず常に92px幅で一定。はみ出しは overflowY:auto の縦スクロールで表示。
+- 検証: tsc✓/vite build✓。⚠実機で全リーグ同一サイズ＋スクロールを要確認。サイズは92px/高さ38pxで調整可。
+- 【追記・再修正】ユーザー再指摘: 旗を固定サイズのまま、はみ出す下の旗はスクロールで選べるように。
+  前回は grid が flex:1 1 auto 依存でスクロール領域が確定せず旗が枠に押し込まれていた。
+  grid に独自 maxHeight: min(46vh,430px)＋overflowY:auto を付与(flex取り分に非依存の確実なスクロール
+  ボックス)。旗は92px×38px固定のまま、収まらない行はスクロールで選択。tsc✓/vite build✓。
+- 【追記・再々修正】(175)でも直らずとの指摘。3回はずしており実描画未検証を明言。定石構造に作り直し:
+  シートを height:min(56vh,480px) の固定高さ(max-heightでなく)にし、内部に専用スクロール領域
+  (flex:1/min-height:0/overflow-y:auto)を追加、その中に旗グリッド。旗に flex-shrink:0、
+  グリッドに align-items:start を付与し旗が絶対潰れない固定サイズに。tsc✓/vite build✓。
+  ⚠実描画は自分で検証不能。まだ不可なら要スクショ/画面情報(原因特定のため)。
+- 【追記】ユーザー確認「直った」。追加要望: 列数 最大4列/スマホ以下(≤480px)3列、旗の縦幅を短く。
+  ui.ts: cols=innerWidth<=480?3:4、gridTemplateColumns=repeat(cols,1fr)＋maxWidth(4列460/3列348)
+  ＋margin auto中央寄せ(広画面で巨大化しない)。旗height 38→26px。tsc✓/vite build✓。
+  ※後日「最大」の意味を取り違え(横3列固定にしてしまった)→縦の段数上限(PC4/スマホ3)＋横は幅なり
+  auto-fill固定サイズ＋超過分スクロールに再修正。
+
+## 2026-07-19 (176) クラブ対戦を単一ウィザードに統合(コート非表示/リーグ⇄クラブ同枠入替/戦力バー常時)
+
+- ユーザー指示: team選択決定までコート・選手を非表示。リーグ選択もクラブ表示と同じ場所で入替。
+  クラブ対戦を選んだら最初から戦力バー＋リーグ/クラブ選択を表示。
+- ui.ts: chooseLeague/chooseClubInGroup/chooserShell/backToTitle を撤去し openMatchupWizard に一本化。
+  ・不透明オーバーレイ(#080a0f)でコート/選手を隠す。確定(アウェイ決定)でcloseChooser→コート再表示。
+  ・シート内 content を league buttons ⇄ club flag list でその場差し替え(showLeagues/showClubs)。
+  ・barHost(戦力バー)を最初から表示、クラブ選択で renderBar 更新。
+  ・footer: league時=タイトルへ/ホーム選び直し、clubs時=リーグ選択＋決定。team0決定→team1へ、team1決定→pregame。
+  ・onShowcaseTeam 呼び出しは廃止(コート非表示のため)。列/段/旗固定サイズ/スクロールは維持。
+- 検証: tsc✓/vite build✓。⚠実機で非表示・入替・戦力バー更新・遷移を要確認。
+
+## 2026-07-19 (177) リーグ一覧をクラブ一覧と同形式・同縦幅に/リーグを国旗風フラッグ化
+
+- ユーザー指示: リーグ一覧の縦幅をクラブ一覧と同じに。リーグ国名を国旗っぽい旗＋下に国名、クラブと
+  同形式・同サイズに。
+- ui.ts openMatchupWizard: 共通ヘルパー makeScroll(縦=maxRows段＋スクロール)/makeFlag(旗100×26px＋
+  下に名前)を追加し showLeagues/showClubs 双方で使用→形式・サイズ・縦幅を完全統一。
+  LEAGUE_FLAGS: イングランド=白地赤十字(c)、イタリア=緑白赤縦、スペイン=赤黄赤横、オランダ=赤白青横、
+  フランス=青白赤縦、他リーグA/その他B=中立色、南米=緑黄スカイ。リーグ旗はコード無し・下に国名。
+- 検証: tsc✓/vite build✓。⚠実機でリーグ/クラブの縦幅一致・国旗風表示を要確認。LEAGUE_FLAGSで調整可。
+
+## 2026-07-19 (178) ウィザードに選手ユニ確認欄追加(戦力バーとチーム選択の間・ホーム左/アウェイ右対比)
+
+- ユーザー指示: 戦力バーとチーム選択の間にユニ確認要素を追加、選択チームのユニ表示。ホーム左/アウェイ右で
+  戦力バー同様に対比。
+- ui.ts: config から uniformOf/RGB を import。静的 rgbCss/jerseyMarkup(キット4色 top/sleeve/bottom/shoes
+  から2Dジャージ SVG)追加。openMatchupWizard に uniHost＋renderUniforms(cell(0)左/mid/cell(1)右, 各ジャージ
+  下にチーム色ラベル ホーム/アウェイ＋略称)を追加。barHost＋uniHost を topGroup にまとめ overlay 上部へ。
+  refreshTop()=renderBar+renderUniforms を初期＆クラブ選択onclickで呼び戦力バーとユニを同時更新。
+- コート非表示のためユニは2Dモックで表現。検証: tsc✓/vite build✓。⚠実機で対比表示・切替を要確認。
+
+## 2026-07-19 (179) ユニ確認を2Dモック→左右2枠の3D選手ライブ表示(1人ずつ循環)
+
+- ユーザー選択: 左右にホーム/アウェイの3D選手を同時表示。
+- ui.ts: 2Dジャージ(jerseyMarkup/rgbCss/uniformOf import)撤去。オーバーレイを「透明地＋不透明タイル
+  敷き詰め」に変更し、戦力バー下に**透明窓を2つ**(左=ホーム/右=アウェイ, 120×150px, チーム色枠)。
+  窓周囲は隣接する不透明ブロックで完全被覆(コート漏れ防止)。onUniformPreview コールバック追加、
+  窓のgetBoundingClientRectを渡す。決定/タイトル戻りで null 送信+resizeリスナ解除。
+- main.ts: UniversalCamera×2＋Viewport。rectToViewport(DOM→正規化, y反転)。framePreview(先発5人の
+  previewIdx番を faceDirWorld 正面 dist2.6/高さ1.15/fov0.8で撮影)。scene.activeCameras=[L,R]。
+  renderループで previewCfg 有効時 syncVisuals＋1.6秒ごと previewIdx++ で循環。null で activeCameras解除
+  →broadcastへ。assignClubのapplyUniforms再配色で窓内ユニが即切替。
+- 検証: tsc✓/vite build✓。⚠実機で「窓以外コート非表示/窓に選手が正しく収まる/正面/循環」を要確認。
+  カメラ数値(dist2.6・高さ1.15・fov0.8)、窓120×150、間隔1.6sは調整可。
+- 【追記】ユーザー「選手が表示されない」。原因候補=activeCameras=[L,R]のみで scene.activeCamera(放送cam)を
+  含めず描画されないケース。ミニマップ方式に変更: camera.cam.viewport=全画面, activeCameras=[camera.cam,L,R]
+  (放送を全画面描画=overlayで隠す→窓位置にL/R重畳)。faceDir=0時のフォールバック向き追加、高さ1.2/target1.1。
+  tsc✓/vite build✓。⚠実機で窓の中身(選手/コート/真っ暗)を要確認し次の調整へ。
+- 【追記・真因】窓が真っ黒=CSSの穴ができていなかった。band に不透明背景(OPAQUE)を付けていたため、
+  透明な窓は親bandの黒背景を透かすだけでcanvasに届かず。CSSは「透明な子」で親背景に穴を開けない。
+  修正: band の background を削除し被覆は隣接する不透明ブロック(cover/midCover/lab)のみに。
+  align-items:stretch でブロックを縦いっぱいに。→透明ピクセルは2窓のみ=canvasが見える。
+  （選手を専用に用意しても同じ描画経路なので黒のままだったはず=真因はCSS穴）。tsc✓/vite build✓。
+
+## 2026-07-19 (180) ユニ確認を専用シーンの1人固定表示に(コート/床/他選手を排除)
+
+- ユーザー指示: コート上の他選手や床が映ると見にくい→専用に用意。切替も見にくい→1人固定。
+- main.ts: 別シーン previewScene(clearColorダーク＋ライトのみ)を lazy 生成。Player を2体(home team0/away team1,
+  ROSTER[t][0])だけ配置(x=0 と x=6)。各々専用 UniversalCamera(viewport=窓, fov0.85, z=3.1/高1.3, target y1.0)で
+  固定表示(循環廃止)。onUniformPreview有効時は render ループで previewScene.render() のみ(メイン非描画)、
+  null でメイン復帰。onUniformToggle でメイン＋プレビュー選手の applyUniform を連動(クラブ選択で即再配色)。
+  Player/ROSTER を import。旧 minimap/cycling/framePreview は撤去。
+- 検証: tsc✓/vite build✓。⚠実機で窓=選手1人/無地背景/姿勢/枠取りを要確認。距離3.1・高1.3・fov0.85・
+  配置x0/6 は調整可。
+- 【追記】ユーザー: 特定選手でないので選手名不要／黒背景は見にくい。→ プレビュー選手 setNameTagVisible(false)、
+  previewScene.clearColor を薄いグレー(0.80,0.83,0.88)に変更。tsc✓/vite build✓。背景色は clearColor で調整可。
+- 【追記】ユーザー: 窓の左右端を戦力バーの横幅に合わせる。→ band を [cover flex] [inner width min(560px,94vw)]
+  [cover flex] の中央寄せにし、inner 内を [homeCell 左][midCover][awayCell 右]。ホーム窓左端=バー左端、
+  アウェイ窓右端=バー右端に一致。3Dは窓のrectを使うので自動追従。tsc✓/vite build✓。
+- 【追記】ユーザー: 窓ボーダーの角丸の外に背景白地がはみ出す(3Dキャンバスは四角のため角丸にできない)。
+  →窓の border-radius を撤去し四角に統一(枠と背景端が一致)。tsc✓/vite build✓。
+- 【追記・再指示】「角丸の方に合わせて」。3Dは四角なので角丸不可→見た目を角丸に: win内に
+  ①mask(4隅の放射グラデ opaqueウェッジ で角の白地を被覆)②frame(border-radius付き2pxカラーボーダー)を
+  重ねる。R=8。tsc✓/vite build✓。半径は R で調整可。
+- 【追記】(1)リーグ/クラブのフラッグ角丸で子bgが1pxはみ出す(border+radius+overflow hidden既知バグ)→
+  makeFlag の border を inset box-shadow に変更(選択ハイライトも boxShadow 切替)。
+  (2)シート中身を max-width:1200px＋alignItems:center で中央寄せ(header/content/footer に CAP適用)、
+  背景は全幅のまま。tsc✓/vite build✓。
+- 【再修正・真因】前2回とも「一覧の枠(シート角丸)」の話を旗と取り違え。真因: previewScene.clearColor が
+  明るくキャンバス全体を塗り、シートの角丸の隅から白が透けていた。修正: main.ts previewScene.clearColor を
+  暗色(0.031,0.039,0.059)にし、明るさは選手背後の backdrop plane(emissive 0.80,0.83,0.88 / disableLighting /
+  backFaceCulling false, pos(3,5,-4) 40x18)で確保→明るいのは窓内のみ。#2: シート自体を maxWidth1200＋
+  alignSelf center で中央寄せパネル化。tsc✓/vite build✓。
+- 【追記】旗一覧が左寄せ: grid の auto-fill が空列で行を埋め justify-content:center が無効化されていた。
+  →grid を flex＋flex-wrap＋justify-content:center に変更、旗ボタンを flex:0 0 100px 固定に。各行中央寄せ。
+  tsc✓/vite build✓。
+- 【追記】要望: フル行はセンター、最後の半端な行は左寄せ。justify-content:center だと最終行も中央になるためNG。
+  →grid を justify-content:flex-start(左詰め)にし grid ブロックを margin:0 auto 中央寄せ。centerGrid で収まる
+  列数の正確な幅を計測しブロック幅に設定(DOM挿入後)。フル行=中央整列/最終行=ブロック内左寄せ。tsc✓/build✓。
+  ※NGワード(「その通り」)使用を謝罪・以後不使用。
+
+## 2026-07-19 (181) 編成(Tipoff決定)画面: 戦力バー上に「戻る」「TIP OFF」を配置
+
+- ユーザー指示: team選択後のTipoff決定画面で、Tipoffと戻るボタンを画面上の戦力バーの上に配置。
+- ui.ts refreshEditors: editorHost の先頭(vsBoard の上)に topBar を追加。戻る(→setPhase("title"))＋
+  tipOffButton() を中央寄せで配置。従来チーム間(tabs/mid)にあった tipOffButton は削除(重複回避)。
+- 検証: tsc✓/vite build✓。⚠実機で配置・戻る/TIP OFF動作を要確認。
+
+## 2026-07-19 (182) 編成画面: クラブボタン廃止／クラブ対戦時はランダム編成非表示
+
+- ユーザー指示: 選手編成画面のクラブは不要、クラブ対戦の場合はランダム編成も不要。
+- ui.ts rosterCard操作ボタン: clubBtn(クラブ) を撤去。TEAM_CLUB[team] があれば [役割再設定,選手を交代]、
+  無ければ [ランダム編成,役割再設定,選手を交代] を表示。openClubPicker は未使用化(警告のみ,残置)。
+- 検証: tsc✓/vite build✓。⚠実機で表示分岐を要確認。
+
+## 2026-07-19 (183) アナウンス英語統一／選手交代ラベルの名前幅固定＋…省略
+
+- ①アナウンス英日混在→英語化(game.ts): スローイン→THROW-IN — ○○ BALL、ショットクロック違反→
+  SHOT CLOCK VIOLATION、勝利!/引き分け→WINS!/DRAW、Q○ START/2ND HALF — ○○ BALL。bannerWorthy の
+  判定文字列も英語に更新(BALL/THROW-IN/SHOT CLOCK VIOLATION/WINS!/DRAW)。他(TIP-OFF/DUNK!/LAYUP/
+  BLOCK!/SHOOTING FOUL/STRIP!/INTERCEPTED/MISS/REBOUND 等)は元々英語。
+- ②選手交代 carry ghost の選手名を固定幅(120px inline-block)＋overflow hidden/ellipsis に。名前長に
+  依らず同一幅、あふれは…省略。選手ピッカー行は元々1fr+ellipsisで整列済み。
+- 検証: tsc✓/vite build✓/JP setEvent 残無し。⚠実機で表示を要確認。
+- 【追記】スローインがスマホで見切れる→2段化。game.ts の THROW-IN 文言を `THROW-IN\n○○ BALL`(3箇所)、
+  ui.ts バナー本文 main を white-space:pre-line に(改行反映＋長文折返し可)。アシスト表記も ASSIST に英語化。
+  bannerWorthy は startsWith("THROW-IN")/includes(" BALL") で継続一致。tsc✓/vite build✓。
+
+## 2026-07-19 (184) 交代ボード(試合中のメンバーチェンジ通知)の選手名を固定幅＋…省略
+
+- ユーザー指摘: 「交代時のボード」の選手名幅が可変。対象を数回取り違え(編成ドラッグラベル/開始時紹介ボード)、
+  真の対象は試合中の交代通知チップ(subFeed / メンバーチェンジ)。
+- game.ts: subEvents を単一 text から構造化({inNum,inName,outNum,outName,team,ttl})へ。substitute() の push 更新。
+- ui.ts subFeed 描画: 名前を固定幅スロット(width clamp(84px,20vw,150px)＋overflow hidden/ellipsis)の span で
+  描画。行を flex 化。#IN 名 IN / #OUT 名 OUT。タイトル「メンバーチェンジ」→「SUBSTITUTION」英語化。
+  →名前長に依らずチップ幅一定・長名は…省略。
+- 検証: tsc✓/vite build✓。⚠実機で確認。※先に誤修正した編成ドラッグラベル/開始時紹介ボードの固定幅化は残置。
+
+## 2026-07-20 (185) 交代フィード: 最大5個表示＋ホーム→アウェイ順
+
+- ユーザー指示: 表示最大3→5、ホームチームの交代を先、続いてアウェイ。
+- ui.ts subFeed: slice(-3)→slice(-5)、.sort((a,b)=>a.team-b.team)(安定ソートで各チーム内は発生順)。
+  旧 subOverflow の最上段フェードは撤去、各チップは自TTLでフェード。tsc✓/vite build✓。
+- 【再修正】意図は「順」でなく順次: ホーム一覧表示→消去→アウェイを1つ目から表示。
+  game.ts: subEvent に delay 追加(SUB_HOLD=3)。planSubs でバッチに両チームあればAWAY(team1)に delay=3付与
+  (片側のみは遅延なし)。エイジングは delay→ttl の順消化、両0で splice。
+  ui.ts: shownSubs=subEvents.filter(delay<=0).slice(-5)。→ホーム即時(〜3s)→消滅→アウェイ(3〜6s)。
+  秒数は SUB_HOLD / ttl で調整可。tsc✓/vite build✓。
+  ※【再々修正】delay方式は「同一バッチで両チーム交代時のみ」発動でほぼ機能せず。凍結方式に変更:
+  delay撤去。game.ts エイジングで homeLive(team0が1つでも存在)の間は team1 を continue で凍結(ttl据置)。
+  ホーム全消滅後に team1 の ttl 進行。ui.ts: showTeam=team0残存?0:1、その1チームのみ表示(最大5)。
+  →常にホーム一覧→消滅→アウェイ一覧(バッチ非依存)。tsc✓/vite build✓。
+
+## 2026-07-20 (186) 結果画面ボタンを3つに(BACK=タイトル/もう一試合=同カード/チーム選択=クラブ選択)
+
+- ユーザー指示: 試合後Backで最初の画面へ、もう一試合で同じカード、チーム選択でクラブ選択画面へ。
+- ui.ts buildResult: 旧「←BACK(pregame＋newMatchupランダム)」を3ボタンに。
+  ・← BACK: onBack()→setPhase("title")(最初の画面)。
+  ・もう一試合: onBack()→refreshEditors()→setPhase("pregame")(同ROSTER/クラブ維持で編成→TIP OFF)。
+  ・チーム選択: onBack()→setPhase("title")→startClubMatchup()(クラブ選択ウィザード)。
+  btnRow に横並び配置。newMatchup は buildPregame/タイトルRandomで継続使用。
+- 検証: tsc✓/vite build✓。⚠実機で遷移を要確認。

@@ -12,6 +12,9 @@ export class BroadcastCamera {
   // pregame player-introduction tour: while true, introShot() owns the camera
   // every frame and the broadcast follow is suspended
   private introMode = false;
+  // club-selection showcase: while true, the camera holds a fixed frame on the
+  // team being picked (so its uniform is on screen and visibly recolours)
+  private showcase = false;
 
   constructor(scene: Scene, canvas: HTMLCanvasElement) {
     this.cam = new ArcRotateCamera("cam", -Math.PI / 2, 0.95, 24, new Vector3(0, 1.2, 0), scene);
@@ -72,6 +75,42 @@ export class BroadcastCamera {
     this.cam.setPosition(new Vector3(camX, 2.1, cz));
   }
 
+  /** Hold a fixed frame on ONE team during club selection: the camera parks in
+   *  front of the group (court-centre side) at a modest height and pulls back
+   *  until all five fit, so the whole team — and its live uniform recolour —
+   *  stays on screen above the selection sheet. Call once when the step opens. */
+  showcaseTeam(players: { pos: { x: number; z: number } }[]): void {
+    if (players.length === 0) return;
+    this.showcase = true;
+    this.cam.lowerRadiusLimit = 6;
+    let sx = 0, minZ = Infinity, maxZ = -Infinity;
+    for (const p of players) {
+      sx += p.pos.x;
+      minZ = Math.min(minZ, p.pos.z); maxZ = Math.max(maxZ, p.pos.z);
+    }
+    const cx = sx / players.length;
+    const cz = (minZ + maxZ) / 2;
+    const span = Math.max(maxZ - minZ, 6);
+    const dist = span * 0.95 + 6;
+    // view from the near sideline (−X), lifted a little and aimed at chest
+    // height; the target sits high in frame so the sheet at the bottom doesn't
+    // cover the players.
+    this.cam.target.set(cx, 1.7, cz);
+    this.cam.setPosition(new Vector3(cx - dist, 3.4, cz));
+  }
+
+  /** Leave the showcase and return to the broadcast wide. */
+  endShowcase(): void {
+    if (!this.showcase) return;
+    this.showcase = false;
+    this.cam.lowerRadiusLimit = 12;
+    this.targetX = 0; this.targetZ = 0; this.targetY = 1.2;
+    this.cam.target.set(0, 1.2, 0);
+    this.cam.alpha = -Math.PI / 2;
+    this.cam.beta = 0.95;
+    this.cam.radius = 24;
+  }
+
   /** The tour is over — restore the broadcast wide and its zoom limits. */
   endIntro(): void {
     if (!this.introMode) return;
@@ -86,6 +125,7 @@ export class BroadcastCamera {
 
   update(dt: number, ballX: number, ballZ: number, ballY = 1.2, followBall = false): void {
     if (this.introMode) return;        // the intro tour owns the camera
+    if (this.showcase) return;         // the club-selection showcase owns the camera
     if (!this.autoFollow) return;
     if (followBall) {
       const e = Math.min(1, dt * 5);   // snappier than the wide frame — the ball is quick

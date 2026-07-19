@@ -1,10 +1,13 @@
 import {
   Engine, Scene, Color4, Color3, Vector3,
   HemisphericLight, DirectionalLight, ShadowGenerator,
+  UniversalCamera, Viewport, MeshBuilder, StandardMaterial,
 } from "@babylonjs/core";
 import { buildCourt } from "./court";
 import { BroadcastCamera } from "./camera";
 import { Game } from "./game";
+import { Player } from "./entities";
+import { ROSTER } from "./attributes";
 import { UI } from "./ui";
 import { TEAM_NAMES, TEAM_COLORS } from "./config";
 
@@ -62,7 +65,81 @@ const ui = new UI();
 ui.onRestart = () => game.reset();                       // restart the current game
 ui.onBack = () => game.reset();                          // result → back to a clean pre-game
 ui.onModelToggle = () => game.applyModelAll();           // 人型 ⇄ どんぐり体形を全員へ即時反映
-ui.onUniformToggle = () => game.applyUniforms();         // ホーム ⇄ アウェイのユニフォームを全員へ即時反映
+ui.onUniformToggle = () => {                             // ホーム ⇄ アウェイのユニフォームを全員へ即時反映
+  game.applyUniforms();
+  if (previewPlayers) { previewPlayers[0].applyUniform(); previewPlayers[1].applyUniform(); }
+};
+// クラブ選択中、選んでいるチームの先発5人をコート上で大写しにする（null=通常の広角へ戻す）
+ui.onShowcaseTeam = (team) => {
+  if (team === null) camera.endShowcase();
+  else camera.showcaseTeam(game.allPlayers(team).slice(0, 5));
+};
+
+// ---- dedicated 3D uniform preview (club selection) ------------------------
+// A SEPARATE scene holds just two player models (home / away) on a clean dark
+// background — NO court, floor or other players. Each is framed by its own
+// viewport camera and shown FIXED (one player, no cycling). Rendered INSTEAD of
+// the main scene while the club wizard is open.
+let previewScene: Scene | null = null;
+let previewPlayers: [Player, Player] | null = null;
+let previewCams: [UniversalCamera, UniversalCamera] | null = null;
+let previewActive = false;
+
+function rectToViewport(r: DOMRect): Viewport {
+  const cr = canvas.getBoundingClientRect();
+  const x = (r.left - cr.left) / cr.width;
+  const w = r.width / cr.width;
+  const h = r.height / cr.height;
+  const y = 1 - (r.top - cr.top + r.height) / cr.height;   // Babylon viewport: origin bottom-left
+  return new Viewport(x, y, w, h);
+}
+function buildPreviewScene(): void {
+  const ps = new Scene(engine);
+  // The canvas CLEAR colour must be DARK (matching the UI overlay): otherwise a
+  // light clear bleeds through the rounded corners of the selection sheet. The
+  // LIGHT backdrop the kit needs to stand out is instead a plane BEHIND the
+  // players — so only the two windows are light, never the sheet corners.
+  ps.clearColor = new Color4(0.031, 0.039, 0.059, 1);
+  const backdrop = MeshBuilder.CreatePlane("pv_bg", { width: 40, height: 18 }, ps);
+  backdrop.position.set(3, 5, -4);
+  const bgMat = new StandardMaterial("pv_bgmat", ps);
+  bgMat.emissiveColor = new Color3(0.80, 0.83, 0.88);   // uniform light, ignores lighting
+  bgMat.disableLighting = true;
+  bgMat.backFaceCulling = false;
+  backdrop.material = bgMat;
+  const ph = new HemisphericLight("pv_hemi", new Vector3(0, 1, 0), ps);
+  ph.intensity = 0.95;
+  ph.groundColor = new Color3(0.45, 0.43, 0.4);
+  const pd = new DirectionalLight("pv_dir", new Vector3(0.25, -0.5, -1), ps);
+  pd.intensity = 0.7;
+  // one model per side, stood a few metres apart; each faces +Z (forward) so a
+  // camera on the +Z side sees the FRONT of the jersey. These are generic models
+  // (uniform preview only), so their floating name tags are hidden.
+  const home = new Player(ps, 0, 0, ROSTER[0][0]);
+  const away = new Player(ps, 1, 0, ROSTER[1][0]);
+  home.setNameTagVisible(false);
+  away.setNameTagVisible(false);
+  home.root.position.set(0, 0, 0);
+  away.root.position.set(6, 0, 0);
+  const camL = new UniversalCamera("pv_L", new Vector3(0, 1.3, 3.1), ps);
+  const camR = new UniversalCamera("pv_R", new Vector3(6, 1.3, 3.1), ps);
+  for (const c of [camL, camR]) { c.fov = 0.85; c.inputs.clear(); }
+  camL.setTarget(new Vector3(0, 1.0, 0));
+  camR.setTarget(new Vector3(6, 1.0, 0));
+  ps.activeCameras = [camL, camR];
+  previewScene = ps;
+  previewPlayers = [home, away];
+  previewCams = [camL, camR];
+}
+ui.onUniformPreview = (cfg) => {
+  if (!cfg) { previewActive = false; return; }   // stop → the main scene renders again
+  if (!previewScene) buildPreviewScene();
+  previewCams![0].viewport = rectToViewport(cfg.left);
+  previewCams![1].viewport = rectToViewport(cfg.right);
+  previewPlayers![0].applyUniform();             // reflect the currently-chosen kits
+  previewPlayers![1].applyUniform();
+  previewActive = true;
+};
 
 // ---- pregame player-introduction camera tour ------------------------------
 // After TIP OFF, before the game runs: the camera visits each STARTER (RED 5
@@ -141,9 +218,10 @@ function updateIntroBoard(s: IntroShot | null): void {
     Object.assign(nm.style, {
       fontSize: "clamp(20px,5vw,28px)", fontWeight: "900",
       textShadow: "0 2px 6px rgba(0,0,0,0.7)",
-      // a long name must NOT wrap the board to two lines — clip it with an …
+      // FIXED width so the board is the SAME size for every player (short names
+      // centre in the slot, long names clip with an …).
       whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-      maxWidth: "min(64vw, 440px)",
+      width: "min(64vw, 360px)", textAlign: "center",
     } as Partial<CSSStyleDeclaration>);
     line.append(posBadge(s.p.role, t, "clamp(14px,3vw,18px)"), nm);
     introBoard.append(teamLine, line);
@@ -168,9 +246,9 @@ function updateIntroBoard(s: IntroShot | null): void {
       nm.textContent = p.name;
       Object.assign(nm.style, {
         fontSize: "clamp(13px,3vw,16px)", fontWeight: "700",
-        // keep every bench row to ONE line — clip long names with an …
+        // FIXED width so every bench row's name column is identical (… clips overflow)
         whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-        maxWidth: "min(32vw, 170px)",
+        width: "min(32vw, 150px)",
       } as Partial<CSSStyleDeclaration>);
       row.append(posBadge(p.role, t, "11px"), nm);
       grid.appendChild(row);
@@ -261,7 +339,10 @@ engine.runRenderLoop(() => {
   }
   ui.update(game);
   camera.update(dt, game.ball.pos.x, game.ball.pos.z, game.ball.pos.y, game.camFollowBall);
-  scene.render();
+  // while the club wizard's uniform preview is up, render ONLY the dedicated
+  // preview scene (isolated players, no court); otherwise the main scene.
+  if (previewActive && previewScene) previewScene.render();
+  else scene.render();
 });
 
 window.addEventListener("resize", () => engine.resize());

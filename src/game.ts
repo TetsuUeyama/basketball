@@ -26,7 +26,10 @@ export class Game {
   readonly roster: Player[][] = [[], []]; // full 13-man rosters (starters + bench)
   subsMade = 0;                      // substitutions this game (debug/telemetry)
   // recent substitutions, shown by the UI as a "メンバーチェンジ" feed
-  readonly subEvents: { text: string; team: number; ttl: number }[] = [];
+  // The UI shows HOME (team 0) chips first; AWAY (team 1) chips are FROZEN (their
+  // ttl doesn't tick and they aren't shown) while any HOME chip is still live —
+  // so the feed plays all HOME subs, clears, then all AWAY subs from the first.
+  readonly subEvents: { inNum: number; inName: string; outNum: number; outName: string; team: number; ttl: number }[] = [];
   // substitution walk-on/walk-off animation ("subs" ball mode): each walker
   // heads to his target; play resumes (subNext) once everyone has arrived
   private subWalkers: { p: Player; tx: number; tz: number }[] = [];
@@ -437,9 +440,9 @@ export class Game {
     this.subWalkers.push({ p: out, tx: seat.x, tz: seat.z }); // walks off to his
     this.subsMade++;
     this.subEvents.push({
-      text: `#${sub.idx + 1} ${sub.name} In / #${out.idx + 1} ${out.name} Out`,
-      team: out.team,
-      ttl: 3,
+      inNum: sub.idx + 1, inName: sub.name,
+      outNum: out.idx + 1, outName: out.name,
+      team: out.team, ttl: 3,
     });
     // the on-court unit changed → re-derive the choice order (auto usage) so the
     // incoming player slots into the pecking order by ability
@@ -806,15 +809,15 @@ export class Game {
       || text === "2 POINTS"
       || text === "3 POINTS!"
       || text === "BACKCOURT"              // over-and-back violation
-      || text === "ショットクロック違反"    // shot-clock violation (offence)
-      || text.includes("ボール")            // restart banners that SAY whose ball it is
-      || text.startsWith("スローイン")      // throw-in restart — WHOSE ball it is
+      || text === "SHOT CLOCK VIOLATION"   // shot-clock violation (offence)
+      || text.includes(" BALL")            // restart banners that SAY whose ball it is
+      || text.startsWith("THROW-IN")       // throw-in restart — WHOSE ball it is
       || text === "TIP-OFF"                // the game clearly begins...
       || text === "HALFTIME"
       || text === "2ND HALF"
       || text === "FINAL"
-      || text.endsWith("勝利!")            // the final-horn victory call
-      || text === "引き分け"
+      || text.endsWith("WINS!")            // the final-horn victory call
+      || text === "DRAW"
       || text.startsWith("END OF Q")       // ...and each period clearly ends
       || /^Q\d START$/.test(text);         // ...and clearly restarts
   }
@@ -1024,8 +1027,8 @@ export class Game {
     this.inboundReceiver = offense[0];           // the point guard
     // the new period visibly begins as the throw-in is readied — say whose ball
     this.setEvent(this.quarter === 3
-      ? `2ND HALF — ${TEAM_NAMES[team]}ボール`
-      : `Q${this.quarter} START — ${TEAM_NAMES[team]}ボール`, team, 2.0);
+      ? `2ND HALF — ${TEAM_NAMES[team]} BALL`
+      : `Q${this.quarter} START — ${TEAM_NAMES[team]} BALL`, team, 2.0);
   }
 
   // ---- main update -------------------------------------------------------
@@ -1033,10 +1036,16 @@ export class Game {
   update(dt: number): void {
     if (this.eventT > 0) this.eventT = Math.max(0, this.eventT - dt);
     if (this.eventT === 0) this.lastEvent = null;
-    // age out the substitution feed (entries are pushed in order, so the
-    // oldest is always at the front)
-    for (const e of this.subEvents) e.ttl -= dt;
-    while (this.subEvents.length && this.subEvents[0].ttl <= 0) this.subEvents.shift();
+    // age out the substitution feed. HOME (team 0) chips run first; while ANY
+    // home chip is still live the AWAY (team 1) chips are FROZEN (ttl held, and
+    // the UI hides them) — so the feed plays all HOME subs, clears, then AWAY's.
+    const homeLive = this.subEvents.some((e) => e.team === 0);
+    for (let i = this.subEvents.length - 1; i >= 0; i--) {
+      const e = this.subEvents[i];
+      if (e.team === 1 && homeLive) continue;   // hold AWAY until HOME has cleared
+      e.ttl -= dt;
+      if (e.ttl <= 0) this.subEvents.splice(i, 1);
+    }
 
     // the bench celebrates a score — runs in every mode (scores lead into a
     // pause), and before the `final` early-return so the last bucket still lands
@@ -4279,7 +4288,7 @@ export class Game {
     this.ballMode = "inbound";
     this.inboundT = 1.0;
     // whose ball the restart is (the foul call has had its beat on screen)
-    this.setEvent(`スローイン — ${TEAM_NAMES[victim.team]}ボール`, victim.team, 2.0);
+    this.setEvent(`THROW-IN\n${TEAM_NAMES[victim.team]} BALL`, victim.team, 2.0);
     const sideX = victim.pos.x >= 0 ? COURT.halfW + 0.3 : -(COURT.halfW + 0.3);
     victim.pos.set(sideX, 0, clamp(victim.pos.z, -COURT.halfL + 1, COURT.halfL - 1));
     this.resetMotion();
@@ -4742,7 +4751,7 @@ export class Game {
     this.resetMotion();
     this.inboundReceiver = this.pickInboundReceiver(taker);
     // after a made basket / free throw the CONCEDING team plays it in — show it
-    this.setEvent(`スローイン — ${TEAM_NAMES[team]}ボール`, team, 1.8);
+    this.setEvent(`THROW-IN\n${TEAM_NAMES[team]} BALL`, team, 1.8);
   }
 
   // Throw-in from where the ball went out: the taker (nearest team-mate) steps
@@ -4787,7 +4796,7 @@ export class Game {
     // announce WHOSE ball the throw-in is (team-coloured banner) — "OUT OF
     // BOUNDS" alone never said who plays it in
     if (opts.announce !== null) {
-      this.setEvent(opts.announce ?? `スローイン — ${TEAM_NAMES[team]}ボール`, team, 2.0);
+      this.setEvent(opts.announce ?? `THROW-IN\n${TEAM_NAMES[team]} BALL`, team, 2.0);
     }
     this.pauseThen(1.5, () => this.finishOOB());
   }
@@ -5630,7 +5639,7 @@ export class Game {
     this.handler = null;
     // announce the OFFENSIVE violation (attributed to the offence) and hold it on
     // screen through the dead-ball pause before the defence's throw-in restart
-    this.setEvent("ショットクロック違反", offTeam, 2.6);
+    this.setEvent("SHOT CLOCK VIOLATION", offTeam, 2.6);
     // the restart banner then says WHOSE ball the throw-in is
     this.pauseThen(1.2, () => this.withSubs(() => this.startInboundAt(def, sx, sz,
       { clock: front ? SHOT_CLOCK_PARTIAL : SHOT_CLOCK })));
@@ -5726,7 +5735,7 @@ export class Game {
     this.finaleTrudge = [];
     this.handler = null;
     this.cheerT = [-9, -9];   // the finale supersedes any running bench cheer
-    this.setEvent(w >= 0 ? `${TEAM_NAMES[w]} 勝利!` : "引き分け",
+    this.setEvent(w >= 0 ? `${TEAM_NAMES[w]} WINS!` : "DRAW",
       w >= 0 ? w : this.possession, Game.FINALE_DUR);
     // centre of the winning five, so the bench can fan out around them
     const winFive = w >= 0 ? this.teamPlayers(w) : [];

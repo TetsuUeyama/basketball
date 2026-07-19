@@ -1,6 +1,7 @@
 import { Game } from "./game";
 import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS, TEAM_CLUB, teamAbbr } from "./config";
 import { CLUB_ABBR } from "./clubabbr";
+import { CLUB_FLAGS } from "./clubflags";
 import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, clubTeam, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "./attributes";
 import { CLUBS } from "./clubdb";
 import { PLAYER_DB, type DbPlayer } from "./playerdb";
@@ -11,7 +12,7 @@ const colorOf = (team: number): string => {
   return `rgb(${c.r * 255},${c.g * 255},${c.b * 255})`;
 };
 
-type Phase = "pregame" | "playing" | "result";
+type Phase = "title" | "pregame" | "playing" | "result";
 
 // Stats that pop a floating "＋" badge over a player's icon the moment he earns
 // them (score / assist / rebound / steal / block / turnover).
@@ -29,6 +30,8 @@ const POP_STATS: { key: keyof import("./entities").Stats; label: string; color: 
 export class UI {
   private root: HTMLDivElement;
   private hud: HTMLDivElement;
+  private titlePanel!: HTMLDivElement;
+  private chooser: HTMLDivElement | null = null;   // league/team selection wizard overlay
   private pregamePanel!: HTMLDivElement;
   private editorHost!: HTMLDivElement;
   private resultPanel!: HTMLDivElement;
@@ -108,6 +111,12 @@ export class UI {
   onBack: () => void = () => {};
   onModelToggle: () => void = () => {};   // apply HUD_OPTS.model to every player
   onUniformToggle: () => void = () => {};  // apply TEAM_UNIFORM (home/away) to every player
+  // frame ONE team on the 3D court during club selection (null = restore wide)
+  onShowcaseTeam: (team: number | null) => void = () => {};
+  // dual 3D uniform preview during club selection: render the home team's players
+  // into the `left` window rect and the away team's into `right` (cycling one at a
+  // time). null tears the preview down and restores the normal camera.
+  onUniformPreview: (cfg: { left: DOMRect; right: DOMRect; leftTeam: number; rightTeam: number } | null) => void = () => {};
 
   get playing(): boolean {
     return this.phase === "playing";
@@ -295,10 +304,11 @@ export class UI {
 
     this.buildPlayerBars();
     this.buildTooltip();
+    this.buildTitle();
     this.buildPregame();
     this.buildResult();
     this.refreshSpeed();
-    this.setPhase("pregame");
+    this.setPhase("title");
     // rects are only valid after the first layout pass
     requestAnimationFrame(() => this.positionMenu());
     window.addEventListener("resize", () => this.positionMenu());
@@ -421,6 +431,431 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
     return p;
   }
+
+  // ---- title screen -------------------------------------------------------
+  // The very first screen: pick クラブチーム対戦 (league → team wizard) or
+  // ランダム対戦 (jump straight into the existing random-roster editor).
+  private buildTitle(): void {
+    const p = this.panel();
+    p.style.gap = "16px";
+    p.style.padding = "clamp(22px,4vw,44px)";
+
+    const title = document.createElement("div");
+    title.textContent = "バスケットボールシミュレーション";
+    Object.assign(title.style, {
+      fontSize: "clamp(19px,4.4vw,32px)", fontWeight: "800", letterSpacing: "1px",
+    } as Partial<CSSStyleDeclaration>);
+    const sub = document.createElement("div");
+    sub.textContent = "対戦モードを選択";
+    Object.assign(sub.style, { fontSize: "13px", opacity: "0.6", marginBottom: "2px" } as Partial<CSSStyleDeclaration>);
+
+    const bigBtn = (label: string, desc: string, onClick: () => void): HTMLButtonElement => {
+      const b = document.createElement("button");
+      Object.assign(b.style, {
+        display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
+        width: "min(320px,86vw)", padding: "14px 18px", cursor: "pointer",
+        background: "rgba(20,24,34,0.9)", color: "#fff", borderRadius: "12px",
+        border: "1px solid rgba(255,255,255,0.18)",
+      } as Partial<CSSStyleDeclaration>);
+      const t = document.createElement("span");
+      t.textContent = label;
+      Object.assign(t.style, { fontSize: "clamp(15px,3.4vw,19px)", fontWeight: "800" } as Partial<CSSStyleDeclaration>);
+      const d = document.createElement("span");
+      d.textContent = desc;
+      Object.assign(d.style, { fontSize: "11px", opacity: "0.65" } as Partial<CSSStyleDeclaration>);
+      b.append(t, d);
+      b.onmouseenter = () => { b.style.background = "rgba(70,120,220,0.9)"; };
+      b.onmouseleave = () => { b.style.background = "rgba(20,24,34,0.9)"; };
+      b.onclick = onClick;
+      return b;
+    };
+
+    const clubBtn = bigBtn("クラブチーム対戦", "リーグとチームを選んで対戦", () => this.startClubMatchup());
+    const randBtn = bigBtn("ランダム対戦", "ランダム編成で対戦（編成は自由に変更可）", () => {
+      this.newMatchup();
+      this.setPhase("pregame");
+    });
+
+    p.append(title, sub, clubBtn, randBtn);
+    this.root.appendChild(p);
+    this.titlePanel = p;
+  }
+
+  private closeChooser(): void {
+    if (this.chooser) { this.chooser.remove(); this.chooser = null; }
+  }
+
+  // Distinct leagues, in first-seen order (matches the clubdb grouping).
+  private leaguesInOrder(): string[] {
+    const out: string[] = [];
+    for (const [, lg] of CLUBS) if (!out.includes(lg)) out.push(lg);
+    return out;
+  }
+
+  // Apply a real club to ONE team (roster + name + kit + auto lineup/roles),
+  // WITHOUT rebuilding the editors — the caller decides when to refresh/leave.
+  private assignClub(team: number, idx: number): void {
+    clubTeam(team, idx);
+    TEAM_NAMES[team] = CLUBS[idx][0];
+    TEAM_CLUB[team] = CLUBS[idx][0];   // this team now wears the club's own kit
+    this.onUniformToggle();
+    this.optimizeLineup(team);
+    this.autoAssignRoles(team);
+    this.autoAssignChoiceRanks(team);
+  }
+
+  // League GROUPS shown as buttons. The top leagues (through 他リーグA) each
+  // stay their own group; everything below is folded into 南米 and その他B.
+  private leagueGroups(): { label: string; leagues: string[] }[] {
+    const order = this.leaguesInOrder();
+    const cut = order.indexOf("他リーグA");   // last league kept as-is
+    // South-American leagues in the DB (メキシコ is CONCACAF → その他B).
+    const SOUTH = new Set([
+      "アルゼンチン", "ブラジル", "ウルグアイ", "チリ", "パラグアイ",
+      "ペルー", "ボリビア", "コロンビア", "エクアドル", "ベネズエラ",
+    ]);
+    const groups: { label: string; leagues: string[] }[] = [];
+    const south: string[] = [], otherB: string[] = [];
+    order.forEach((lg, i) => {
+      if (cut < 0 || i <= cut) groups.push({ label: lg, leagues: [lg] });
+      else if (SOUTH.has(lg)) south.push(lg);
+      else otherB.push(lg);
+    });
+    if (south.length) groups.push({ label: "南米", leagues: south });
+    if (otherB.length) groups.push({ label: "その他B", leagues: otherB });
+    return groups;
+  }
+
+  // Wizard entry: choose the home (team 0) then away (team 1) club. The court and
+  // players stay HIDDEN behind an opaque overlay for the whole wizard, until the
+  // matchup is confirmed. From the start it shows the strength bar plus the
+  // league / club selection — league buttons and the club flag list occupy the
+  // SAME area and swap in place (pick a league → its clubs; リーグ選択 → back).
+  private startClubMatchup(): void {
+    this.titlePanel.style.display = "none";
+    this.openMatchupWizard();
+  }
+
+  private openMatchupWizard(): void {
+    this.closeChooser();
+
+    const OPAQUE = "#080a0f";
+    // Overlay is TRANSPARENT itself. Opaque tiles cover the whole screen EXCEPT
+    // two transparent "windows" where the 3D home / away players are rendered
+    // (by main.ts, via onUniformPreview). The tiles are laid out ADJACENTLY (no
+    // overlap, no gaps) so nothing else of the court ever shows.
+    const overlay = document.createElement("div");
+    Object.assign(overlay.style, {
+      position: "absolute", inset: "0", display: "flex", flexDirection: "column",
+      pointerEvents: "auto",
+    } as Partial<CSSStyleDeclaration>);
+
+    // 1) top cover (opaque) — the strength bar
+    const topCover = document.createElement("div");
+    Object.assign(topCover.style, {
+      width: "100%", background: OPAQUE, display: "flex", justifyContent: "center", padding: "14px 0 8px",
+    } as Partial<CSSStyleDeclaration>);
+    const barHost = document.createElement("div");
+    Object.assign(barHost.style, { width: "min(560px,94vw)" } as Partial<CSSStyleDeclaration>);
+    const renderBar = () => barHost.replaceChildren(this.buildVsBoard());
+    topCover.appendChild(barHost);
+
+    // 2) uniform band — two TRANSPARENT windows (3D shows through), the rest opaque.
+    //    Home window left, away window right, contrasted like the strength bar.
+    const WIN_W = 120, WIN_H = 150;
+    const cover = (flex: string): HTMLDivElement => {
+      const d = document.createElement("div");
+      Object.assign(d.style, { background: OPAQUE, flex } as Partial<CSSStyleDeclaration>);
+      return d;
+    };
+    const windowCell = (t: number): { cell: HTMLDivElement; win: HTMLDivElement; lab: HTMLDivElement } => {
+      const cell = document.createElement("div");
+      Object.assign(cell.style, { width: `${WIN_W}px`, display: "flex", flexDirection: "column" } as Partial<CSSStyleDeclaration>);
+      const win = document.createElement("div");   // TRANSPARENT — the 3D player shows here
+      Object.assign(win.style, {
+        position: "relative", width: "100%", height: `${WIN_H}px`, background: "transparent",
+      } as Partial<CSSStyleDeclaration>);
+      // the 3D viewport is a rectangle; to get ROUNDED corners we (a) cover the 4
+      // corner triangles with opaque wedges (radial-gradient masks) and (b) draw a
+      // rounded coloured border on top. Both overlays sit over the window.
+      const R = 8;
+      const g = (at: string, pos: string) =>
+        `radial-gradient(circle ${R}px at ${at}, transparent ${R}px, ${OPAQUE} ${R}px) ${pos} / ${R}px ${R}px no-repeat`;
+      const mask = document.createElement("div");
+      Object.assign(mask.style, {
+        position: "absolute", inset: "0", pointerEvents: "none",
+        background: [
+          g("bottom right", "0 0"), g("bottom left", "100% 0"),
+          g("top right", "0 100%"), g("top left", "100% 100%"),
+        ].join(","),
+      } as Partial<CSSStyleDeclaration>);
+      const frame = document.createElement("div");
+      Object.assign(frame.style, {
+        position: "absolute", inset: "0", pointerEvents: "none", boxSizing: "border-box",
+        border: `2px solid ${colorOf(t)}`, borderRadius: `${R}px`,
+      } as Partial<CSSStyleDeclaration>);
+      win.append(mask, frame);
+      const lab = document.createElement("div");   // opaque label strip under it
+      Object.assign(lab.style, {
+        background: OPAQUE, textAlign: "center", padding: "3px 0", fontSize: "11px", fontWeight: "800",
+        color: colorOf(t), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      } as Partial<CSSStyleDeclaration>);
+      cell.append(win, lab);
+      return { cell, win, lab };
+    };
+    const homeCell = windowCell(0);
+    const awayCell = windowCell(1);
+    const midCover = cover("1 1 auto");
+    Object.assign(midCover.style, { display: "flex", alignItems: "center", justifyContent: "center" } as Partial<CSSStyleDeclaration>);
+    const midLbl = document.createElement("div");
+    midLbl.textContent = "ユニフォーム";
+    Object.assign(midLbl.style, { fontSize: "10px", fontWeight: "800", opacity: "0.45", letterSpacing: "2px" } as Partial<CSSStyleDeclaration>);
+    midCover.appendChild(midLbl);
+    // The windows sit at the two ends of a centred container that is EXACTLY the
+    // strength bar's width (min(560px,94vw)), so the home window's left edge and
+    // the away window's right edge line up with the bar's edges. NOTE: no element
+    // in the transparent chain may have a background — coverage comes only from the
+    // opaque sibling tiles (side covers / midCover / label strips).
+    const inner = document.createElement("div");
+    Object.assign(inner.style, { width: "min(560px,94vw)", display: "flex", alignItems: "stretch" } as Partial<CSSStyleDeclaration>);
+    inner.append(homeCell.cell, midCover, awayCell.cell);
+    const band = document.createElement("div");
+    Object.assign(band.style, { width: "100%", height: `${WIN_H + 24}px`, display: "flex", alignItems: "stretch", justifyContent: "center" } as Partial<CSSStyleDeclaration>);
+    band.append(cover("1 1 auto"), inner, cover("1 1 auto"));
+
+    // 3) filler (opaque) fills the remaining space down to the sheet
+    const filler = cover("1 1 auto");
+
+    const refreshTop = () => {
+      renderBar();
+      homeCell.lab.textContent = `ホーム　${teamAbbr(0)}`;
+      awayCell.lab.textContent = `アウェイ　${teamAbbr(1)}`;
+    };
+
+    // bottom sheet: the visible panel is capped at 1200px and CENTRED; its content
+    // is centred too (alignItems:center + each row centred). The dark preview
+    // background means the area beside the capped panel simply stays dark.
+    const sheet = document.createElement("div");
+    Object.assign(sheet.style, {
+      width: "100%", maxWidth: "1200px", alignSelf: "center", boxSizing: "border-box",
+      background: OPAQUE, borderTop: "1px solid rgba(255,255,255,0.14)",
+      borderRadius: "16px 16px 0 0", padding: "10px 12px",
+      display: "flex", flexDirection: "column", alignItems: "center", gap: "8px",
+      boxShadow: "0 -8px 30px rgba(0,0,0,0.5)",
+    } as Partial<CSSStyleDeclaration>);
+    const CAP = { width: "100%", maxWidth: "1200px", boxSizing: "border-box" } as Partial<CSSStyleDeclaration>;
+    const header = document.createElement("div");
+    Object.assign(header.style, { ...CAP, fontSize: "14px", fontWeight: "800", textAlign: "center" } as Partial<CSSStyleDeclaration>);
+    const content = document.createElement("div");
+    Object.assign(content.style, CAP);
+    const footer = document.createElement("div");
+    Object.assign(footer.style, { ...CAP, display: "flex", gap: "10px", justifyContent: "center" } as Partial<CSSStyleDeclaration>);
+    sheet.append(header, content, footer);
+    overlay.append(topCover, band, filler, sheet);
+    this.root.appendChild(overlay);
+    this.chooser = overlay;
+    refreshTop();
+
+    // start the dual 3D preview once the windows have a real on-screen rect
+    const sendPreview = () => {
+      if (this.chooser !== overlay) return;
+      this.onUniformPreview({
+        left: homeCell.win.getBoundingClientRect(),
+        right: awayCell.win.getBoundingClientRect(),
+        leftTeam: 0, rightTeam: 1,
+      });
+    };
+    requestAnimationFrame(sendPreview);
+    window.addEventListener("resize", sendPreview);
+
+    let team = 0;
+    const picked = [false, false];
+    const exitPreview = () => window.removeEventListener("resize", sendPreview);
+    const exitToTitle = () => { this.onUniformPreview(null); exitPreview(); this.closeChooser(); this.titlePanel.style.display = "flex"; };
+
+    // League "flags": national-flag-like designs (same format/size as club flags).
+    // 他リーグA / 南米 / その他B are groups, not countries → neutral / continental.
+    const LEAGUE_FLAGS: Record<string, string[]> = {
+      "イングランド": ["c", "f2f2f2", "e01414"],            // St George cross
+      "イタリア": ["v", "1f8a3b", "f2f2f2", "e01414"],       // green-white-red
+      "スペイン": ["h", "e01414", "f2c11a", "e01414"],       // red-yellow-red
+      "オランダ": ["h", "e01414", "f2f2f2", "1a4fd0"],       // red-white-blue
+      "フランス": ["v", "1a4fd0", "f2f2f2", "e01414"],       // blue-white-red
+      "他リーグA": ["h", "2a3550", "46557a"],                // neutral (mixed leagues)
+      "南米": ["v", "1f8a3b", "f2c11a", "1a9ee0"],           // continental (green/yellow/sky)
+      "その他B": ["h", "5a4a34", "7a6a52"],                  // neutral (mixed leagues)
+    };
+
+    // Shared builders so the league list and the club list are IDENTICAL in
+    // format, flag size and vertical height (maxRows rows, then scroll).
+    const IDLE_BORDER = "rgba(255,255,255,0.16)";
+    const COL = 100, GAP = 8, ROW_H = 54;
+    const makeScroll = (): { scrollArea: HTMLDivElement; grid: HTMLDivElement } => {
+      const maxRows = window.innerWidth <= 480 ? 3 : 4;
+      const scrollArea = document.createElement("div");
+      Object.assign(scrollArea.style, { maxHeight: `${maxRows * ROW_H}px`, overflowY: "auto", width: "100%" } as Partial<CSSStyleDeclaration>);
+      // The grid is a flex-wrap row of fixed-width flags, LEFT-aligned, and the
+      // grid BLOCK is centred (margin:auto) at a width of exactly N columns (see
+      // centerGrid). So a full row fills the block edge-to-edge (looks centred),
+      // and the last, partial row is left-aligned under the first flag.
+      const grid = document.createElement("div");
+      Object.assign(grid.style, {
+        display: "flex", flexWrap: "wrap", justifyContent: "flex-start", alignContent: "flex-start",
+        gap: `${GAP}px`, margin: "0 auto", boxSizing: "border-box",
+      } as Partial<CSSStyleDeclaration>);
+      scrollArea.append(grid);
+      return { scrollArea, grid };
+    };
+    // size the grid block to a whole number of columns that fit, so it centres
+    // while leaving the last row left-aligned. Call AFTER it is in the DOM.
+    const centerGrid = (scrollArea: HTMLDivElement, grid: HTMLDivElement): void => {
+      const avail = scrollArea.clientWidth || COL;
+      const cols = Math.max(1, Math.floor((avail + GAP) / (COL + GAP)));
+      grid.style.width = `${cols * (COL + GAP) - GAP}px`;
+    };
+    const makeFlag = (design: string[] | undefined, overlay: string, label: string): HTMLButtonElement => {
+      const btn = document.createElement("button");
+      Object.assign(btn.style, {
+        // frame via INSET box-shadow (not border): a real border with
+        // border-radius + overflow:hidden bleeds the child bg ~1px at the rounded
+        // corners; an inset shadow follows the radius cleanly.
+        display: "flex", flexDirection: "column", cursor: "pointer", padding: "0",
+        width: "100px", flex: "0 0 100px",   // fixed size flex item (centred by the row)
+        borderRadius: "8px", overflow: "hidden", color: "#fff", boxSizing: "border-box",
+        background: "rgba(255,255,255,0.05)", border: "0", boxShadow: `inset 0 0 0 2px ${IDLE_BORDER}`,
+      } as Partial<CSSStyleDeclaration>);
+      const flag = document.createElement("div");
+      Object.assign(flag.style, {
+        position: "relative", width: "100%", height: "26px", flexShrink: "0",
+        borderBottom: "1px solid rgba(0,0,0,0.35)", background: UI.flagCss(design),
+      } as Partial<CSSStyleDeclaration>);
+      if (overlay) {
+        const o = document.createElement("span");
+        Object.assign(o.style, {
+          position: "absolute", inset: "0", display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: "12px", fontWeight: "800", color: "#fff", textShadow: "0 1px 3px rgba(0,0,0,0.95)",
+        } as Partial<CSSStyleDeclaration>);
+        o.textContent = overlay;
+        flag.appendChild(o);
+      }
+      const nm = document.createElement("span");
+      Object.assign(nm.style, {
+        width: "100%", boxSizing: "border-box", padding: "3px 4px",
+        fontSize: "10px", fontWeight: "700", textAlign: "center",
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      } as Partial<CSSStyleDeclaration>);
+      nm.textContent = label;
+      btn.append(flag, nm);
+      return btn;
+    };
+    const resetContent = () => Object.assign(content.style, {
+      display: "block", gridTemplateColumns: "", maxHeight: "none", overflowY: "visible", padding: "0",
+    } as Partial<CSSStyleDeclaration>);
+
+    const showLeagues = (): void => {
+      header.textContent = team === 0
+        ? "ホーム（1チーム目）— リーグを選択"
+        : `アウェイ（2チーム目）— リーグを選択　［ホーム: ${TEAM_NAMES[0]}］`;
+      content.replaceChildren();
+      resetContent();
+      const { scrollArea, grid } = makeScroll();
+      for (const g of this.leagueGroups()) {
+        const btn = makeFlag(LEAGUE_FLAGS[g.label], "", g.label);
+        btn.onclick = () => showClubs(g);
+        grid.appendChild(btn);
+      }
+      content.appendChild(scrollArea);
+      centerGrid(scrollArea, grid);
+      footer.replaceChildren();
+      const back = this.button(team === 0 ? "タイトルへ戻る" : "ホームを選び直す");
+      Object.assign(back.style, { fontSize: "12px", padding: "7px 20px" } as Partial<CSSStyleDeclaration>);
+      back.onclick = team === 0 ? exitToTitle : () => { team = 0; showLeagues(); };
+      footer.append(back);
+    };
+
+    const showClubs = (group: { label: string; leagues: string[] }): void => {
+      header.textContent = team === 0
+        ? `${group.label} — ホームをフラッグで選択`
+        : `${group.label} — アウェイをフラッグで選択　［ホーム: ${TEAM_NAMES[0]}］`;
+      content.replaceChildren();
+      resetContent();
+      const { scrollArea, grid } = makeScroll();
+      let selectedBtn: HTMLButtonElement | null = null;
+      CLUBS.forEach((c, idx) => {
+        if (!group.leagues.includes(c[1])) return;
+        const btn = makeFlag(CLUB_FLAGS[c[0]], CLUB_ABBR[c[0]] ?? "", c[0]);
+        btn.onclick = () => {
+          if (selectedBtn) selectedBtn.style.boxShadow = `inset 0 0 0 2px ${IDLE_BORDER}`;
+          selectedBtn = btn;
+          btn.style.boxShadow = `inset 0 0 0 2px ${colorOf(team)}`;
+          picked[team] = true;
+          this.assignClub(team, idx);   // roster + name + kit
+          refreshTop();                 // strength bar + uniform preview switch to it
+          confirm.style.opacity = "1";
+          confirm.style.pointerEvents = "auto";
+        };
+        grid.appendChild(btn);
+      });
+      content.appendChild(scrollArea);
+      centerGrid(scrollArea, grid);
+
+      footer.replaceChildren();
+      const back = this.button("リーグ選択");
+      Object.assign(back.style, { fontSize: "12px", padding: "7px 20px" } as Partial<CSSStyleDeclaration>);
+      back.onclick = () => showLeagues();
+      const confirm = this.button("決定");
+      Object.assign(confirm.style, {
+        fontSize: "13px", fontWeight: "800", padding: "7px 22px",
+        background: colorOf(team), color: "#0d1016", border: `1px solid ${colorOf(team)}`,
+        opacity: picked[team] ? "1" : "0.4", pointerEvents: picked[team] ? "auto" : "none",
+      } as Partial<CSSStyleDeclaration>);
+      confirm.onclick = () => {
+        if (!picked[team]) return;
+        if (team === 0) {
+          team = 1;
+          showLeagues();
+        } else {
+          this.onUniformPreview(null);  // tear down the dual 3D preview
+          exitPreview();
+          this.closeChooser();          // remove the overlay → court/players show again
+          this.refreshEditors();
+          this.setPhase("pregame");
+        }
+      };
+      footer.append(back, confirm);
+    };
+
+    showLeagues();
+  }
+
+  // Build a CSS background for a club "flag" from its CLUB_FLAGS design
+  // ([pattern, ...hexColours]). Falls back to a neutral grey if a club has none.
+  private static flagCss(def: string[] | undefined): string {
+    if (!def || def.length < 2) return "rgba(255,255,255,0.12)";
+    const [pat, ...cols] = def;
+    const c = (i: number) => `#${cols[Math.min(i, cols.length - 1)]}`;
+    const bands = (deg: number) => {
+      const step = 100 / cols.length;
+      const stops = cols.map((h, i) => `#${h} ${(i * step).toFixed(2)}% ${((i + 1) * step).toFixed(2)}%`).join(",");
+      return `linear-gradient(${deg}deg, ${stops})`;
+    };
+    switch (pat) {
+      case ".": return c(0);
+      case "v": return bands(90);          // vertical stripes / left-right split
+      case "h": return bands(180);         // horizontal bands
+      case "s": return `linear-gradient(180deg, ${c(0)} 0 34%, ${c(1)} 34% 66%, ${c(0)} 66% 100%)`;  // centre sash
+      case "b": return `linear-gradient(90deg, ${c(0)} 0 33%, ${c(1)} 33% 67%, ${c(0)} 67% 100%)`;   // vertical centre band
+      case "d": return `linear-gradient(120deg, ${c(0)} 0 40%, ${c(1)} 40% 60%, ${c(0)} 60% 100%)`;  // diagonal sash
+      case "o": return `repeating-linear-gradient(180deg, ${c(0)} 0 18%, ${c(1)} 18% 36%)`;          // hoops
+      case "dh": return `linear-gradient(135deg, ${c(0)} 0 50%, ${c(1)} 50% 100%)`;                  // diagonal halves
+      case "q": return `conic-gradient(${c(0)} 0 25%, ${c(1)} 25% 50%, ${c(0)} 50% 75%, ${c(1)} 75% 100%)`; // quartered
+      case "c": // cross: vertical + horizontal band[1] over base[0]
+        return `linear-gradient(90deg, transparent 38%, ${c(1)} 38% 62%, transparent 62%),`
+          + `linear-gradient(180deg, transparent 34%, ${c(1)} 34% 66%, transparent 66%), ${c(0)}`;
+      default: return c(0);
+    }
+  }
+
 
   private buildPregame(): void {
     const p = this.panel();
@@ -586,6 +1021,19 @@ export class UI {
     // width that both the VS board and the single card fill edge-to-edge
     this.editorHost.style.width = sideBySide ? "auto" : "min(560px, 96vw)";
     this.editorHost.replaceChildren();
+
+    // top bar ABOVE the strength board: 戻る (back to the title) + TIP OFF (start).
+    const topBar = document.createElement("div");
+    Object.assign(topBar.style, {
+      display: "flex", gap: "10px", justifyContent: "center", alignItems: "center",
+      width: "100%", boxSizing: "border-box", padding: "10px 10px 8px",
+    } as Partial<CSSStyleDeclaration>);
+    const backBtn = this.button("戻る");
+    Object.assign(backBtn.style, { fontSize: "12px", padding: "8px 20px" } as Partial<CSSStyleDeclaration>);
+    backBtn.onclick = () => this.setPhase("title");
+    topBar.append(backBtn, this.tipOffButton());
+    this.editorHost.appendChild(topBar);
+
     this.vsBoard = this.buildVsBoard();
     if (sideBySide) {
       // full-width bars over the two-column layout look stretched — cap the VS
@@ -613,7 +1061,7 @@ export class UI {
         b.onclick = () => { this.rosterTab = t; this.refreshEditors(); };
         return b;
       };
-      tabs.append(teamTab(0), this.tipOffButton(), teamTab(1));
+      tabs.append(teamTab(0), teamTab(1));   // TIP OFF now lives in the top bar
       this.editorHost.appendChild(tabs);
       const card = this.rosterCard(this.rosterTab);
       card.style.width = "100%";   // fill the modal width (no side band under the VS board)
@@ -627,10 +1075,7 @@ export class UI {
       display: "flex", gap: "12px", flexWrap: "nowrap", justifyContent: "center",
       alignItems: "stretch", width: "100%",
     } as Partial<CSSStyleDeclaration>);
-    const mid = document.createElement("div");
-    Object.assign(mid.style, { display: "flex", alignItems: "center", flexShrink: "0" } as Partial<CSSStyleDeclaration>);
-    mid.appendChild(this.tipOffButton());
-    cols.append(this.rosterCard(0), mid, this.rosterCard(1));
+    cols.append(this.rosterCard(0), this.rosterCard(1));   // TIP OFF now lives in the top bar
     this.editorHost.appendChild(cols);
   }
 
@@ -1254,16 +1699,18 @@ export class UI {
       b.onclick = onClick;
       return b;
     };
-    const clubBtn = ctrlBtn("クラブ", false, () => this.openClubPicker(team));
-    const genBtn = ctrlBtn("ランダム編成", false, () => this.randomizeOne(team));
     const roleBtn = ctrlBtn("役割再設定", false, () => this.reassignRoles(team));
     const swapBtn = ctrlBtn("選手を交代", false, () => this.openPlayerPicker(team));
-    // the controls sit on their OWN row so they always stay on ONE line —
-    // a slightly longer team name (BLAZE vs WAVE) no longer wraps them to two.
-    // Kit is fixed: team 0 (BLAZE) wears HOME, team 1 (WAVE) wears AWAY.
+    // クラブ選択ボタンは廃止（対戦モードはタイトルで決める）。ランダム編成は、この
+    // チームがクラブ対戦（TEAM_CLUB が設定済み）のときは不要なので出さない。
     const btns = document.createElement("div");
-    Object.assign(btns.style, { display: "flex", gap: "5px", flexWrap: "nowrap", justifyContent: "space-between", margin: "0 0 3px" } as Partial<CSSStyleDeclaration>);
-    btns.append(clubBtn, genBtn, roleBtn, swapBtn);
+    Object.assign(btns.style, { display: "flex", gap: "5px", flexWrap: "nowrap", justifyContent: "flex-start", margin: "0 0 3px" } as Partial<CSSStyleDeclaration>);
+    if (TEAM_CLUB[team]) {
+      btns.append(roleBtn, swapBtn);
+    } else {
+      const genBtn = ctrlBtn("ランダム編成", false, () => this.randomizeOne(team));
+      btns.append(genBtn, roleBtn, swapBtn);
+    }
     head.append(teamName);
     wrap.appendChild(head);
     wrap.appendChild(btns);
@@ -2006,13 +2453,7 @@ export class UI {
 
     const pickClub = (idx: number): void => {
       this.closeClubPicker();
-      clubTeam(team, idx);
-      TEAM_NAMES[team] = CLUBS[idx][0];
-      TEAM_CLUB[team] = CLUBS[idx][0];   // this team now wears the club's own kit
-      this.onUniformToggle();            // recolour to the club uniform
-      this.optimizeLineup(team);
-      this.autoAssignRoles(team);
-      this.autoAssignChoiceRanks(team);
+      this.assignClub(team, idx);   // roster + name + kit + auto lineup/roles
       this.refreshEditors();
     };
 
@@ -2083,15 +2524,27 @@ export class UI {
     this.carry = { team, dbp };
     const color = colorOf(team);
 
+    // FIXED-width pill (flex): pos chip + a flexible name cell that ellipsis-clips
+    // + the swap glyph — so the label is the SAME width for a short or long name.
     const g = document.createElement("div");
     Object.assign(g.style, {
-      position: "fixed", zIndex: "92", pointerEvents: "none", whiteSpace: "nowrap",
-      transform: "translate(-50%,-50%)", padding: "5px 12px", borderRadius: "7px",
+      position: "fixed", zIndex: "92", pointerEvents: "none",
+      transform: "translate(-50%,-50%)", padding: "5px 12px", borderRadius: "7px", boxSizing: "border-box",
+      width: "190px", display: "flex", alignItems: "center", gap: "6px",
       background: "rgba(15,19,28,0.96)", border: `1px solid ${color}`,
       boxShadow: "0 10px 26px rgba(0,0,0,0.6)", fontSize: "12px", fontWeight: "800", color: "#fff",
       left: "-999px", top: "-999px",
     } as Partial<CSSStyleDeclaration>);
-    g.innerHTML = `<span style="color:${color}">${dbp[1]}</span>　${dbp[0]}　<span style="opacity:.6">⇄</span>`;
+    const gPos = document.createElement("span");
+    Object.assign(gPos.style, { color, flexShrink: "0" } as Partial<CSSStyleDeclaration>);
+    gPos.textContent = dbp[1];
+    const gName = document.createElement("span");
+    Object.assign(gName.style, { flex: "1 1 auto", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
+    gName.textContent = dbp[0];
+    const gArrow = document.createElement("span");
+    Object.assign(gArrow.style, { opacity: "0.6", flexShrink: "0" } as Partial<CSSStyleDeclaration>);
+    gArrow.textContent = "⇄";
+    g.append(gPos, gName, gArrow);
     document.body.appendChild(g);
     this.carryGhost = g;
 
@@ -2341,15 +2794,31 @@ export class UI {
       display: "flex", flexDirection: "column", gap: "12px", width: "min(560px, 90vw)",
     } as Partial<CSSStyleDeclaration>);
 
-    const back = this.button("← BACK");
-    Object.assign(back.style, { fontSize: "16px", padding: "10px 26px", marginTop: "4px" });
-    back.onclick = () => {
-      this.setPhase("pregame");
-      this.newMatchup();   // 毎試合ランダム編成 — a fresh draw for the next game
-      this.onBack();
-    };
+    const btnRow = document.createElement("div");
+    Object.assign(btnRow.style, {
+      display: "flex", gap: "10px", flexWrap: "wrap", justifyContent: "center", marginTop: "4px",
+    } as Partial<CSSStyleDeclaration>);
 
-    p.append(title, this.resultScore, this.resultWinner, this.resultStats, back);
+    // BACK → the very first screen (title: クラブ対戦 / ランダム対戦)
+    const back = this.button("← BACK");
+    Object.assign(back.style, { fontSize: "15px", padding: "9px 20px" } as Partial<CSSStyleDeclaration>);
+    back.onclick = () => { this.onBack(); this.setPhase("title"); };
+
+    // もう一試合 → replay the SAME matchup (rosters/clubs kept) — back to the editor
+    const rematch = this.button("もう一試合");
+    Object.assign(rematch.style, {
+      fontSize: "15px", fontWeight: "800", padding: "9px 22px",
+      background: "rgba(232,235,242,0.96)", color: "#10131a", border: "1px solid rgba(255,255,255,0.5)",
+    } as Partial<CSSStyleDeclaration>);
+    rematch.onclick = () => { this.onBack(); this.refreshEditors(); this.setPhase("pregame"); };
+
+    // チーム選択 → jump to the club-team selection wizard
+    const pickTeams = this.button("チーム選択");
+    Object.assign(pickTeams.style, { fontSize: "15px", padding: "9px 20px" } as Partial<CSSStyleDeclaration>);
+    pickTeams.onclick = () => { this.onBack(); this.setPhase("title"); this.startClubMatchup(); };
+
+    btnRow.append(back, rematch, pickTeams);
+    p.append(title, this.resultScore, this.resultWinner, this.resultStats, btnRow);
     this.root.appendChild(p);
     this.resultPanel = p;
   }
@@ -2357,8 +2826,10 @@ export class UI {
   private setPhase(phase: Phase): void {
     this.phase = phase;
     this.hud.style.display = phase === "playing" ? "block" : "none";
+    this.titlePanel.style.display = phase === "title" ? "flex" : "none";
     this.pregamePanel.style.display = phase === "pregame" ? "flex" : "none";
     this.resultPanel.style.display = phase === "result" ? "flex" : "none";
+    if (phase !== "title") this.closeChooser();
     if (phase === "playing") this.refreshBoardNames();
   }
 
@@ -3053,6 +3524,7 @@ export class UI {
         this.bannerKey = key;
         this.banner.replaceChildren();
         const main = document.createElement("div");
+        main.style.whiteSpace = "pre-line";   // honour "\n" so long calls can wrap
         main.textContent = ev.text;
         this.banner.appendChild(main);
         // on a made basket, credit who scored (and who assisted) underneath
@@ -3065,7 +3537,7 @@ export class UI {
         if (ev.assist) {
           const as = document.createElement("div");
           Object.assign(as.style, { fontSize: "clamp(13px,2.5vw,19px)", fontWeight: "600", letterSpacing: "1px", marginTop: "3px", opacity: "0.85" });
-          as.textContent = `アシスト  ${ev.assist}`;
+          as.textContent = `ASSIST  ${ev.assist}`;
           this.banner.appendChild(as);
         }
       }
@@ -3076,18 +3548,17 @@ export class UI {
       this.bannerKey = "";
     }
 
-    // substitution feed: one chip per swap, at most the 3 most recent. When more
-    // pile up, the oldest shown one fades out and the rest shift up to take its
-    // place (a scrolling notification stack).
+    // substitution feed: one chip per swap, at most 5. HOME's chips are shown
+    // first; while ANY home chip is still live the AWAY chips are hidden (and held
+    // in game.ts) — so the feed plays all HOME subs, clears, then AWAY's from the
+    // first.
     this.subFeed.replaceChildren();
-    const shownSubs = game.subEvents.slice(-3);
-    const subOverflow = game.subEvents.length > 3;
+    const showTeam = game.subEvents.some((e) => e.team === 0) ? 0 : 1;
+    const shownSubs = game.subEvents.filter((e) => e.team === showTeam).slice(-5);
     for (let si = 0; si < shownSubs.length; si++) {
       const e = shownSubs[si];
       const color = colorOf(e.team);
-      // the top (oldest shown) chip fades as it is pushed out by newer swaps
-      let op = Math.min(1, e.ttl / 0.8);
-      if (subOverflow && si === 0) op = Math.min(op, 0.35);
+      const op = Math.min(1, e.ttl / 0.8);   // each chip fades on its own timer
       const chip = document.createElement("div");
       Object.assign(chip.style, {
         background: "rgba(12,15,22,0.86)", border: `1px solid ${color}`,
@@ -3098,13 +3569,35 @@ export class UI {
       const title = document.createElement("div");
       // responsive: full size on a wide view, shrinks as the window narrows
       Object.assign(title.style, { fontSize: "clamp(9px,1.7vw,13px)", opacity: "0.7", letterSpacing: "3px", fontWeight: "700" });
-      title.textContent = "メンバーチェンジ";
+      title.textContent = "SUBSTITUTION";
       const line = document.createElement("div");
       Object.assign(line.style, {
         fontSize: "clamp(15px,3.4vw,26px)", fontWeight: "800", color, letterSpacing: "1px",
         textShadow: "0 3px 12px rgba(0,0,0,0.5)", whiteSpace: "nowrap",
+        display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
       });
-      line.textContent = e.text;
+      // each player NAME sits in a FIXED-width slot, so the chip is the SAME width
+      // whatever the names' lengths are (overflow clipped with an …).
+      const nameSlot = (name: string): HTMLSpanElement => {
+        const s = document.createElement("span");
+        Object.assign(s.style, {
+          flex: "0 0 auto", width: "clamp(84px,20vw,150px)", textAlign: "left",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        } as Partial<CSSStyleDeclaration>);
+        s.textContent = name;
+        return s;
+      };
+      const tag = (t: string, op = "0.85"): HTMLSpanElement => {
+        const s = document.createElement("span");
+        Object.assign(s.style, { flex: "0 0 auto", opacity: op, fontWeight: "800" } as Partial<CSSStyleDeclaration>);
+        s.textContent = t;
+        return s;
+      };
+      line.append(
+        tag(`#${e.inNum}`, "0.95"), nameSlot(e.inName), tag("IN"),
+        tag("/", "0.45"),
+        tag(`#${e.outNum}`, "0.95"), nameSlot(e.outName), tag("OUT"),
+      );
       chip.append(title, line);
       this.subFeed.appendChild(chip);
     }
