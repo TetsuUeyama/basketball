@@ -2740,3 +2740,28 @@ TACTICS: BLAZE=zone0.35/press0.10、WAVE=zone0.12/press0.40。
   ・チーム選択: onBack()→setPhase("title")→startClubMatchup()(クラブ選択ウィザード)。
   btnRow に横並び配置。newMatchup は buildPregame/タイトルRandomで継続使用。
 - 検証: tsc✓/vite build✓。⚠実機で遷移を要確認。
+
+## 2026-07-20 引き継ぎサマリ（新規会話用・ここまでリモート push 済み: commit 470f219）
+
+**現在のプレイ導線（全て src/ui.ts 中心）**
+- 起動→タイトル画面(buildTitle: バスケットボールシミュレーション／クラブチーム対戦・ランダム対戦)。
+- クラブ対戦: openMatchupWizard(不透明オーバーレイでコート非表示)。上部=戦力バー(buildVsBoard)＋
+  左右2枠の3Dユニプレビュー(main.ts の別 previewScene, 選手2体固定, 背景明るいbackdrop plane, 窓は
+  角丸マスク)。下部シート(max-width1200中央)= リーグ(国旗風フラッグ)⇄クラブ(クラブ旗フラッグ)を同枠入替。
+  一覧は flex-wrap＋grid ブロック中央寄せ(centerGrid で列数幅計測: フル行中央/最終行左寄せ)、縦は最大段
+  ＋スクロール。決定でホーム→アウェイ→編成画面。
+- 編成画面(refreshEditors): 戦力バー上に「戻る(→title)／TIP OFF」。チーム操作はクラブ対戦なら
+  [役割再設定,選手を交代]、ランダムなら[ランダム編成,…]。クラブボタンは廃止(openClubPicker は未使用残置)。
+- 試合→結果画面(buildResult): ←BACK=title / もう一試合=同カードで pregame / チーム選択=startClubMatchup。
+
+**データ**: config.ts UNIFORMS/uniformOf/teamAbbr/TEAM_CLUB、clubkits.ts(172ユニ)、clubabbr.ts(172の3文字)、
+clubflags.ts(172クラブ旗)、LEAGUE_FLAGS は ui.ts 内。playerdb.ts メッシ能力更新済み。
+
+**ゲーム(game.ts)**: アナウンス英語統一(THROW-IN 2段/SHOT CLOCK VIOLATION/WINS!/DRAW/SUBSTITUTION,
+bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロック回避(tryBlock evadeOK, 3P除外)。
+交代フィード subEvents は構造化({inNum,inName,outNum,outName,team,ttl})、UI で名前固定幅・最大5・
+ホーム全消滅まで team1 凍結→アウェイ表示(game.ts エイジングで homeLive中 team1 continue)。
+
+**⚠ 未確認(実機で要確認)**: 全ての見た目/3D/遷移(私はブラウザ実描画を検証不可)。特に3Dユニ窓の枠取り
+(camera/preview 数値)、旗の細部配色、各画面の遷移。調整用の値: clubflags.ts の hex、previewScene の
+数値(main.ts)、SUB_HOLD相当は撤去(凍結方式)。
