@@ -2093,6 +2093,7 @@ export class Game {
       if (this.frontT && this.attackSign(h.team) * p.pos.z < 0.4) continue; // backcourt
       if (this.nearestDefenderDist(p) < 2.0) continue;          // not actually open
       if (this.doubleTeamed(p)) continue;                        // never swing back into a trap
+      if (p.justPassedT > 0) continue;                           // he just gave it up — no ping-pong
       if (this.laneVetoed(h, p) || this.passRisk(h, p) > 0.25) continue; // no lane
       bestPrio = p.offPriority;
       best = p;
@@ -2552,17 +2553,24 @@ export class Game {
       if (this.pnrT <= 0) this.pnrCov = "";
     }
 
-    // ONE rim protector at a time: when the handler is driving, only the big
-    // best placed to meet him drops — the rest stay pinned to their men. (All
-    // bigs collapsing at once is what made every drive hit a 3-5 man wall,
-    // no matter how wide the offence spread the floor.)
+    // ONE rim protector at a time: when the handler beats his man and drives, the
+    // LOW MAN — the defender best placed between the ball and the rim — rotates
+    // over to wall it off; the rest stay pinned to their men (all collapsing at
+    // once made every drive hit a 3-5 man wall). A big is preferred (real rim
+    // protection, the −1.2 m credit), but if only a GUARD is back he steps up
+    // rather than nobody helping — a beaten drive to an otherwise-undefended rim
+    // must still be met by whoever is the last line, not conceded a free layup.
     let rimHelper: Player | null = null;
     if (this.handler && (this.handler.beatenT > 0 || this.handler.powerT > 0)) {
       let best = Infinity;
       for (const d of defenders) {
-        if (!this.isBig(d) || offense[d.slot] === this.handler) continue;
-        const dd = dist2D(d.pos, protect);
-        if (dd < best) { best = dd; rimHelper = d; }
+        if (offense[d.slot] === this.handler) continue;   // not the beaten on-ball man
+        // the LOW MAN = the non-on-ball defender closest to the basket rotates,
+        // any position. Even if he's out guarding his own man he sprints back to
+        // wall the rim rather than conceding a free layup — being "the last line"
+        // beats staying glued to a spot-up man. A big is preferred (−1.2 m credit).
+        const score = dist2D(d.pos, protect) - (this.isBig(d) ? 1.2 : 0);
+        if (score < best) { best = score; rimHelper = d; }
       }
     }
 
@@ -3245,6 +3253,12 @@ export class Game {
           && !(p.cutting && dist2D(p.pos, rimFloor) < 6.5)) {
         value -= 3.0;
       }
+      // 手放したばかりの味方には返さない: a player who gave the ball up in the last
+      // ~1.6 s is NOT a target (hard exclude), so the ball can't ping-pong back and
+      // forth between two men burning the clock — if he's the only "open" man, the
+      // handler drives/shoots instead of swinging it back. A genuine rim cut clears
+      // the flag at pass time, so a real give-and-go still gets fed.
+      if (p.justPassedT > 0 && !atRimCutter) continue;
       if (backcourt) {
         // bringing it up is a GUARD's job: outlet to the playmaker. A big only
         // gets it here on a genuine hit-ahead — already free near the basket —
@@ -3466,12 +3480,17 @@ export class Game {
     // follow-through: the passer is rooted briefly and can't immediately
     // re-engage — quick players (敏捷性) reset their balance sooner
     h.coolT = rand(0.5, 0.9) * h.recoveryMult();
+    // 手放したばかり: for the next ~1.6 s the ball shouldn't come straight back to
+    // him (breaks the 2-man ping-pong that just eats the clock). A real cut to the
+    // rim clears it (a give-and-go IS worth feeding).
+    h.justPassedT = 1.6;
     // give-and-go SOMETIMES: always cutting after a pass made the return feed
     // to the "cutter" the best read every time — an A→B→A ping-pong. Now the
     // passer usually just relocates, and only sometimes cuts for the give-and-go.
-    if (chance(0.35)) {
+    if (chance(0.28)) {
       const rim = this.attackFloor(h.team);
       h.cutting = true;
+      h.justPassedT = 0;                     // a genuine give-and-go cutter IS a target
       h.offTimer = rand(1.5, 3.0);
       h.offTarget.set(rim.x + rand(-0.6, 0.6), 0, rim.z - Math.sign(rim.z) * 0.4);
     } else {

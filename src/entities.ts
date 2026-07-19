@@ -211,6 +211,12 @@ export class Player {
   // a dozen contacts on the same frame-span
   touchCool = 0;
 
+  // 直前に手放したばかり: a couple of seconds after giving up the ball this
+  // player is a LOW-priority pass target, so the ball doesn't bounce straight
+  // back to him (a 2-man ping-pong that just burns the shot clock). Cleared by
+  // genuinely cutting to the rim (a real give-and-go). Ticked in tickCooldown.
+  justPassedT = 0;
+
   // ball-screen (pick) state — setting/holding a screen to free the handler
   screening = false;
   screenT = 0;      // time left to establish & hold the pick before popping out
@@ -940,6 +946,7 @@ export class Player {
   /** Tick down the post-pass/shot recovery cooldown. */
   tickCooldown(dt: number): void {
     if (this.coolT > 0) this.coolT = Math.max(0, this.coolT - dt);
+    if (this.justPassedT > 0) this.justPassedT = Math.max(0, this.justPassedT - dt);
     if (this.wallT > 0) this.wallT = Math.max(0, this.wallT - dt);
     if (this.gatherT > 0) this.gatherT = Math.max(0, this.gatherT - dt);
     if (this.plantT > 0) this.plantT = Math.max(0, this.plantT - dt);
