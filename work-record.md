@@ -2417,3 +2417,79 @@ TACTICS: BLAZE=zone0.35/press0.10、WAVE=zone0.12/press0.40。
   違反 3.3→2.7/試合。回帰(24試合): PTS16.4/FGA14.9/FG%50/TOV6.5・24/24完走・NaN0=健全。
   tsc✓/vite build✓。残る14%は正当なギブ&ゴー(リムカット)と1.6秒後の正常なスイング。
   ノブ: justPassedT 1.6秒・カット率0.28。⚠実機で「無意味な往復が消えたか」要確認。
+
+## 2026-07-19 (165) チーム別ユニフォーム(4パーツ独立配色)+ホーム/アウェイ2種（ユーザー要望）
+
+- config.ts: `Uniform{top,bottom,sleeve,shoes}` 型と **UNIFORMS[team][home|away]** を定義。
+  各キットで**上半身/下半身/そで+上腕/シューズを独立配色**。`TEAM_UNIFORM=[0,1]`(可変)で
+  各チームが着るキットを選択(既定 team0=ホーム/team1=アウェイ=衝突しない)。`uniformOf(team)`。
+- entities.ts: 従来 bodyMat 1色だったのを**4マテリアル**(topMat/bottomMat/sleeveMat/shoeMat)に分離。
+  - 上半身: upperBody(rect)+acornUpper → topMat
+  - 下半身: lowerBody+thigh(shorts)+acornLower → bottomMat
+  - そで+上腕: デルトイド+上腕テーパー → sleeveMat
+  - シューズ: shoe → shoeMat(キット色。旧=白固定)
+  roundedBox/makeCap/makeAcornPiece を material 引数化。`Player.applyUniform()` で4色ライブ再適用。
+- Game.applyUniforms()/UI: チームカードに **HOME/AWAY トグルボタン**追加(押すと TEAM_UNIFORM
+  反転→全員再配色→ボタン表記更新)。onUniformToggle を main.ts で配線。
+- 既定色: team0 ホーム=明橙/アウェイ=黒、team1 ホーム=明青/アウェイ=白。TEAM_COLORS(UI accent)は不変。
+- tsc✓/vite build✓・headless 4試合完走NaN0。⚠実機で各パーツの色分け・HOME/AWAY切替の見た目要確認。
+  色変更は config.ts UNIFORMS の数値で調整。
+
+## 2026-07-19 (166) ユニフォームを「クラブごと」に修正（前回チーム枠止まりの取り違え）
+
+- ユーザー指摘: 「クラブごとに設定してほしいと言った」。(165)はチーム枠(team0/1)の2キット止まりで
+  取り違え。**全172クラブ各自の実テーマカラー**でホーム/アウェイ2種を用意。
+- `src/clubkits.ts` 新規: `CLUB_KITS: Record<クラブ名,[home,away]>` を**全172クラブ**分作成
+  （リーグ+クラブ名から実配色を判定。例 バルサ=紺×エンジそで/アウェイ橙、レアル=白/アウェイ黒、
+  マンU=赤/黒、ユーベ=黒白/黄紺、ボカ=紺×黄 等）。4パーツ(top/bottom/sleeve/shoes)×2種。
+  hex→RGBのk()ヘルパーで圧縮記述。カバレッジ検証: **172/172キー一致・欠け0・余分0**。
+- config.ts: `TEAM_CLUB[team]`(現在代表クラブ名, 可変)追加。`uniformOf(team)` は
+  **クラブが設定されていればそのクラブのキット**、無ければ team-slot 既定(BLAZE/WAVE)へフォールバック。
+- ui.ts: クラブ選択(pickClub)で TEAM_CLUB[team]=クラブ名 → onUniformToggle で即再配色。
+  ランダム編成/選手交代BACKで TEAM_CLUB クリア→既定キットへ。HOME/AWAYトグルは(165)のまま
+  （クラブ選択後もそのクラブのホーム/アウェイを切替）。
+- 検証: uniformOf 解決確認（バルサHOME #14235a紺/そで#8a1030エンジ、レアルAWAY ダーク、
+  ランダム=BLAZEフォールバック）。tsc✓/vite build✓/headless4試合完走NaN0。
+  ⚠実機で各クラブの配色・HOME/AWAY・ペア対戦時の色被り回避を要確認。色はclubkits.tsのhexで調整。
+
+## 2026-07-19 (167) HOME/AWAY固定化・トグルボタン削除
+
+- ユーザー指示:「ホームはBlaze、アウェイはWAVE固定で、チーム編成にあるHOME/AWAYは削除」。
+- ui.ts: チームカードの HOME/AWAY トグルボタン(kitBtn)を削除。btns.append から除外。
+  未使用になった TEAM_UNIFORM の import も削除。クラブ選択時の即再配色(onUniformToggle)は維持。
+- config.ts: TEAM_UNIFORM=[0,1] を設計上の固定として明記（team0=BLAZE側は常にHOME、
+  team1=WAVE側は常にAWAY）。よってクラブをteam0に選べばそのクラブのホーム、team1ならアウェイを着る。
+- 検証: tsc✓/vite build✓/headless2試合完走NaN0。
+
+## 2026-07-19 (168) 得点板をクラブ選択時に3文字略称表示
+
+- ユーザー指示:「クラブを選んだ場合、得点板のBLAZE/WAVEをチームごとにARSやBALなど3文字で表す」。
+- `src/clubabbr.ts` 新規: `CLUB_ABBR: Record<クラブ名,3文字>` を**全172クラブ**分作成
+  （ARS/MUN/JUV/RMA…各クラブの一般的な3文字コード。バルサはユーザー例に合わせ BAL）。
+  カバレッジ検証: **172/172一致・欠け0・余分0・全172コード重複なし**。
+- config.ts: `teamAbbr(team)` 追加。クラブ設定時はその3文字、未設定(ランダム)時は従来通り
+  TEAM_NAMES(BLAZE/WAVE)を返す。
+- ui.ts: 得点板の teamBlock を TEAM_NAMES → teamAbbr(0)/teamAbbr(1) に変更（**得点板のみ**。
+  結果画面・イベント表示・イントロ等はフルネームのまま）。
+- 検証: tsc✓/vite build✓/headless2試合完走NaN0。⚠実機で得点板の3文字表示を要確認。
+  個別コードの修正は clubabbr.ts で可能。
+- 【追記・不具合修正】得点板はコンストラクタで1度だけ生成されクラブ選択前に走るため、
+  当初の実装では teamAbbr が空の TEAM_CLUB を読み更新されなかった（旧 TEAM_NAMES も同様で
+  クラブ名自体が元々出ていなかった）。名前div参照 nameA/nameB を保持し、refreshBoardNames() を
+  setPhase("playing")（試合開始）で呼んで読み直すよう修正。tsc✓/vite build✓。
+- 【追加】クラブ選択リスト(「クラブで編成 — 172クラブ」)の各行にも3文字コード列を追加。
+  行gridを "38px 1fr 44px 48px" にし左端へチームカラーのコードバッジ(CLUB_ABBR[name])を表示。
+  tsc✓/vite build✓。
+
+## 2026-07-19 (169) メッシ能力更新／ミドル・ゴール下のブロック回避をS技術で
+
+- メッシ(playerdb.ts): 25能力を指定値に更新(OFF95/AGI97/DRA95/DRS96/HND95/TEC=S技術94 等)。
+  指定一覧が内部能力順と1対1一致。「ドリブル精度」が2回書かれていた10番目は内部で
+  D速度(dribbleSpd)のため96を割当。tsc✓。
+- ブロック回避(イベイド/ダブルクラッチ)を従来のフィニッシュ(レイアップ/ダンク)限定から
+  **ミドル・ゴール下のジャンプシュートにも拡張**(3Pは対象外)。
+  game.ts tryBlock に evadeOK 引数追加(既定=isFinish)。releaseShot は tryBlock(h,false,!isThree)。
+  回避確率式は既存と同一(S技術×0.5+敏捷×0.25−相手ヘッド×0.2−身長差−基準, floor0.03/cap0.7)。
+  湾曲軌道ビジュアル(evadedFinish)は**フィニッシュ専用**に限定(ジャンプ時はブロック空振り→通常弧)。
+- 検証: tsc✓/vite build✓/headless4試合完走NaN0(FG%46, 従来レンジ内)。
+  ⚠実機でミドル/ゴール下のブロック回避挙動・高技術選手での効きを要確認。ジャンプ回避に専用モーションは未実装。

@@ -1,5 +1,6 @@
 import { Game } from "./game";
-import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS } from "./config";
+import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS, TEAM_CLUB, teamAbbr } from "./config";
+import { CLUB_ABBR } from "./clubabbr";
 import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, clubTeam, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "./attributes";
 import { CLUBS } from "./clubdb";
 import { PLAYER_DB, type DbPlayer } from "./playerdb";
@@ -46,6 +47,8 @@ export class UI {
 
   private scoreA: HTMLSpanElement;
   private scoreB: HTMLSpanElement;
+  private nameA!: HTMLElement;       // scoreboard team label (left) — abbr once a club is picked
+  private nameB!: HTMLElement;       // scoreboard team label (right)
   private clock: HTMLSpanElement;
   private quarter: HTMLSpanElement;
   private shot: HTMLSpanElement;
@@ -104,6 +107,7 @@ export class UI {
   onStart: () => void = () => {};
   onBack: () => void = () => {};
   onModelToggle: () => void = () => {};   // apply HUD_OPTS.model to every player
+  onUniformToggle: () => void = () => {};  // apply TEAM_UNIFORM (home/away) to every player
 
   get playing(): boolean {
     return this.phase === "playing";
@@ -143,7 +147,7 @@ export class UI {
     this.board = board;
 
     const colA = colorOf(0), colB = colorOf(1);
-    board.appendChild(this.teamBlock(TEAM_NAMES[0], colA, "right"));
+    this.nameA = this.teamBlock(teamAbbr(0), colA, "right"); board.appendChild(this.nameA);
     this.scoreA = this.scoreEl(colA); board.appendChild(this.scoreA);
 
     const mid = document.createElement("div");
@@ -156,7 +160,7 @@ export class UI {
     board.appendChild(mid);
 
     this.scoreB = this.scoreEl(colB); board.appendChild(this.scoreB);
-    board.appendChild(this.teamBlock(TEAM_NAMES[1], colB, "left"));
+    this.nameB = this.teamBlock(teamAbbr(1), colB, "left"); board.appendChild(this.nameB);
 
     // ---- shot clock ----
     const sc = document.createElement("div");
@@ -461,6 +465,8 @@ export class UI {
   private newMatchup(): void {
     TEAM_NAMES[0] = UI.DEFAULT_NAMES[0];   // a random draw is BLAZE/WAVE again
     TEAM_NAMES[1] = UI.DEFAULT_NAMES[1];
+    TEAM_CLUB[0] = TEAM_CLUB[1] = "";       // ...and back to the generic team kits
+    this.onUniformToggle();
     randomizeRosters();
     this.optimizeLineup(0); this.optimizeLineup(1);   // strongest at each position start
     this.autoAssignRoles();        // sensible default 攻守ロール for the fresh draw
@@ -471,6 +477,8 @@ export class UI {
   /** Re-draw ONE team's roster (the other team is left untouched) and rebuild. */
   private randomizeOne(team: number): void {
     TEAM_NAMES[team] = UI.DEFAULT_NAMES[team];   // back from a club name
+    TEAM_CLUB[team] = "";                        // ...and back to the generic team kit
+    this.onUniformToggle();
     randomizeTeam(team);
     this.optimizeLineup(team);         // put the strongest player at each position in the lineup
     this.autoAssignRoles(team);        // default 攻守ロール for this team's fresh draw
@@ -1250,8 +1258,9 @@ export class UI {
     const genBtn = ctrlBtn("ランダム編成", false, () => this.randomizeOne(team));
     const roleBtn = ctrlBtn("役割再設定", false, () => this.reassignRoles(team));
     const swapBtn = ctrlBtn("選手を交代", false, () => this.openPlayerPicker(team));
-    // the three controls sit on their OWN row so they always stay on ONE line —
+    // the controls sit on their OWN row so they always stay on ONE line —
     // a slightly longer team name (BLAZE vs WAVE) no longer wraps them to two.
+    // Kit is fixed: team 0 (BLAZE) wears HOME, team 1 (WAVE) wears AWAY.
     const btns = document.createElement("div");
     Object.assign(btns.style, { display: "flex", gap: "5px", flexWrap: "nowrap", justifyContent: "space-between", margin: "0 0 3px" } as Partial<CSSStyleDeclaration>);
     btns.append(clubBtn, genBtn, roleBtn, swapBtn);
@@ -1999,6 +2008,8 @@ export class UI {
       this.closeClubPicker();
       clubTeam(team, idx);
       TEAM_NAMES[team] = CLUBS[idx][0];
+      TEAM_CLUB[team] = CLUBS[idx][0];   // this team now wears the club's own kit
+      this.onUniformToggle();            // recolour to the club uniform
       this.optimizeLineup(team);
       this.autoAssignRoles(team);
       this.autoAssignChoiceRanks(team);
@@ -2023,10 +2034,16 @@ export class UI {
         }
         const r = document.createElement("div");
         Object.assign(r.style, {
-          display: "grid", gridTemplateColumns: "1fr 44px 48px", gap: "8px",
+          display: "grid", gridTemplateColumns: "38px 1fr 44px 48px", gap: "8px",
           alignItems: "center", padding: "6px 8px", borderRadius: "6px", cursor: "pointer",
           background: "rgba(255,255,255,0.04)",
         } as Partial<CSSStyleDeclaration>);
+        const code = document.createElement("span");
+        Object.assign(code.style, {
+          fontSize: "11px", fontWeight: "800", letterSpacing: "0.5px", textAlign: "center",
+          color, background: "rgba(255,255,255,0.08)", borderRadius: "4px", padding: "2px 0",
+        } as Partial<CSSStyleDeclaration>);
+        code.textContent = CLUB_ABBR[name] ?? "";
         const nm = document.createElement("span");
         Object.assign(nm.style, { fontSize: "13px", fontWeight: "700", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
         nm.textContent = name;
@@ -2039,7 +2056,7 @@ export class UI {
         r.onclick = () => pickClub(idx);
         r.onmouseenter = () => { r.style.background = "rgba(90,140,255,0.18)"; };
         r.onmouseleave = () => { r.style.background = "rgba(255,255,255,0.04)"; };
-        r.append(nm, n, pick);
+        r.append(code, nm, n, pick);
         list.appendChild(r);
       });
     };
@@ -2342,6 +2359,15 @@ export class UI {
     this.hud.style.display = phase === "playing" ? "block" : "none";
     this.pregamePanel.style.display = phase === "pregame" ? "flex" : "none";
     this.resultPanel.style.display = phase === "result" ? "flex" : "none";
+    if (phase === "playing") this.refreshBoardNames();
+  }
+
+  // The scoreboard is built once (before any club is chosen), so its team
+  // labels must be re-read whenever the match actually starts / clubs change:
+  // a picked club shows its 3-letter code, a random roster shows BLAZE / WAVE.
+  private refreshBoardNames(): void {
+    if (this.nameA) this.nameA.textContent = teamAbbr(0);
+    if (this.nameB) this.nameB.textContent = teamAbbr(1);
   }
 
   private showResult(game: Game): void {

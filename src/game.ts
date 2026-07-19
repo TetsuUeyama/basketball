@@ -212,6 +212,11 @@ export class Game {
     for (let t = 0; t < 2; t++) for (const p of this.roster[t]) p.applyModel();
   }
 
+  /** ユニフォーム（ホーム/アウェイ, TEAM_UNIFORM）を全26人へ即時適用する。 */
+  applyUniforms(): void {
+    for (let t = 0; t < 2; t++) for (const p of this.roster[t]) p.applyUniform();
+  }
+
   // Kick off the net swish + rim/board flash on the rim `team` just scored on.
   private swishNet(team: number): void {
     const i = hoopIndex(this.attackSign(team));
@@ -3841,7 +3846,9 @@ export class Game {
 
     this.shooter = h;   // own the shot NOW so a block freezes HIS follow-through
     this.lastTouch = h;   // the shooter last touched it (an airball out → other team's ball)
-    const blocker = this.tryBlock(h, false);
+    // ミドル/ゴール下のジャンプシュートも、レイアップ/ダンク同様に S技術 で
+    // ブロックをかわして打てる（3Pは対象外）。
+    const blocker = this.tryBlock(h, false, !isThree);
     if (blocker) { this.swatShot(h, blocker); return; }
     if (this.tryShootingFoul(h, dDef, false)) return;
 
@@ -3992,7 +3999,11 @@ export class Game {
   // Rim finishes are challenged with ヘッド (dunk/rim protection) + ジャンプ +
   // 守判断; jumpers with ジャンプ + 反応 + 守判断; both reward a real height edge
   // and a tight contest. The best available shot-blocker is the one who goes up.
-  private tryBlock(shooter: Player, isFinish: boolean): Player | null {
+  // evadeOK: whether the shooter may dodge a would-be block with S技術 (the
+  // double-clutch). Finishes always can; jump shots inside the arc (ミドル/ゴール下)
+  // now can too, so a high-S技術 scorer shoots OVER/AROUND a contest instead of
+  // always being swatted. Threes don't (evadeOK=false there).
+  private tryBlock(shooter: Player, isFinish: boolean, evadeOK = isFinish): Player | null {
     // finishes can be met by help rotating over from the paint; a perimeter
     // jumper only by a man right in the shooter's face
     // a jumper is contestable a touch further out now that the defender closes
@@ -4032,7 +4043,7 @@ export class Game {
     // イベイド（ダブルクラッチ）: フィニッシュ限定 — 伸びてきたブロックの手を
     // 空中でかわしてシュートまで行く。S技術(空中で打ち直す技巧)+敏捷性が高い
     // ほど成功し、ブロッカーのリムプロテクト(ヘッド)と身長差が高い壁になる。
-    if (isFinish) {
+    if (evadeOK) {
       const pEvade = clamp(
         rate(shooter.attr.shotTech) * 0.5 + rate(shooter.attr.agility) * 0.25
         - rate(best.attr.dunk) * 0.2
@@ -4040,16 +4051,20 @@ export class Game {
         - 0.12,
         0.03, 0.7);
       if (chance(pEvade)) {
-        // the swat WHIFFS — the blocker still rises, the finisher hangs and
+        // the swat WHIFFS — the blocker still rises, the shooter hangs and
         // re-shapes the shot. The adjusted release is a touch harder to convert,
         // but S技術 keeps the mechanics clean even mid-air.
         if (!best.airborne) best.jump(0.9, 0.6);
-        this.evadedFinish = true;
-        // the clutch swings the ball around the blocker — remember which side
-        const ex = shooter.pos.x - best.pos.x, ez = shooter.pos.z - best.pos.z;
-        const el = Math.hypot(ex, ez) || 1;
-        this.evadeDirX = ex / el;
-        this.evadeDirZ = ez / el;
+        // the double-clutch re-route is a FINISH motion (ball pulled under the
+        // swat, around the blocker); a jump shot just gets it off over the hand,
+        // so the curved-ball visual (evadedFinish) is finish-only.
+        if (isFinish) {
+          this.evadedFinish = true;
+          const ex = shooter.pos.x - best.pos.x, ez = shooter.pos.z - best.pos.z;
+          const el = Math.hypot(ex, ez) || 1;
+          this.evadeDirX = ex / el;
+          this.evadeDirZ = ez / el;
+        }
         if (this.shotMade && chance(0.18 * (1 - rate(shooter.attr.shotTech)))) this.shotMade = false;
         return null;
       }

@@ -55,7 +55,66 @@ export const QUARTER_TIME = 60;   // game-seconds per quarter (shown on the cloc
 export const QUARTERS = 4;
 
 export const TEAM_COLORS = [
-  { r: 0.86, g: 0.34, b: 0.12 }, // Team 0 — orange
+  { r: 0.86, g: 0.34, b: 0.12 }, // Team 0 — orange (UI accent: banners, net flash, tags)
   { r: 0.16, g: 0.42, b: 0.82 }, // Team 1 — blue
 ];
 export const TEAM_NAMES = ["BLAZE", "WAVE"];
+
+// ---------------------------------------------------------------------------
+// Uniforms. Each team has a HOME and an AWAY kit; each kit colours FOUR parts
+// independently: top (chest/上半身), bottom (shorts/下半身), sleeve (そで+上腕),
+// and shoes (シューズ). TEAM_UNIFORM picks which kit each team wears this game
+// (default team0 home / team1 away so the two never clash) — mutate it (and call
+// Game.applyUniforms) to swap.
+// ---------------------------------------------------------------------------
+export interface RGB { r: number; g: number; b: number; }
+export interface Uniform { top: RGB; bottom: RGB; sleeve: RGB; shoes: RGB; }
+
+export const UNIFORMS: [Uniform, Uniform][] = [
+  [ // Team 0 — [HOME (bright orange), AWAY (dark)]
+    { top: { r: 0.90, g: 0.37, b: 0.14 }, bottom: { r: 0.82, g: 0.31, b: 0.10 },
+      sleeve: { r: 0.70, g: 0.23, b: 0.06 }, shoes: { r: 0.95, g: 0.95, b: 0.95 } },
+    { top: { r: 0.18, g: 0.18, b: 0.20 }, bottom: { r: 0.13, g: 0.13, b: 0.15 },
+      sleeve: { r: 0.88, g: 0.36, b: 0.13 }, shoes: { r: 0.12, g: 0.12, b: 0.12 } },
+  ],
+  [ // Team 1 — [HOME (bright blue), AWAY (white)]
+    { top: { r: 0.20, g: 0.48, b: 0.88 }, bottom: { r: 0.13, g: 0.38, b: 0.78 },
+      sleeve: { r: 0.09, g: 0.28, b: 0.60 }, shoes: { r: 0.95, g: 0.95, b: 0.95 } },
+    { top: { r: 0.93, g: 0.94, b: 0.97 }, bottom: { r: 0.84, g: 0.86, b: 0.92 },
+      sleeve: { r: 0.16, g: 0.42, b: 0.82 }, shoes: { r: 0.14, g: 0.14, b: 0.16 } },
+  ],
+];
+
+// which kit each team wears (0 = home, 1 = away). Fixed by design: team 0
+// (BLAZE side) always wears HOME, team 1 (WAVE side) always wears AWAY — this is
+// no longer user-toggleable, so a club picked for team 0 shows its home kit and
+// a club picked for team 1 shows its away kit.
+export const TEAM_UNIFORM: [number, number] = [0, 1];
+
+// the CLUB each team currently represents (its name, from clubdb), or "" for a
+// random / BLAZE-WAVE roster. Set by the club picker; drives per-club kits.
+export const TEAM_CLUB: [string, string] = ["", ""];
+
+// (imported below the type/data it needs; the type import in clubkits is erased,
+//  so the only runtime edge is config → clubkits — no cycle.)
+// eslint-disable-next-line @typescript-eslint/no-use-before-define
+import { CLUB_KITS } from "./clubkits";
+// eslint-disable-next-line @typescript-eslint/no-use-before-define
+import { CLUB_ABBR } from "./clubabbr";
+
+export function uniformOf(team: number): Uniform {
+  // a real club wears ITS OWN kit (home/away from CLUB_KITS); a random roster
+  // falls back to the generic team-slot kit (BLAZE / WAVE).
+  const variant = TEAM_UNIFORM[team] ? 1 : 0;
+  const club = TEAM_CLUB[team];
+  if (club && CLUB_KITS[club]) return CLUB_KITS[club][variant];
+  return UNIFORMS[team][variant];
+}
+
+// Short label for the scoreboard score-bug: a real club shows its 3-letter code
+// (ARS, BAL, …); a random / BLAZE-WAVE roster keeps the full team name.
+export function teamAbbr(team: number): string {
+  const club = TEAM_CLUB[team];
+  if (club && CLUB_ABBR[club]) return CLUB_ABBR[club];
+  return TEAM_NAMES[team];
+}

@@ -2,7 +2,7 @@ import {
   Scene, Vector3, Quaternion, MeshBuilder, StandardMaterial, Color3, Mesh, TransformNode,
   DynamicTexture, VertexData,
 } from "@babylonjs/core";
-import { TEAM_COLORS, HUD_OPTS } from "./config";
+import { TEAM_COLORS, HUD_OPTS, uniformOf, type RGB } from "./config";
 import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority, ROLE_BEHAVIOR,
   DEF_ROLE_BEHAVIOR, OffAction, offActionOf } from "./attributes";
 import { clamp, rand, chance, playerLook } from "./util";
@@ -69,6 +69,11 @@ export class Player {
   private nameTex!: DynamicTexture;
   private namePlane!: Mesh;   // floating name tag; hidden when HUD_OPTS.showNames is off
   private readonly teamRGB: { r: number; g: number; b: number };
+  // uniform kit materials — recoloured live by applyUniform() on a kit swap
+  private topMat!: StandardMaterial;
+  private bottomMat!: StandardMaterial;
+  private sleeveMat!: StandardMaterial;
+  private shoeMat!: StandardMaterial;
 
   // jersey-number decals, one per Z side and per body style; the visible one is
   // the player's back on the currently shown body
@@ -262,7 +267,6 @@ export class Player {
 
     const c = TEAM_COLORS[team];
     this.teamRGB = c;
-    const color = new Color3(c.r, c.g, c.b);
 
     this.root = new TransformNode(`p_${team}_${idx}`, scene);
 
@@ -277,12 +281,24 @@ export class Player {
     humanNode.parent = torsoNode;
     this.humanNode = humanNode;
 
-    // torso split into upper body (chest) + lower body (abdomen/pelvis) with a
-    // slight waist taper — the legs are separate. Slim to match the thin legs.
-    const bodyMat = new StandardMaterial(`bmat_${team}_${idx}`, scene);
-    bodyMat.diffuseColor = color;
-    bodyMat.specularColor = new Color3(0.1, 0.1, 0.1);
-    bodyMat.backFaceCulling = false;   // torso caps/ribbon show regardless of winding
+    // UNIFORM: four independently-coloured kit parts (top / bottom / sleeve /
+    // shoes) from this team's active kit (home or away). Kept on the Player so
+    // applyUniform() can recolour them live when the kit is swapped.
+    const u = uniformOf(team);
+    const mkMat = (tag: string, rgb: RGB): StandardMaterial => {
+      const m = new StandardMaterial(`${tag}_${team}_${idx}`, scene);
+      m.diffuseColor = new Color3(rgb.r, rgb.g, rgb.b);
+      m.specularColor = new Color3(0.1, 0.1, 0.1);
+      m.backFaceCulling = false;
+      return m;
+    };
+    const topMat = mkMat("topmat", u.top);        // 上半身 (chest)
+    const bottomMat = mkMat("botmat", u.bottom);  // 下半身 (shorts / waist)
+    const sleeveMat = mkMat("slvmat", u.sleeve);  // そで + 上腕
+    this.topMat = topMat; this.bottomMat = bottomMat; this.sleeveMat = sleeveMat;
+    // legacy alias: the TOP kit material stands in for the old single jersey
+    // colour on incidental pieces (headband etc.)
+    const bodyMat = topMat;
     // Torso = two rounded-RECTANGLE prisms (rectangular cross-section with a
     // small corner fillet R, extruded vertically). Core Babylon has no rounded
     // box, so the rounded-rect ring is built by hand and the sides are a closed
@@ -303,7 +319,7 @@ export class Player {
       return pts;
     };
     // a flat cap (triangle fan from the centre to the ring) closes an end
-    const makeCap = (name: string, ring: Vector3[], y: number): void => {
+    const makeCap = (name: string, ring: Vector3[], y: number, mat: StandardMaterial = bodyMat): void => {
       const positions: number[] = [0, y, 0];
       for (const p of ring) positions.push(p.x, p.y, p.z);
       const indices: number[] = [];
@@ -315,24 +331,25 @@ export class Player {
       vd.positions = positions; vd.indices = indices; vd.normals = normals;
       const cap = new Mesh(name, scene);
       vd.applyToMesh(cap);
-      cap.material = bodyMat;
+      cap.material = mat;
       cap.parent = humanNode;
     };
-    const roundedBox = (name: string, a: number, b: number, r: number, y0: number, y1: number): Mesh => {
+    const roundedBox = (name: string, a: number, b: number, r: number, y0: number, y1: number,
+                        mat: StandardMaterial = bodyMat): Mesh => {
       const bot = rrRing(a, b, r, y0), top = rrRing(a, b, r, y1);
       const m = MeshBuilder.CreateRibbon(name, {
         pathArray: [bot, top], closePath: true, sideOrientation: Mesh.DOUBLESIDE,
       }, scene);
-      m.material = bodyMat;
+      m.material = mat;
       m.parent = humanNode;
-      makeCap(`${name}_top`, top, y1);   // close the top and bottom so the torso isn't hollow
-      makeCap(`${name}_bot`, bot, y0);
+      makeCap(`${name}_top`, top, y1, mat);   // close the top and bottom so the torso isn't hollow
+      makeCap(`${name}_bot`, bot, y0, mat);
       return m;
     };
-    // waist / pelvis, and a slightly larger chest / shoulders
-    const lowerBody = roundedBox(`lower_${team}_${idx}`, 0.21, 0.15, 0.06, 0.79, 1.21);
+    // waist / pelvis (下半身 = bottom kit) and a slightly larger chest (上半身 = top kit)
+    const lowerBody = roundedBox(`lower_${team}_${idx}`, 0.21, 0.15, 0.06, 0.79, 1.21, bottomMat);
     // top kept below the head (head bottom ≈ 1.61) so the head isn't buried
-    const upperBody = roundedBox(`upper_${team}_${idx}`, 0.25, 0.18, 0.07, 1.15, 1.58);
+    const upperBody = roundedBox(`upper_${team}_${idx}`, 0.25, 0.18, 0.07, 1.15, 1.58, topMat);
     // the flat back the jersey number sits on (depth of the upper body)
     const backZ = 0.18;
 
@@ -378,17 +395,17 @@ export class Player {
       const t = (i / ARC) * Math.PI / 2;
       upperShape.push(new Vector3(Math.cos(t) * AR, 1.375 + Math.sin(t) * AR, 0));
     }
-    const makeAcornPiece = (name: string, shape: Vector3[]): Mesh => {
+    const makeAcornPiece = (name: string, shape: Vector3[], mat: StandardMaterial): Mesh => {
       const m = MeshBuilder.CreateLathe(name, {
         shape, tessellation: 12, sideOrientation: Mesh.DOUBLESIDE,
       }, scene);
-      m.material = bodyMat;
+      m.material = mat;
       m.parent = acornNode;
       return m;
     };
-    const acornLower = makeAcornPiece(`acornLower_${team}_${idx}`, lowerShape);
+    const acornLower = makeAcornPiece(`acornLower_${team}_${idx}`, lowerShape, bottomMat);  // 下半身
     acornLower.parent = waistPivot;              // folds with the sitting pivot
-    const acornUpper = makeAcornPiece(`acornUpper_${team}_${idx}`, upperShape);
+    const acornUpper = makeAcornPiece(`acornUpper_${team}_${idx}`, upperShape, topMat);     // 上半身
 
     const head = MeshBuilder.CreateSphere(`head_${team}_${idx}`, { diameter: 0.34, segments: 10 }, scene);
     head.position.y = 1.78;
@@ -463,9 +480,10 @@ export class Player {
     // is front/back asymmetric, so setNumberSide flips its yaw as well as its
     // z position at half-time.
     const shoeMat = new StandardMaterial(`shoemat_${team}_${idx}`, scene);
-    shoeMat.diffuseColor = new Color3(0.92, 0.92, 0.92);   // white sneakers
+    shoeMat.diffuseColor = new Color3(u.shoes.r, u.shoes.g, u.shoes.b);   // シューズ (kit colour)
     shoeMat.specularColor = new Color3(0.08, 0.08, 0.08);
     shoeMat.backFaceCulling = false;   // hand-built wedge shows regardless of winding
+    this.shoeMat = shoeMat;
     // Each shoe is ONE mesh so it reads as a single moulded piece (it used to
     // be four primitives and every join showed): the side-view outline —
     // sole → quarter-ellipse toe curve → straight instep diagonal → flat
@@ -614,14 +632,14 @@ export class Player {
       // 右腕(sx>0)は -π/2 で膨らみが外側(+X)・切断面が胴体側(内側)を向く。
       delt.rotation.y = sx > 0 ? -Math.PI / 2 : Math.PI / 2;   // 膨らみを外側へ
 
-      delt.material = bodyMat;   // backFaceCulling off — the open faces never see through
+      delt.material = sleeveMat;   // そで: shoulder cap in the sleeve colour
       // 上腕は肩側が太く肘側へ細くなるテーパー: デルトイド球から途切れなく
       // 「斜めに」流れる輪郭になる（旧: 平行断面の等径円柱）。
       const upper = MeshBuilder.CreateCylinder(`upper_${tag}_${team}_${idx}`,
         { height: UP, diameterTop: 0.135, diameterBottom: 0.105, tessellation: 10 }, scene);
       upper.parent = pivot;
       upper.position.set(0, -UP / 2, 0);           // upper arm, jersey sleeve
-      upper.material = bodyMat;
+      upper.material = sleeveMat;                   // そで+上腕: sleeve colour
       const elbow = new TransformNode(`elbow_${tag}_${team}_${idx}`, scene);
       elbow.parent = pivot;
       elbow.position.set(0, -UP, 0);               // elbow at the end of the upper arm
@@ -656,7 +674,7 @@ export class Player {
         { height: THIGH, diameter: 0.21, tessellation: 8 }, scene);
       thigh.parent = hip;
       thigh.position.set(0, -THIGH / 2, 0);      // hangs down from the hip
-      thigh.material = bodyMat;                    // shorts in the jersey colour
+      thigh.material = bottomMat;                  // 下半身: shorts in the bottom-kit colour
       const knee = new TransformNode(`knee_${tag}_${team}_${idx}`, scene);
       knee.parent = hip;
       knee.position.set(0, -THIGH, 0);            // knee at the bottom of the thigh
@@ -1514,6 +1532,16 @@ export class Player {
     this.namePlane.isVisible = HUD_OPTS.showNames;   // toggle the on-court name tag
     this.gaugeDrawn = this.fatigue;
     this.gaugeRev = HUD_OPTS.rev;
+  }
+
+  /** Recolour this player's kit from the team's currently-active uniform (home /
+   *  away). Called after TEAM_UNIFORM is changed so the swap shows live. */
+  applyUniform(): void {
+    const u = uniformOf(this.team);
+    this.topMat.diffuseColor = new Color3(u.top.r, u.top.g, u.top.b);
+    this.bottomMat.diffuseColor = new Color3(u.bottom.r, u.bottom.g, u.bottom.b);
+    this.sleeveMat.diffuseColor = new Color3(u.sleeve.r, u.sleeve.g, u.sleeve.b);
+    this.shoeMat.diffuseColor = new Color3(u.shoes.r, u.shoes.g, u.shoes.b);
   }
 
   /** Hide / show the floating name tag regardless of the HUD option — the

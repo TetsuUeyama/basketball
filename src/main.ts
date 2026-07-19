@@ -62,6 +62,7 @@ const ui = new UI();
 ui.onRestart = () => game.reset();                       // restart the current game
 ui.onBack = () => game.reset();                          // result → back to a clean pre-game
 ui.onModelToggle = () => game.applyModelAll();           // 人型 ⇄ どんぐり体形を全員へ即時反映
+ui.onUniformToggle = () => game.applyUniforms();         // ホーム ⇄ アウェイのユニフォームを全員へ即時反映
 
 // ---- pregame player-introduction camera tour ------------------------------
 // After TIP OFF, before the game runs: the camera visits each STARTER (RED 5
