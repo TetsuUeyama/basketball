@@ -443,7 +443,7 @@ export class UI {
     const title = document.createElement("div");
     title.textContent = "バスケットボールシミュレーション";
     Object.assign(title.style, {
-      fontSize: "clamp(19px,4.4vw,32px)", fontWeight: "800", letterSpacing: "1px",
+      fontSize: "clamp(17px,3.9vw,28px)", fontWeight: "800", letterSpacing: "1px",
     } as Partial<CSSStyleDeclaration>);
     const sub = document.createElement("div");
     sub.textContent = "対戦モードを選択";
@@ -2884,10 +2884,13 @@ export class UI {
     Object.assign(bar.style, {
       display: "flex", gap: "6px", justifyContent: "center", flexWrap: "wrap", marginBottom: "6px",
     } as Partial<CSSStyleDeclaration>);
+    // 3-letter English labels so the three tabs always fit ONE row (long club
+    // names wrapped to two). TOT = team totals/comparison; the team tabs use each
+    // side's 3-letter code (ARS, BAL, … / BLAZE→random keeps its short name).
     const tabs: { key: "team" | "blue" | "red"; label: string }[] = [
-      { key: "team", label: "チームスタッツ" },
-      { key: "blue", label: teamShort(1) },   // 青チーム
-      { key: "red", label: teamShort(0) },    // 赤チーム
+      { key: "team", label: "TOT" },          // 両チーム比較(チームスタッツ)
+      { key: "blue", label: teamAbbr(1) },    // 青チーム
+      { key: "red", label: teamAbbr(0) },     // 赤チーム
     ];
     this.resultTabBtns = [];
     for (const t of tabs) {
