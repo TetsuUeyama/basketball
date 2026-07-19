@@ -346,3 +346,29 @@ engine.runRenderLoop(() => {
 });
 
 window.addEventListener("resize", () => engine.resize());
+
+// ---- keep the screen awake (mobile) ----------------------------------------
+// This is a SPECTATOR sim — the viewer just watches, so without periodic touches
+// a phone dims and locks the screen mid-game. A Screen Wake Lock holds the
+// display on while the page is visible. The OS auto-releases the lock whenever
+// the tab is hidden, so we re-request it on every return to visibility. On some
+// browsers request() rejects until there's been a user gesture, so we also retry
+// on the first pointer down. Needs a secure context (https / localhost); where
+// the API is unavailable this simply no-ops (nothing else changes).
+type WakeSentinel = { release: () => Promise<void>; addEventListener: (t: "release", cb: () => void) => void };
+let wakeLock: WakeSentinel | null = null;
+async function requestWakeLock(): Promise<void> {
+  const wl = (navigator as unknown as { wakeLock?: { request: (t: "screen") => Promise<WakeSentinel> } }).wakeLock;
+  if (!wl || wakeLock || document.visibilityState !== "visible") return;
+  try {
+    wakeLock = await wl.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; });
+  } catch {
+    wakeLock = null;   // no gesture yet / unsupported — a tap or visibility change retries
+  }
+}
+void requestWakeLock();
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void requestWakeLock();
+});
+window.addEventListener("pointerdown", () => { void requestWakeLock(); }, { passive: true });
