@@ -1,5 +1,5 @@
 import { Game } from "./game";
-import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS, TEAM_CLUB, teamAbbr } from "./config";
+import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS, TEAM_CLUB, teamAbbr, teamShort } from "./config";
 import { CLUB_ABBR } from "./clubabbr";
 import { CLUB_FLAGS } from "./clubflags";
 import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, clubTeam, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "./attributes";
@@ -2781,10 +2781,16 @@ export class UI {
     title.textContent = "FINAL";
 
     this.resultScore = document.createElement("div");
-    Object.assign(this.resultScore.style, { fontSize: "32px", fontWeight: "800" });
+    // font scales with viewport width so the two club short-names + score fit on
+    // ONE line at phone widths (≈17px) while staying big on desktop (32px cap).
+    Object.assign(this.resultScore.style, {
+      fontSize: "clamp(15px, 5.4vw, 32px)", fontWeight: "800", whiteSpace: "nowrap",
+    } as Partial<CSSStyleDeclaration>);
 
     this.resultWinner = document.createElement("div");
-    Object.assign(this.resultWinner.style, { fontSize: "20px", fontWeight: "800", letterSpacing: "1px" });
+    Object.assign(this.resultWinner.style, {
+      fontSize: "clamp(14px, 3.7vw, 20px)", fontWeight: "800", letterSpacing: "1px", whiteSpace: "nowrap",
+    } as Partial<CSSStyleDeclaration>);
 
     this.resultStats = document.createElement("div");
     // FIXED width = the full box-score table (name 128 + 10 columns + gaps ≈ 544),
@@ -2795,26 +2801,30 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
 
     const btnRow = document.createElement("div");
+    // gap/font/padding shrink with viewport so all three buttons stay on ONE row
+    // at phone widths (≈375px) instead of wrapping to two lines.
     Object.assign(btnRow.style, {
-      display: "flex", gap: "10px", flexWrap: "wrap", justifyContent: "center", marginTop: "4px",
+      display: "flex", gap: "clamp(6px, 2vw, 10px)", flexWrap: "nowrap",
+      justifyContent: "center", marginTop: "4px",
     } as Partial<CSSStyleDeclaration>);
+    const btnFont = "clamp(12px, 3.4vw, 15px)";
 
     // BACK → the very first screen (title: クラブ対戦 / ランダム対戦)
     const back = this.button("← BACK");
-    Object.assign(back.style, { fontSize: "15px", padding: "9px 20px" } as Partial<CSSStyleDeclaration>);
+    Object.assign(back.style, { fontSize: btnFont, padding: "9px clamp(11px, 4vw, 20px)", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
     back.onclick = () => { this.onBack(); this.setPhase("title"); };
 
     // もう一試合 → replay the SAME matchup (rosters/clubs kept) — back to the editor
     const rematch = this.button("もう一試合");
     Object.assign(rematch.style, {
-      fontSize: "15px", fontWeight: "800", padding: "9px 22px",
+      fontSize: btnFont, fontWeight: "800", padding: "9px clamp(12px, 4.2vw, 22px)", whiteSpace: "nowrap",
       background: "rgba(232,235,242,0.96)", color: "#10131a", border: "1px solid rgba(255,255,255,0.5)",
     } as Partial<CSSStyleDeclaration>);
     rematch.onclick = () => { this.onBack(); this.refreshEditors(); this.setPhase("pregame"); };
 
     // チーム選択 → jump to the club-team selection wizard
     const pickTeams = this.button("チーム選択");
-    Object.assign(pickTeams.style, { fontSize: "15px", padding: "9px 20px" } as Partial<CSSStyleDeclaration>);
+    Object.assign(pickTeams.style, { fontSize: btnFont, padding: "9px clamp(11px, 4vw, 20px)", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
     pickTeams.onclick = () => { this.onBack(); this.setPhase("title"); this.startClubMatchup(); };
 
     btnRow.append(back, rematch, pickTeams);
@@ -2843,13 +2853,13 @@ export class UI {
 
   private showResult(game: Game): void {
     const [a, b] = game.score;
-    this.resultScore.textContent = `${TEAM_NAMES[0]}  ${a} - ${b}  ${TEAM_NAMES[1]}`;
+    this.resultScore.textContent = `${teamShort(0)}  ${a} - ${b}  ${teamShort(1)}`;
     if (a === b) {
       this.resultWinner.textContent = "DRAW";
       this.resultWinner.style.color = "#fff";
     } else {
       const w = a > b ? 0 : 1;
-      this.resultWinner.textContent = `${TEAM_NAMES[w]} WINS`;
+      this.resultWinner.textContent = `${teamShort(w)} WINS`;
       this.resultWinner.style.color = colorOf(w);
     }
 
@@ -2876,8 +2886,8 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
     const tabs: { key: "team" | "blue" | "red"; label: string }[] = [
       { key: "team", label: "チームスタッツ" },
-      { key: "blue", label: TEAM_NAMES[1] },   // 青チーム
-      { key: "red", label: TEAM_NAMES[0] },    // 赤チーム
+      { key: "blue", label: teamShort(1) },   // 青チーム
+      { key: "red", label: teamShort(0) },    // 赤チーム
     ];
     this.resultTabBtns = [];
     for (const t of tabs) {
@@ -2926,7 +2936,7 @@ export class UI {
 
     const head = document.createElement("div");
     Object.assign(head.style, { fontSize: "14px", fontWeight: "800", color: colorOf(team), textAlign: "left", margin: "2px 0" });
-    head.textContent = TEAM_NAMES[team];
+    head.textContent = teamShort(team);
     wrap.appendChild(head);
 
     const scroller = document.createElement("div");
@@ -2985,8 +2995,8 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
     const title = document.createElement("div");
     Object.assign(title.style, { display: "flex", justifyContent: "space-between", fontSize: "13px", fontWeight: "800", marginBottom: "3px" });
-    const n0 = document.createElement("span"); n0.textContent = TEAM_NAMES[0]; n0.style.color = colorOf(0);
-    const n1 = document.createElement("span"); n1.textContent = TEAM_NAMES[1]; n1.style.color = colorOf(1);
+    const n0 = document.createElement("span"); n0.textContent = teamShort(0); n0.style.color = colorOf(0);
+    const n1 = document.createElement("span"); n1.textContent = teamShort(1); n1.style.color = colorOf(1);
     title.append(n0, n1);
     wrap.appendChild(title);
 
@@ -3014,7 +3024,7 @@ export class UI {
       ls.appendChild(lsCell("T", { dim: true, bold: true }));
       // one row per team
       for (let t = 0; t < 2; t++) {
-        ls.appendChild(lsCell(TEAM_NAMES[t], { color: colorOf(t), bold: true, align: "left" }));
+        ls.appendChild(lsCell(teamShort(t), { color: colorOf(t), bold: true, align: "left" }));
         for (let i = 0; i < nq; i++) ls.appendChild(lsCell(String(game.qLine[t][i] ?? "-"), { color: colorOf(t) }));
         ls.appendChild(lsCell(String(game.score[t]), { color: colorOf(t), bold: true }));
       }

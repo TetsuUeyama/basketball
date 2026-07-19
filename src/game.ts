@@ -3,7 +3,7 @@ import { Player, Ball } from "./entities";
 import { makeHandlerRing, hoopIndex, type Hoops } from "./court";
 import {
   COURT, RIM, THREE_DIST, PASS_SPEED,
-  SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS, TEAM_COLORS, TEAM_NAMES,
+  SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS, TEAM_COLORS, teamShort,
 } from "./config";
 import { clamp, dist2D, dist2DTo, moveToward2D, chance, rand } from "./util";
 import { ROSTER, ROSTER_SIZE, STARTERS, TACTICS, rate, AbilityKey,
@@ -442,7 +442,7 @@ export class Game {
     this.subEvents.push({
       inNum: sub.idx + 1, inName: sub.name,
       outNum: out.idx + 1, outName: out.name,
-      team: out.team, ttl: 3,
+      team: out.team, ttl: 1.8,
     });
     // the on-court unit changed → re-derive the choice order (auto usage) so the
     // incoming player slots into the pecking order by ability
@@ -504,10 +504,12 @@ export class Game {
   // (with a safety timeout) is in place.
   private updateSubs(dt: number): void {
     this.subT += dt;
-    for (const e of this.subEvents) e.ttl = Math.max(e.ttl, 1.2); // hold the chips
+    // NOTE: the sub chips are NOT held here — they age normally (the update()
+    // feed loop runs HOME then AWAY). Play resumes only once they've all cleared
+    // (see the resume gate below), so no chip ever lingers into live play.
     this.ball.pos.y = Math.max(0.12, this.ball.pos.y - 3 * dt);   // settles onto the floor
 
-    const timedOut = this.subT >= 6;   // safety: never let a walk stall the game
+    const timedOut = this.subT >= 9;   // safety cap: never let a walk / feed stall the game
     let done = true;
     for (const w of this.subWalkers) {
       if (!timedOut && dist2DTo(w.p.pos, w.tx, w.tz) > 0.25) {
@@ -549,7 +551,10 @@ export class Game {
       }
     }
     for (const w of this.subWalkers) w.p.sync(); // walk-off men left `players` — sync here
-    if (done || timedOut) {
+    // resume only once the walkers are in place AND the sub feed (HOME then AWAY)
+    // has fully played out and cleared — so the away chips are gone BEFORE the
+    // ball goes live, never lingering into the restart. timedOut is the hard cap.
+    if ((done && this.subEvents.length === 0) || timedOut) {
       for (const w of this.subWalkers) {
         w.p.pos.set(w.tx, 0, w.tz);
         // invariant: nobody stands ON the court with a bench yaw — enforce it
@@ -1027,8 +1032,8 @@ export class Game {
     this.inboundReceiver = offense[0];           // the point guard
     // the new period visibly begins as the throw-in is readied — say whose ball
     this.setEvent(this.quarter === 3
-      ? `2ND HALF — ${TEAM_NAMES[team]} BALL`
-      : `Q${this.quarter} START — ${TEAM_NAMES[team]} BALL`, team, 2.0);
+      ? `2ND HALF — ${teamShort(team)} BALL`
+      : `Q${this.quarter} START — ${teamShort(team)} BALL`, team, 2.0);
   }
 
   // ---- main update -------------------------------------------------------
@@ -4288,7 +4293,7 @@ export class Game {
     this.ballMode = "inbound";
     this.inboundT = 1.0;
     // whose ball the restart is (the foul call has had its beat on screen)
-    this.setEvent(`THROW-IN\n${TEAM_NAMES[victim.team]} BALL`, victim.team, 2.0);
+    this.setEvent(`THROW-IN\n${teamShort(victim.team)} BALL`, victim.team, 2.0);
     const sideX = victim.pos.x >= 0 ? COURT.halfW + 0.3 : -(COURT.halfW + 0.3);
     victim.pos.set(sideX, 0, clamp(victim.pos.z, -COURT.halfL + 1, COURT.halfL - 1));
     this.resetMotion();
@@ -4751,7 +4756,7 @@ export class Game {
     this.resetMotion();
     this.inboundReceiver = this.pickInboundReceiver(taker);
     // after a made basket / free throw the CONCEDING team plays it in — show it
-    this.setEvent(`THROW-IN\n${TEAM_NAMES[team]} BALL`, team, 1.8);
+    this.setEvent(`THROW-IN\n${teamShort(team)} BALL`, team, 1.8);
   }
 
   // Throw-in from where the ball went out: the taker (nearest team-mate) steps
@@ -4796,7 +4801,7 @@ export class Game {
     // announce WHOSE ball the throw-in is (team-coloured banner) — "OUT OF
     // BOUNDS" alone never said who plays it in
     if (opts.announce !== null) {
-      this.setEvent(opts.announce ?? `THROW-IN\n${TEAM_NAMES[team]} BALL`, team, 2.0);
+      this.setEvent(opts.announce ?? `THROW-IN\n${teamShort(team)} BALL`, team, 2.0);
     }
     this.pauseThen(1.5, () => this.finishOOB());
   }
@@ -5735,7 +5740,7 @@ export class Game {
     this.finaleTrudge = [];
     this.handler = null;
     this.cheerT = [-9, -9];   // the finale supersedes any running bench cheer
-    this.setEvent(w >= 0 ? `${TEAM_NAMES[w]} WINS!` : "DRAW",
+    this.setEvent(w >= 0 ? `${teamShort(w)} WINS!` : "DRAW",
       w >= 0 ? w : this.possession, Game.FINALE_DUR);
     // centre of the winning five, so the bench can fan out around them
     const winFive = w >= 0 ? this.teamPlayers(w) : [];

@@ -118,3 +118,119 @@ export function teamAbbr(team: number): string {
   if (club && CLUB_ABBR[club]) return CLUB_ABBR[club];
   return TEAM_NAMES[team];
 }
+
+// Hand-tuned short names for the in-game banners (where a full club name is too
+// long and breaks the layout). Anything not listed is derived by the rule in
+// teamShort(); add a club here to override its derived short name.
+const CLUB_SHORT_OVERRIDE: Record<string, string> = {
+  // イングランド
+  "マンチェスター・U": "マンU",
+  "マンチェスター・C": "マンC",
+  "ニューカッスル": "ニューカスル",
+  "ブラックバーン": "ブラバーン",
+  "ウェストブロムウィッチ": "ウェストブロ",
+  "ウォルバーハンプトン": "ウルブス",
+  "ブラックプール": "ブラプール",
+  "サンダーランド": "サンダラン",
+  "ウエスト・ハム・U": "ウェストハム",
+  // イタリア
+  "フィオレンティーナ": "フィオレ",
+  "インテルナシオナル": "インテナシ",
+  // スペイン
+  "レアル・マドリッド": "Rマドリー",
+  "アトレチコ・マドリッド": "Aマドリー",
+  "エスパニョール": "エスパニョル",
+  "デポルティーボ": "デポル",
+  "ラシン・サンタンデール": "サンタンデル",
+  // オランダ
+  "フェイエノールト": "フェイエ",
+  "VVVフェンロ": "Vフェンロ",
+  "フローニンヘン": "フローニン",
+  "NECナイメーヘン": "NEC",
+  "ヘーレンフェーン": "ヘーレン",
+  "ADOデンハーグ": "ADO",
+  "デ・フラーフスハプ": "フラーフス",
+  "AZアルクマール": "AZ",
+  "エクセルシオール": "エクセル",
+  "PSVアイントホーヘン": "PSV",
+  "FCトゥウェンテ": "トゥエンテ",
+  // フランス
+  "ヴァランシアンヌ": "ヴァラン",
+  "モンペリエSC": "モンペリエ",
+  "サンテティエンヌ": "サンテティ",
+  "パリ・サンジェルマン": "PSG",
+  "スタード・ブレストワ": "ブレスト",
+  // 他リーグA
+  "オリンピアコス": "オリンピア",
+  "フェネルバフチェ": "フェネル",
+  "パナシナイコス": "パナシナイ",
+  "CFRクルージュ": "CFR",
+  "ウニレア・ウルジチェニ": "ウニレア",
+  // アルゼンチン
+  "ベレス・サルスフィエルド": "ベレス",
+  "CAバンフィエルド": "バンフィエル",
+  "ニューウェルズ・OB": "ニューエル",
+  "ボカ・ジュニオルス": "ボカ",
+  // ブラジル
+  "コリンチャンス": "コリンチャ",
+  "サン・パウロFC": "サンパウロ",
+  // メキシコ
+  "モナルカス・モレリア": "モレリア",
+  "サン・ルイスFC": "サンルイス",
+  "CFモンテレイ": "モンテレイ",
+  "CDグアダラハラ": "グアダラ",
+  // ウルグアイ
+  "クラブ・ナシオナル(U)": "ナシオナルU",
+  "RCモンテビデオ": "モンテビデ",
+  // チリ
+  "ウニベルシダ・カトリカ": "カトリカ",
+  "CSDコロ・コロ": "コロコロ",
+  // パラグアイ
+  "クラブ・ナシオナル(P)": "ナシオナルP",
+  "セロ・ポルテーニョ": "セロポル",
+  // ペルー
+  "ウニベルシタリオ・D": "ウニタリオ",
+  "アリアンサ・リマ": "アリアンサ",
+  "ファン・アウリチ": "アウリチ",
+  // ボリビア
+  "クラブ・ブルーミング": "ブルーミン",
+  "レアル・ポトシ": "ポトシ",
+  "クラブ・ボリバル": "ボリバル",
+  // ギリシャ
+  "PAOKテッサロニキ": "PAOK",
+  // コロンビア
+  "アトレチコ・ジュニオール": "ジュニオル",
+  "オンセ・カルダス": "カルダス",
+  // チェコ（重複回避）
+  "スパルタ・プラハ": "スパルタ",
+  "スラビア・プラハ": "スラビア",
+  // ベルギー
+  "クラブ・ブルージュ": "ブルージュ",
+  "アンデルレヒト": "アンデル",
+  // 単独リーグ
+  "シャフタール・ドネツク": "シャフタル",
+  "FCコペンハーゲン": "コペン",
+  "HJKヘルシンキ": "HJK",
+  "ディナモ・ブカレスト": "ブカレスト",
+};
+
+// A compact TEAM NAME for the in-game notification banners. A club uses its short
+// name (e.g. バイエルン・ミュンヘン → Bミュンヘン, レアル・マドリッド → Rマドリー); a
+// random BLAZE/WAVE roster keeps its (already short) name.
+export function teamShort(team: number): string {
+  const club = TEAM_CLUB[team];
+  if (!club) return TEAM_NAMES[team];
+  if (CLUB_SHORT_OVERRIDE[club]) return CLUB_SHORT_OVERRIDE[club];
+  let s = club;
+  if (club.includes("・")) {
+    const parts = club.split("・");
+    const last = parts[parts.length - 1];
+    if (last.length <= 2) {
+      s = parts[0].slice(0, 2) + last;                    // place + tag: マンチェスター・U → マンU
+    } else {
+      const ab = CLUB_ABBR[club];                          // city with a romaji initial:
+      s = (ab ? ab[0] : "") + last;                        //   バイエルン・ミュンヘン → Bミュンヘン
+    }
+  }
+  return s.length > 6 ? `${s.slice(0, 5)}…` : s;           // hard cap so it never overflows
+}
