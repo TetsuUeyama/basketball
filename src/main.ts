@@ -186,7 +186,10 @@ function updateIntroBoard(s: IntroShot | null): void {
 function introDir(p: ReturnType<typeof game.allPlayers>[number]): { x: number; z: number } {
   const f = p.faceDirWorld();
   const others = [...game.allPlayers(0), ...game.allPlayers(1)];
-  for (const a of [0, 0.55, -0.55, 0.95, -0.95]) {
+  // 斜め構図の回り込みはチームで逆向き（チーム0=右回り優先 / チーム1=左回り優先）
+  // — 両チームとも同じ側を向いた斜め顔が並ぶ単調さを崩す
+  const s = p.team === 0 ? 1 : -1;
+  for (const a of [0, 0.55 * s, -0.55 * s, 0.95 * s, -0.95 * s]) {
     const d = { x: f.x * Math.cos(a) - f.z * Math.sin(a), z: f.x * Math.sin(a) + f.z * Math.cos(a) };
     const blocked = others.some((q) => {
       if (q === p) return false;

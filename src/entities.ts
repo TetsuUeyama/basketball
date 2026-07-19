@@ -591,8 +591,28 @@ export class Player {
       const pivot = new TransformNode(`arm_${tag}_${team}_${idx}`, scene);
       pivot.parent = torsoNode;   // shoulders ride the twisting chest
       pivot.position.set(sx, 1.45, 0.06);          // shoulder
+      // 肩のデルトイド1/4球: slice0.5(上半分)×arc0.5(経度半分)のクォーター。
+      // 平らな切断面の一方（赤道面）が上腕の断面に重なり、もう一方（垂直面）が
+      // 胴体側を向く=胴と上腕の角を丸いフィレットで埋めるイメージ。膨らみは
+      // 外側(±X)を向くよう左右で回転を反転。ピボット子なので腕の向きに追従し、
+      // 上腕の平行断面を常に覆う。
+      const delt = MeshBuilder.CreateSphere(`delt_${tag}_${team}_${idx}`,
+        { diameter: 0.155, segments: 8, slice: 0.5, arc: 0.5 }, scene);
+      delt.parent = pivot;
+      // 1/4楕円球: 長さは**上腕断面(半径0.0675)にぴったり被さる程度**。
+      // 切断面は内側へ0.068、膨らみ軸(ローカルZ=arc占有軸)は1.8倍 →
+      // 到達 -0.068+0.0775×1.8 ≈ +0.072。全長≈0.14で断面±0.0675を数mmだけ超える。
+      delt.position.set(sx > 0 ? -0.068 : 0.068, -0.005, 0);
+      delt.scaling.z = 1.8;
+      // 実測(NullEngine): arc0.5 の占有域は z≤0。RotationY(-π/2)で -Z→+X なので
+      // 右腕(sx>0)は -π/2 で膨らみが外側(+X)・切断面が胴体側(内側)を向く。
+      delt.rotation.y = sx > 0 ? -Math.PI / 2 : Math.PI / 2;   // 膨らみを外側へ
+
+      delt.material = bodyMat;   // backFaceCulling off — the open faces never see through
+      // 上腕は肩側が太く肘側へ細くなるテーパー: デルトイド球から途切れなく
+      // 「斜めに」流れる輪郭になる（旧: 平行断面の等径円柱）。
       const upper = MeshBuilder.CreateCylinder(`upper_${tag}_${team}_${idx}`,
-        { height: UP, diameter: 0.12, tessellation: 8 }, scene);
+        { height: UP, diameterTop: 0.135, diameterBottom: 0.105, tessellation: 10 }, scene);
       upper.parent = pivot;
       upper.position.set(0, -UP / 2, 0);           // upper arm, jersey sleeve
       upper.material = bodyMat;
@@ -1581,6 +1601,38 @@ export class Player {
     this.elbowR.rotation.x = 0;
     if (both) { this.aimArm(this.armPivotL, world); this.elbowL.rotation.x = 0; }
     else { this.armPivotL.rotationQuaternion = Quaternion.Identity(); this.bendElbow(this.elbowL, 0.28); }
+  }
+
+  /** ディグ(掻き出し): reach with ONE hand, ROTATING THE UPPER BODY toward the
+   *  ball so the leading shoulder swings across and the hand extends far out to
+   *  the ball. The trailing arm swings back for balance. Used by a defender
+   *  stabbing at a poked-loose ball — a committed lunge, not a two-hand grab. */
+  digReach(world: Vector3): void {
+    // twist the chest toward the ball (capped at the torso's reach) — this is
+    // what carries the leading shoulder out and lets the hand reach farther
+    const s = this.numberSide;
+    const fx = world.x - this.pos.x, fz = world.z - this.pos.z;
+    if (Math.abs(fx) + Math.abs(fz) > 0.05) {
+      const want = Math.atan2(-s * fx, -s * fz);
+      let twist = want - this.root.rotation.y;
+      while (twist > Math.PI) twist -= 2 * Math.PI;
+      while (twist < -Math.PI) twist += 2 * Math.PI;
+      twist = clamp(twist, -Player.TWIST_MAX, Player.TWIST_MAX);
+      this.torsoTwist = twist;
+      this.torsoNode.rotation.y = twist;
+    }
+    // lead with the hand on the side the ball now sits (near shoulder), elbow
+    // LOCKED STRAIGHT for maximum extension
+    const right = this.dribbleWithRight(world);
+    const lead = right ? this.armPivotR : this.armPivotL;
+    const leadElbow = right ? this.elbowR : this.elbowL;
+    const back = right ? this.armPivotL : this.armPivotR;
+    const backElbow = right ? this.elbowL : this.elbowR;
+    this.aimArm(lead, world);
+    leadElbow.rotation.x = 0;
+    // the trailing arm pulls back behind the hip (counterweight to the lunge)
+    back.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), 0.6);
+    this.bendElbow(backElbow, 0.5);
   }
 
   /** Two-handed HOLD: the palms cup the ball from BOTH SIDES — one hand on each
