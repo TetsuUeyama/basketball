@@ -124,6 +124,7 @@ export class Player {
   driveSide = 1;   // offence: which way the handler is attacking (-1 left, +1 right)
   shadeSide = 1;   // defence: which way the on-ball defender is shading
   reactT = 0;      // defence: reaction lag remaining before the shade catches up
+  looseReactT = 0; // loose ball: reaction lag before this player gives chase (反応-scaled)
   beatenT = 0;     // offence: time remaining of a successful (speed) blow-by burst
   powerT = 0;      // offence: time remaining of a bull/power drive shoving the man back
   stalledT = 0;    // offence: time the handler is walled off (contained), pulling it back out

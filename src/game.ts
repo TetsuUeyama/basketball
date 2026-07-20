@@ -1998,8 +1998,19 @@ export class Game {
     let shootDesire = rate(h.attr.aggression) * 0.4 + prio * 0.4 + tac.pace * 0.2 * tw;
     if (h.has("striker")) shootDesire += 0.15;       // ストライカー: scorer's mentality
     if (h.has("keepDribble")) shootDesire -= 0.08;   // キープ型は攻め急がない
-    const passDesire = (1 - rate(h.attr.aggression)) * 0.25 + rate(h.attr.passAcc) * 0.2
+    let passDesire = (1 - rate(h.attr.aggression)) * 0.25 + rate(h.attr.passAcc) * 0.2
       + tac.ballMovement * 0.4 * tw + (1 - prio) * 0.25; // lower options give it up more
+
+    // ペイント内で持った場合、連携が低い選手ほどチーム戦術やパスより「自分で決める」
+    // ことを優先する: ドライブ/フィニッシュ意欲を上げ、キックアウト意欲を下げる。連携が
+    // 高い選手はここでも設計どおりボールを動かす。(オープンなリム至近は上流で即フィニッシュ
+    // 済みなので、ここが効くのは競り合った状態のペイント。)
+    if (dHoop <= 4.3 && Math.abs(h.pos.x) <= 2.6) {
+      const selfish = (1 - rate(h.attr.teamwork)) * 0.4;   // 連携100→+0, 連携0→+0.4
+      driveDesire += selfish;
+      shootDesire += selfish;
+      passDesire = Math.max(0, passDesire - selfish * 1.2);
+    }
 
     const laneOpen = this.laneClear(h, rimFloor);
     const beaten = h.beatenT > 0;
@@ -4469,6 +4480,11 @@ export class Game {
     this.handler = null;
     this.ballMode = "loose";
     for (const p of this.players) p.touchCool = 0;
+    // reaction to the ball coming loose: everyone needs a beat before they react
+    // and give chase, and 反応 sets how long. A quick-reacting player pounces first
+    // while a slow one is still turning to it — scrambles are no longer won purely
+    // on who happened to be standing closest. (reactionLag ≈0.6 elite .. ≈1.35 poor.)
+    for (const p of this.players) p.looseReactT = rand(0.35, 0.55) * this.reactionLag(p);
   }
 
   // After a miss the ball caroms off the rim and is live: it falls under gravity
@@ -4558,6 +4574,9 @@ export class Game {
     const bx = this.ball.pos.x, bz = this.ball.pos.z;
     const distToBall = (p: Player) => dist2DTo(p.pos, bx, bz);
 
+    // tick down each player's reaction-to-the-loose-ball delay
+    for (const p of this.players) if (p.looseReactT > 0) p.looseReactT -= dt;
+
     const contest = new Set<Player>();
     for (const team of [0, 1]) {                 // the closest man on each team goes
       let near = this.teamPlayers(team)[0];
@@ -4577,6 +4596,9 @@ export class Game {
 
     for (const p of this.players) {
       if (contest.has(p)) {
+        // still reacting to the ball coming loose → hasn't set off yet, so a
+        // quicker-reacting (higher 反応) opponent gets a head start on the chase
+        if (p.looseReactT > 0) continue;
         // chase the ball AROUND bodies in the way — a scramble is still not a
         // licence to run straight through someone's back
         const cv = this.steerAround(p, bx, bz);
@@ -4601,6 +4623,7 @@ export class Game {
     let bestReach = -Infinity;
     for (const p of this.players) {
       if (p.touchCool > 0) continue;
+      if (p.looseReactT > 0) continue;   // hasn't reacted to the loose ball yet
       if (dist2DTo(this.ball.pos, p.pos.x, p.pos.z) > 0.6) continue;
       const top = p.reachTopY();
       if (this.ball.pos.y > top || this.ball.pos.y < 0.3) continue; // out of reach high/low
