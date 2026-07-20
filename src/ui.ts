@@ -3298,26 +3298,35 @@ export class UI {
     ctx.fillRect(0, 0, W, H);
     // deterministic variety per player so faces aren't all identical — SHARED
     // with the 3D head (entities.ts) via playerLook, so the model matches the icon
-    const look = playerLook(player.idx);
+    const look = playerLook(player.name);
     const skin = look.skinHex;
     const hair = look.hairHex;
-    const style = look.style;   // 0短髪 1坊主 2アフロ 3フラットトップ 4ヘッドバンド
+    const style = look.style;   // 0短髪 1丸刈り 2アフロ 3フラットトップ 4ヘッドバンド 5ボブ 6前髪上げ 7モヒカン 8マンバン
     // hair BEHIND the head — a full backing so the crown & sides are covered
-    // (not a balding top-cap). Skipped for 坊主(1).
-    if (style !== 1) {
+    // (not a balding top-cap). Drawn for all but モヒカン(7, drawn as a crest);
+    // 丸刈り(1) uses a backing only just larger than the head (a thin buzz).
+    if (style !== 7) {
       ctx.fillStyle = hair;
-      const hr = style === 2 ? 0.40 : 0.335;                 // afro bigger
+      const hr = style === 2 ? 0.40 : (style === 5 || style === 10) ? 0.37 : style === 1 ? 0.315 : 0.335;   // afro biggest, bob/long fuller, buzz snug
       ctx.beginPath(); ctx.arc(W / 2, H * (style === 2 ? 0.44 : 0.46), W * hr, 0, Math.PI * 2); ctx.fill();
       if (style === 3) ctx.fillRect(W * 0.15, H * 0.14, W * 0.70, H * 0.32);   // flat-top block
+      if (style === 5) ctx.fillRect(W * 0.17, H * 0.46, W * 0.66, H * 0.22);   // bob — longer sides
+      if (style === 10) ctx.fillRect(W * 0.15, H * 0.46, W * 0.70, H * 0.30);  // long — sides down to shoulders
+      if (style === 8) { ctx.beginPath(); ctx.arc(W / 2, H * 0.26, W * 0.10, 0, Math.PI * 2); ctx.fill(); } // man-bun knot
     }
     // head (skin) on top of the backing → hair frames the crown and sides
     ctx.fillStyle = skin;
     ctx.beginPath(); ctx.arc(W / 2, H * 0.52, W * 0.30, 0, Math.PI * 2); ctx.fill();
     // front hairline / bangs across the forehead (the FRONT reads distinct from
-    // the fuller back)
-    if (style !== 1) {
+    // the fuller back). Skipped for 前髪上げ(6, forehead exposed) and モヒカン(7).
+    if (style !== 6 && style !== 7) {
       ctx.fillStyle = hair;
       ctx.beginPath(); ctx.arc(W / 2, H * 0.45, W * 0.305, Math.PI * 1.03, Math.PI * 1.97); ctx.fill();
+    }
+    // モヒカン(7) — a vertical crest strip down the centre of the head
+    if (style === 7) {
+      ctx.fillStyle = hair;
+      ctx.fillRect(W * 0.42, H * 0.12, W * 0.16, H * 0.42);
     }
     // headband (style 4) — team colour across the forehead
     if (style === 4) {

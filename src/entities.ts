@@ -101,8 +101,15 @@ export class Player {
   private acornFootR!: TransformNode;  // position AND the yaw flip with numberSide
   private eyeL!: Mesh;                  // face eyes — sit on the front (-numberSide·Z)
   private eyeR!: Mesh;
+  private scene!: Scene;               // kept so hair meshes can be rebuilt later
+  private head!: Mesh;                 // skin sphere (hair/eyes parent to it)
+  private headMat!: StandardMaterial;  // skin colour (re-tinted when the player changes)
+  private hairMat!: StandardMaterial;  // hair colour (re-tinted when the player changes)
   private hair: Mesh | null = null;    // hair crown — tilted back so front/nape differ
   private hairTilt = 0;                // backward tilt magnitude (flipped by numberSide)
+  private hairBun: Mesh | null = null; // man-bun knot at the back (flipped by numberSide)
+  private hairBack: Mesh | null = null;// long/bob back-hair panel (flipped by numberSide)
+  private headband: Mesh | null = null;// team-coloured band (style 4)
 
   decisionT = 0;                 // cooldown before the next AI decision
   driveTarget = new Vector3();   // where a ball-handler is heading
@@ -246,6 +253,7 @@ export class Player {
   private acornWaddle = 0;   // eased penguin body-roll (rad), added to root roll in sync()
 
   constructor(scene: Scene, team: number, idx: number, def: PlayerDef) {
+    this.scene = scene;
     this.team = team;
     this.idx = idx;
     this.slot = Math.min(idx, 4);   // starters own their slot; bench get one on check-in
@@ -409,55 +417,24 @@ export class Player {
 
     const head = MeshBuilder.CreateSphere(`head_${team}_${idx}`, { diameter: 0.34, segments: 10 }, scene);
     head.position.y = 1.78;
-    // skin / hair tone MATCH the HUD face icon (shared playerLook, seeded by idx)
-    const look = playerLook(idx);
+    this.head = head;
+    // skin / hair tone MATCH the HUD face icon (shared playerLook, seeded by NAME
+    // so the look is tied to the player's identity, not their roster slot). The
+    // hair MESH is (re)built by buildHairMeshes; applyLook() re-runs both when a
+    // roster swap changes who occupies this slot.
+    const look = playerLook(this.name);
     const headMat = new StandardMaterial(`hmat_${team}_${idx}`, scene);
     headMat.diffuseColor = new Color3(look.skin.r, look.skin.g, look.skin.b);
     headMat.specularColor = new Color3(0.05, 0.05, 0.05);
     head.material = headMat;
     head.parent = torsoNode;   // the head turns with the chest
+    this.headMat = headMat;
 
-    // hair — a crown mesh whose SHAPE varies by hairstyle (so players read apart,
-    // not just by colour). 0=短髪 1=坊主(髪なし) 2=アフロ 3=フラットトップ 4=ヘッドバンド。
     const hairMat = new StandardMaterial(`hair_${team}_${idx}`, scene);
     hairMat.diffuseColor = new Color3(look.hair.r, look.hair.g, look.hair.b);
     hairMat.specularColor = new Color3(0.04, 0.04, 0.04);
-    // fuller coverage (comes down the sides/back so the crown isn't balding) and
-    // a backward TILT so the front rides up at the hairline while the back covers
-    // the nape — front and back hair then read differently. `tilt` is flipped by
-    // numberSide (front = -numberSide·Z) in setNumberSide.
-    // slice = how far the dome comes down (moderate, so it covers the sides/back
-    // but NOT the face); tilt = backward lean so the FRONT rides up above the eyes
-    // (forehead & expression visible) while the nape stays covered.
-    const HS: ({ d: number; slice: number; sy: number; y: number; tilt: number } | null)[] = [
-      { d: 0.375, slice: 0.58, sy: 1.0, y: 0.0, tilt: 0.34 },   // 0 短髪
-      null,                                                     // 1 坊主
-      { d: 0.47, slice: 0.66, sy: 1.08, y: 0.0, tilt: 0.24 },   // 2 アフロ
-      { d: 0.375, slice: 0.56, sy: 1.4, y: 0.02, tilt: 0.30 },  // 3 フラットトップ
-      { d: 0.375, slice: 0.56, sy: 0.95, y: 0.0, tilt: 0.32 },  // 4 ヘッドバンド下の髪
-    ];
-    const hs = HS[look.style];
-    if (hs) {
-      const hair = MeshBuilder.CreateSphere(`haircap_${team}_${idx}`, { diameter: hs.d, segments: 12, slice: hs.slice }, scene);
-      hair.material = hairMat;
-      hair.parent = head;            // rides the head
-      hair.position.y = hs.y;
-      hair.scaling.y = hs.sy;
-      hair.rotation.x = this.numberSide * hs.tilt;   // lean back: front up, nape down
-      this.hair = hair;
-      this.hairTilt = hs.tilt;
-    }
-    if (look.style === 4) {
-      // headband — a team-coloured ring around the head
-      const band = MeshBuilder.CreateTorus(`band_${team}_${idx}`, { diameter: 0.355, thickness: 0.05, tessellation: 12 }, scene);
-      const bandMat = new StandardMaterial(`bandmat_${team}_${idx}`, scene);
-      const tc = TEAM_COLORS[team];
-      bandMat.diffuseColor = new Color3(tc.r, tc.g, tc.b);
-      bandMat.specularColor = new Color3(0.05, 0.05, 0.05);
-      band.material = bandMat;
-      band.parent = head;
-      band.position.y = 0.035;       // forehead height
-    }
+    this.hairMat = hairMat;
+    this.buildHairMeshes(look.style);
     // eyes — two small dark spheres on the FRONT of the head. Front = local
     // -numberSide·Z (same convention the arms/feet use); setNumberSide re-aims Z
     // when the teams switch ends at half-time.
@@ -734,6 +711,108 @@ export class Player {
     }
   }
 
+  // Build the hair meshes for a hairstyle onto the (already-created) head. Split
+  // out of the constructor so applyLook() can rebuild it when a roster swap gives
+  // this slot a different player. 0=短髪 1=丸刈り 2=アフロ 3=フラットトップ 4=ヘッドバンド
+  // 5=ボブ 6=前髪上げ 7=モヒカン(専用クレスト) 8=マンバン 9=センター分け 10=ロング(肩まで)。
+  private buildHairMeshes(style: number): void {
+    const { head, hairMat, team } = this;
+    // slice = how far the dome comes down (covers sides/back, not the face);
+    // tilt = backward lean so the FRONT rides up above the eyes while the nape
+    // stays covered (flipped by numberSide so front = -numberSide·Z).
+    // slice ≲0.6 + a decent tilt keeps the crown OFF the face (no helmet look);
+    // length is carried by a separate `back` panel hanging down the nape (below),
+    // NOT by a bigger slice — a big dome would cover the face as much as the back.
+    type HStyle = { d: number; slice: number; sy: number; y: number; tilt: number;
+                    back?: { d: number; sx: number; sy: number; sz: number; y: number } };
+    const HS: (HStyle | null)[] = [
+      { d: 0.375, slice: 0.58, sy: 1.0, y: 0.0, tilt: 0.34 },   // 0 短髪
+      { d: 0.362, slice: 0.60, sy: 1.0, y: 0.0, tilt: 0.16 },   // 1 丸刈り(バズ、頭とほぼ同径で薄く覆う)
+      { d: 0.47, slice: 0.66, sy: 1.08, y: 0.0, tilt: 0.24 },   // 2 アフロ
+      { d: 0.375, slice: 0.56, sy: 1.4, y: 0.02, tilt: 0.30 },  // 3 フラットトップ
+      { d: 0.375, slice: 0.56, sy: 0.95, y: 0.0, tilt: 0.32 },  // 4 ヘッドバンド下の髪
+      // 5 ボブ: 前は開けたクラウン + 顎ラインまでの後ろ髪パーツ
+      { d: 0.375, slice: 0.56, sy: 1.0, y: 0.0, tilt: 0.30,
+        back: { d: 0.30, sx: 1.05, sy: 1.30, sz: 0.55, y: -0.05 } },
+      { d: 0.36, slice: 0.50, sy: 0.90, y: 0.03, tilt: 0.48 },  // 6 前髪上げ(前を強く後傾、額出し)
+      null,                                                     // 7 モヒカン(下のクレストで作る)
+      { d: 0.36, slice: 0.55, sy: 0.98, y: 0.0, tilt: 0.30 },   // 8 マンバン(このクラウン+お団子)
+      { d: 0.38, slice: 0.58, sy: 1.02, y: -0.005, tilt: 0.24 },// 9 センター分け(前髪は軽く、額は隠れすぎない)
+      // 10 ロング: 前は開けたクラウン + 肩まで垂れる後ろ髪パーツ
+      { d: 0.375, slice: 0.56, sy: 1.0, y: 0.0, tilt: 0.30,
+        back: { d: 0.32, sx: 1.05, sy: 1.75, sz: 0.50, y: -0.13 } },
+    ];
+    const hs = HS[style];
+    if (hs) {
+      const hair = MeshBuilder.CreateSphere(`haircap_${team}_${this.idx}`, { diameter: hs.d, segments: 12, slice: hs.slice }, this.scene);
+      hair.material = hairMat;
+      hair.parent = head;            // rides the head
+      hair.position.y = hs.y;
+      hair.scaling.y = hs.sy;
+      hair.rotation.x = this.numberSide * hs.tilt;   // lean back: front up, nape down
+      this.hair = hair;
+      this.hairTilt = hs.tilt;
+    }
+    if (hs?.back) {
+      // 後ろ髪: a flattened ellipsoid hanging down the NAPE (back = +numberSide·Z,
+      // so its z flips at half-time in setNumberSide). It sits BEHIND & BELOW the
+      // head so it never reaches the face — length without covering the front.
+      const b = hs.back;
+      const back = MeshBuilder.CreateSphere(`hairback_${team}_${this.idx}`, { diameter: b.d, segments: 12 }, this.scene);
+      back.material = hairMat;
+      back.parent = head;
+      back.scaling.set(b.sx, b.sy, b.sz);
+      back.position.set(0, b.y, this.numberSide * 0.05);
+      this.hairBack = back;
+    }
+    if (style === 4) {
+      // headband — a team-coloured ring around the head
+      const band = MeshBuilder.CreateTorus(`band_${team}_${this.idx}`, { diameter: 0.355, thickness: 0.05, tessellation: 12 }, this.scene);
+      const bandMat = new StandardMaterial(`bandmat_${team}_${this.idx}`, this.scene);
+      const tc = TEAM_COLORS[team];
+      bandMat.diffuseColor = new Color3(tc.r, tc.g, tc.b);
+      bandMat.specularColor = new Color3(0.05, 0.05, 0.05);
+      band.material = bandMat;
+      band.parent = head;
+      band.position.y = 0.035;       // forehead height
+      this.headband = band;
+    }
+    if (style === 7) {
+      // モヒカン: a thin, TALL crest ridge running front-to-back along the head's
+      // centre line. Symmetric about z=0, so switching ends (numberSide flip)
+      // leaves it looking the same. Registered as `this.hair` for recolour/dispose.
+      const crest = MeshBuilder.CreateSphere(`mohawk_${team}_${this.idx}`, { diameter: 0.30, segments: 10 }, this.scene);
+      crest.material = hairMat;
+      crest.parent = head;
+      crest.position.y = 0.10;
+      crest.scaling.set(0.34, 1.7, 1.05);   // thin across, tall up, long front-to-back
+      this.hair = crest;
+    }
+    if (style === 8) {
+      // マンバン: the base crown (built above) plus a small knot at the BACK-top.
+      // Back = +numberSide·Z, so the bun's z flips at half-time (setNumberSide).
+      const bun = MeshBuilder.CreateSphere(`bun_${team}_${this.idx}`, { diameter: 0.145, segments: 10 }, this.scene);
+      bun.material = hairMat;
+      bun.parent = head;
+      bun.position.set(0, 0.055, this.numberSide * 0.15);
+      this.hairBun = bun;
+    }
+  }
+
+  // Re-apply the whole procedural look (skin/hair colour + hairstyle mesh) for the
+  // player who now occupies this slot. Called on a roster swap (applyDef) so the
+  // NAME-keyed look actually follows the player instead of staying as-built.
+  private applyLook(): void {
+    const look = playerLook(this.name);
+    this.headMat.diffuseColor = new Color3(look.skin.r, look.skin.g, look.skin.b);
+    this.hairMat.diffuseColor = new Color3(look.hair.r, look.hair.g, look.hair.b);
+    this.hair?.dispose(); this.hair = null; this.hairTilt = 0;
+    this.hairBun?.dispose(); this.hairBun = null;
+    this.hairBack?.dispose(); this.hairBack = null;
+    this.headband?.dispose(); this.headband = null;
+    this.buildHairMeshes(look.style);
+  }
+
   /** True if this player has the given 特殊能力. */
   has(key: AbilityKey): boolean {
     return this.abilities.has(key);
@@ -762,6 +841,10 @@ export class Player {
     if (this.eyeL) { this.eyeL.position.z = -this.numberSide * 0.15; this.eyeR.position.z = -this.numberSide * 0.15; }
     // hair leans back relative to the face, so the tilt flips with the front side
     if (this.hair) this.hair.rotation.x = this.numberSide * this.hairTilt;
+    // the man-bun sits on the BACK of the head — re-aim it to the new back side
+    if (this.hairBun) this.hairBun.position.z = this.numberSide * 0.15;
+    // long/bob back-hair also hangs off the BACK — re-aim it too
+    if (this.hairBack) this.hairBack.position.z = this.numberSide * 0.05;
     // shoe feet: same rule, but the shoe is front/back asymmetric so its yaw
     // flips too (built toe-forward for numberSide +1). The stance sits toward
     // the back of the body with the toes fanned outward (a slight duck stance),
@@ -1489,7 +1572,7 @@ export class Player {
       this.lockDef = !!db.lockEffort;
       this.defEffortGear = db.effort;
     }
-    if (def.name !== this.name) { this.name = def.name; this.drawNameTag(); }
+    if (def.name !== this.name) { this.name = def.name; this.drawNameTag(); this.applyLook(); }
     if (def.height !== this.height) {
       this.height = def.height;
       this.refreshScale();   // rescale the figure to the new height (keeps a seated squash)
