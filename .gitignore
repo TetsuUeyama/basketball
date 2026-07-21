@@ -3,3 +3,4 @@ dist
 *.log
 dev.out
 .DS_Store
+headless_sim/run.mjs

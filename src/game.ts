@@ -7,7 +7,7 @@ import {
 } from "./config";
 import { clamp, dist2D, dist2DTo, moveToward2D, chance, rand } from "./util";
 import { ROSTER, ROSTER_SIZE, STARTERS, TACTICS, rate, AbilityKey,
-  scoringPower, usageFromRank } from "./attributes";
+  scoringPower, usageFromRank, EXTRA_POSITIONS, type PlayerDef } from "./attributes";
 
 export type BallMode = "held" | "charge" | "pass" | "shot" | "loose" | "inbound" | "tipoff" | "freethrow" | "pause" | "subs" | "finale";
 
@@ -304,13 +304,13 @@ export class Game {
     return n ? sum / n / 100 : 0.5;
   }
 
-  // How compatible a bench player's position is with the slot he'd fill.
-  private roleFit(benchRole: string, outRole: string): number {
-    if (benchRole === outRole) return 1;
-    const groups: Record<string, string[]> = {
-      PG: ["SG"], SG: ["PG", "SF"], SF: ["SG", "PF"], PF: ["C", "SF"], C: ["PF"],
-    };
-    return (groups[outRole] ?? []).includes(benchRole) ? 0.6 : 0;
+  // Position ELIGIBILITY (hard rule): a player may ONLY play his own listed role,
+  // plus any EXTRA_POSITIONS explicitly granted to him. No adjacency, no ability
+  // substitution — a player is never put in a position that isn't his. Returns 1
+  // if eligible for the slot, 0 if not (the selectors treat 0 as "can't fill it").
+  private roleFit(p: { role: string; name: string }, slot: string): number {
+    if (slot === p.role) return 1;
+    return (EXTRA_POSITIONS[p.name] ?? []).includes(slot) ? 1 : 0;
   }
 
   // How badly this player needs to come out: gassed legs, a poor night
@@ -356,6 +356,71 @@ export class Game {
     this.ballMode = "subs";
   }
 
+  // ---- opponent-matchup substitutions (coaching) -------------------------
+  // Beyond fatigue, react to WHO the other team has on the floor. Two triggers,
+  // each fired by a static ability mismatch OR an in-game signal (hybrid):
+  //   (1) can't hold their interior scorer → bring a defensive big
+  //   (2) can't handle their pressure/double → bring a ball-handler
+  // At most one swap per team per stoppage; the benched man is held for a while
+  // (matchupHoldT) so the fatigue rotation / restore doesn't immediately undo it.
+  // A swap only happens when the bench genuinely upgrades the trait, so once the
+  // right man is in the trigger self-resolves (no thrashing).
+  private matchupSubs(team: number, exclude: Player | null): void {
+    const opp = 1 - team;
+    const ourOn = this.teamPlayers(team);
+    const bench = this.roster[team].filter((p) => !this.onCourt(p)
+      && p.fatigue < 0.5 && p.matchupHoldT <= 0 && !this.subWalkers.some((w) => w.p === p));
+    if (bench.length === 0) return;
+
+    // (1) INTERIOR MISMATCH — "can't stop their centre"
+    const interior = (p: Player) => p.role === "PF" || p.role === "C" || p.height >= 1.98;
+    const defRating = (p: Player) => rate(p.attr.defense) * 0.5 + (p.height - 1.9) * 0.6 + rate(p.attr.jump) * 0.15;
+    let oppBig: Player | null = null, bigThreat = -Infinity;
+    for (const o of this.teamPlayers(opp)) {
+      if (!interior(o)) continue;
+      const s = scoringPower(o.attr) + (o.height - 1.9) * 0.6;
+      if (s > bigThreat) { bigThreat = s; oppBig = o; }
+    }
+    if (oppBig) {
+      const ourDef = ourOn.find((p) => p.slot === oppBig!.slot);
+      if (ourDef && ourDef !== this.handler && ourDef !== exclude
+          && ourDef.matchupHoldT <= 0 && ourDef.stintT > 8) {
+        const gap = (scoringPower(oppBig.attr) + (oppBig.height - 1.9) * 0.5)
+          - (rate(ourDef.attr.defense) + (ourDef.height - 1.9) * 0.5);
+        const hurting = oppBig.stats.pts >= 8;               // dynamic: he's already scoring on us
+        if (gap > 0.12 || hurting) {
+          let best: Player | null = null, bestD = defRating(ourDef) + 0.06;   // needs a real upgrade
+          for (const b of bench) {
+            if (this.roleFit(b, ourDef.role) <= 0) continue;   // only if eligible for that position
+            const d = defRating(b);
+            if (d > bestD) { bestD = d; best = b; }
+          }
+          if (best) { this.substitute(ourDef, best); ourDef.matchupHoldT = 45; return; }
+        }
+      }
+    }
+
+    // (2) PRESSURE / DOUBLE-TEAM — "can't handle their pressure"
+    const oppPress = this.tactics[opp].defense.pressure + this.tactics[opp].defense.press * 0.5;
+    const ourPG = ourOn.reduce((a, b) => (a.slot <= b.slot ? a : b));   // lowest slot = the point
+    if (ourPG !== this.handler && ourPG !== exclude
+        && ourPG.matchupHoldT <= 0 && ourPG.stintT > 8) {
+      const teamTov = ourOn.reduce((s, p) => s + p.stats.tov, 0);
+      const handleScore = (p: Player) => rate(p.attr.handling) * 0.6 + rate(p.attr.passAcc) * 0.25 + p.playmaking * 0.3;
+      const pressured = oppPress > 0.6 && rate(ourPG.attr.handling) < 0.6;
+      if (pressured || teamTov >= 5) {                       // static (their press) or dynamic (our TOs)
+        let best: Player | null = null, bestH = handleScore(ourPG) + 0.08;
+        for (const b of bench) {
+          if (b.role !== "PG" && b.role !== "SG") continue;  // a guard
+          if (this.roleFit(b, ourPG.role) <= 0) continue;   // only if eligible for that position
+          const hs = handleScore(b);
+          if (hs > bestH) { bestH = hs; best = b; }
+        }
+        if (best) { this.substitute(ourPG, best); ourPG.matchupHoldT = 45; return; }
+      }
+    }
+  }
+
   // Decide the substitutions and perform the LOGICAL swap (roster slot, clock,
   // feed) — the walk animation then carries each body to its destination.
   // NBA-style: players may re-enter later once they've recovered on the bench.
@@ -365,6 +430,9 @@ export class Game {
     this.subWalkers = [];
     const blowout = this.quarter >= QUARTERS
       && Math.abs(this.score[0] - this.score[1]) >= 18;
+    // opponent-matchup coaching subs first (defensive big / ball-handler) so they
+    // take priority over the routine fatigue rotation at this stoppage
+    if (!blowout) for (let team = 0; team < 2; team++) this.matchupSubs(team, exclude);
     for (let team = 0; team < 2; team++) {
       const bench = this.roster[team].filter((p) => !this.onCourt(p));
       for (const out of [...this.teamPlayers(team)]) {
@@ -373,10 +441,11 @@ export class Game {
         let best: Player | null = null;
         let bestScore = 0;
         for (const b of bench) {
+          if (b.matchupHoldT > 0) continue;               // just benched for a matchup — keep him off
           if (b.fatigue > 0.35) continue;                 // not recovered enough
           // outside garbage time the sub must bring meaningfully fresher legs
           if (!blowout && b.fatigue > out.fatigue - 0.15) continue;
-          const fit = this.roleFit(b.role, out.role);
+          const fit = this.roleFit(b, out.role);
           if (fit <= 0) continue;
           const score = this.overallOf(b) * 0.5 + (1 - b.fatigue) * 0.5 + fit * 0.3;
           if (score > bestScore) { bestScore = score; best = b; }
@@ -398,6 +467,7 @@ export class Game {
       for (let team = 0; team < 2; team++) {
         const resting = this.roster[team]
           .filter((p) => p.idx < STARTERS && !this.onCourt(p) && p.fatigue < restThresh
+            && p.matchupHoldT <= 0                                  // don't undo a matchup bench yet
             && !this.subWalkers.some((w) => w.p === p))
           .sort((a, b) => (a.choiceRank ?? a.autoRank) - (b.choiceRank ?? b.autoRank)); // primary first
         for (const starter of resting) {
@@ -406,7 +476,7 @@ export class Game {
             if (oc === this.handler || oc === exclude) continue;
             if (oc.idx < STARTERS) continue;                       // never pull another starter
             if (oc.stintT < 12) continue;                          // just checked in
-            if (this.roleFit(starter.role, oc.role) <= 0) continue; // compatible slot
+            if (this.roleFit(starter, oc.role) <= 0) continue; // only if eligible for that position
             if (this.subWalkers.some((w) => w.p === oc)) continue;
             const bad = oc.fatigue + (1 - this.overallOf(oc) / 99);   // most tired / weakest first
             if (bad > worst) { worst = bad; target = oc; }
@@ -894,6 +964,77 @@ export class Game {
     this.refreshChoiceRanks(1);
   }
 
+  // ---- opponent-aware STARTING lineup (coaching) -------------------------
+  // Pick each team's best five from its 13, weighted by the OTHER team's threats:
+  // a dangerous interior scorer pulls in a defensive big; heavy on-ball pressure
+  // pulls in a surer ball-handler. Reorders ROSTER[t] IN PLACE (best five first,
+  // in PG-SG-SF-PF-C order). Called by the UI when a matchup is FIRST established
+  // (before the editor is shown) so it's the DEFAULT the user then freely edits —
+  // it is NOT re-run at tip-off, so a hand-arranged lineup is never clobbered.
+  optimizeLineups(): void {
+    const oppInfo = (opp: number) => {
+      let bigThreat = 0;
+      for (const d of ROSTER[opp]) {
+        if (d.role !== "PF" && d.role !== "C" && d.height < 1.98) continue;
+        bigThreat = Math.max(bigThreat, scoringPower(d.attr) + (d.height - 1.9) * 0.6);
+      }
+      const press = this.tactics[opp].defense.pressure + this.tactics[opp].defense.press * 0.5;
+      return { bigThreat, press };
+    };
+    const overall = (d: PlayerDef) =>
+      scoringPower(d.attr) * 0.45 + rate(d.attr.defense) * 0.28
+      + rate(d.attr.balance) * 0.08 + rate(d.attr.stamina) * 0.05 + (d.height - 1.9) * 0.30;
+
+    const roles = ["PG", "SG", "SF", "PF", "C"] as const;
+    for (let team = 0; team < 2; team++) {
+      const info = oppInfo(1 - team);
+      const pool = ROSTER[team];
+      // How much the opponent's threat RAMPS the situational bias (0 = ordinary
+      // opponent → pick the best five by ability; 1 = extreme → the matchup term
+      // can outweigh a real ability gap and swap the pick).
+      const bigDom = clamp((info.bigThreat - 0.45) / 0.30, 0, 1);   // dominant opposing big
+      const heavyPress = clamp((info.press - 0.50) / 0.40, 0, 1);   // heavy on-ball pressure
+      const value = (d: PlayerDef, slot: string): number => {
+        // Only ELIGIBLE players reach here (the gate below drops the rest). Prefer
+        // his PRIMARY position over a secondary (EXTRA_POSITIONS) one; ability and
+        // the opponent tilt then choose WHICH eligible player starts.
+        const fit = d.role === slot ? 1.0 : 0.5;
+        let v = fit + overall(d) * 0.4;
+        // vs a dominant big, a defensive big (守備+身長+ジャンプ) is worth starting
+        // even over a better scorer — refines which big starts.
+        if (slot === "PF" || slot === "C") {
+          v += bigDom * (rate(d.attr.defense) * 0.60 + (d.height - 1.9) * 0.55 + rate(d.attr.jump) * 0.20);
+        }
+        // vs heavy pressure, a surer ball-handler starts over a pure scorer
+        if (slot === "PG" || slot === "SG") {
+          v += heavyPress * rate(d.attr.handling) * 0.55;
+        }
+        return v;
+      };
+      const picked = new Set<PlayerDef>();
+      const starters: PlayerDef[] = [];
+      for (const slot of roles) {
+        let best: PlayerDef | null = null, bestV = -Infinity;
+        for (const d of pool) {
+          if (picked.has(d)) continue;
+          if (this.roleFit(d, slot) <= 0) continue;   // only players ELIGIBLE for this position
+          const v = value(d, slot);
+          if (v > bestV) { bestV = v; best = d; }
+        }
+        if (best) { picked.add(best); starters.push(best); }
+      }
+      // safety: a slot with NO eligible player left (roster short at that position)
+      // is filled from the best remaining so the five is complete
+      if (starters.length < 5) {
+        const rest = pool.filter((d) => !picked.has(d)).sort((a, b) => overall(b) - overall(a));
+        for (const d of rest) { if (starters.length >= 5) break; picked.add(d); starters.push(d); }
+      }
+      const benchDefs = pool.filter((d) => !picked.has(d));
+      pool.length = 0;                     // reorder in place (keep the same array ref)
+      pool.push(...starters, ...benchDefs);
+    }
+  }
+
   // Turn the CHOICE ORDER into each on-court player's usage (offPriority = who
   // the ball is funnelled to). A player with an explicit choiceRank keeps it;
   // duplicate explicit ranks stay equal = "co-primary" who share the ball. The
@@ -1070,6 +1211,10 @@ export class Game {
         && this.ballMode !== "finale") {
       this.gameClock -= dt;
       for (const p of this.players) { p.stats.min += dt; p.stintT += dt; }
+      // matchup-bench hold counts down in game time for BENCH players too
+      for (let t = 0; t < 2; t++) for (const p of this.roster[t]) {
+        if (p.matchupHoldT > 0) p.matchupHoldT = Math.max(0, p.matchupHoldT - dt);
+      }
       if (this.ballMode === "held") {
         this.shotClock -= dt;
         if (this.shotClock <= 0) {
@@ -1182,7 +1327,12 @@ export class Game {
       // still, the whole body squares to the aim and the twist unwinds.
       let lx = aim.x, lz = aim.z;
       const spd = Math.hypot(p.velX, p.velZ);
-      if (spd > 1.5) {
+      // a FINISHER in his gather squares his legs to the rim (aim = the hoop) so
+      // the dunk/layup faces the basket instead of taking off angled — which is
+      // what read as a frequent "back dunk" (the body wasn't turned to the rim).
+      const finishing = p === this.shooter && this.shooterFinishing
+        && dist2DTo(p.pos, aim.x, aim.z) < 3.2;
+      if (spd > 1.5 && !finishing) {
         const ax = aim.x - p.pos.x, az = aim.z - p.pos.z;
         const al = Math.hypot(ax, az);
         // Moving toward the aim → legs face travel. Moving AWAY (a retreat) a
@@ -1207,6 +1357,9 @@ export class Game {
       const turnRate = 2.2 + (quick * 0.6 + skill * 0.4) * 6;   // ~2.2 (slow) .. ~8.2 (quick) rad/s
       p.faceSmooth(lx, lz, turnRate * dt);                       // lower body (legs/hips)
       p.twistToward(aim.x, aim.z, dt, undefined, turnRate * 1.25); // upper body (chest), a touch quicker
+      // the HEAD tracks the thing worth watching (the ball, or the rim he attacks)
+      // ON TOP of the chest — so he never runs/turns without his face on the play
+      p.lookToward(aim.x, aim.z, dt, turnRate * 1.6);
     }
   }
 
@@ -3997,6 +4150,10 @@ export class Game {
     this.shooter = h;
     this.shooterFinishing = true;
     this.handler = null;
+    // SQUARE UP to the rim at take-off: the body is frozen while airborne, so if he
+    // leaves the floor angled the dunk/layup reads as a "back dunk". Snap his chest
+    // (and the feet it can't cover) to the basket now so he finishes facing it.
+    { const rf = this.attackFloor(h.team); h.faceChestToward(rf.x, rf.z); }
     // elevation scales with ジャンプ
     h.jump(dunk ? 0.85 + rate(h.attr.jump) * 0.3 : 0.55 + rate(h.attr.jump) * 0.2,
       dunk ? 0.7 : 0.6);

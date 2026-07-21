@@ -32,6 +32,10 @@ function aimDownTo(vx: number, vy: number, vz: number): Quaternion {
 // the floor); the mesh is synced from it every frame. No physics body.
 // ---------------------------------------------------------------------------
 export class Player {
+  // Headless batch sim: skip the (purely visual) per-swap hair rebuild + name-tag
+  // redraw so thousands of roster swaps don't churn/leak Babylon meshes. Set true
+  // by the headless runner before simulating; the on-screen game leaves it false.
+  static HEADLESS = false;
   readonly team: number;
   readonly idx: number;          // roster index within the team (0..12); jersey = idx+1
   slot = 0;                      // court slot 0..4 while on the floor (man-matching key)
@@ -90,6 +94,8 @@ export class Player {
   // way with his chest turned to receive, pass, or shadow a driver.
   private torsoNode!: TransformNode;
   private torsoTwist = 0;   // smoothed twist (rad), clamped to ±TWIST_MAX
+  private headNode!: TransformNode;   // head carrier — yaws on TOP of the chest twist
+  private headYaw = 0;      // smoothed head turn (rad) relative to the chest, ±HEAD_MAX
 
   // Both body styles exist from construction; applyModel() shows one and hides
   // the other so the style can be flipped live from the HUD menu.
@@ -109,6 +115,7 @@ export class Player {
   private hairTilt = 0;                // backward tilt magnitude (flipped by numberSide)
   private hairBun: Mesh | null = null; // man-bun knot at the back (flipped by numberSide)
   private hairBack: Mesh | null = null;// long/bob back-hair panel (flipped by numberSide)
+  private hairDreads: TransformNode | null = null; // dreadlock locks (whole cluster flipped by numberSide)
   private headband: Mesh | null = null;// team-coloured band (style 4)
 
   decisionT = 0;                 // cooldown before the next AI decision
@@ -125,6 +132,7 @@ export class Player {
   shadeSide = 1;   // defence: which way the on-ball defender is shading
   reactT = 0;      // defence: reaction lag remaining before the shade catches up
   looseReactT = 0; // loose ball: reaction lag before this player gives chase (反応-scaled)
+  matchupHoldT = 0; // coaching: kept on the bench this long after a matchup sub (no instant restore)
   beatenT = 0;     // offence: time remaining of a successful (speed) blow-by burst
   powerT = 0;      // offence: time remaining of a bull/power drive shoving the man back
   stalledT = 0;    // offence: time the handler is walled off (contained), pulling it back out
@@ -428,7 +436,12 @@ export class Player {
     headMat.diffuseColor = new Color3(look.skin.r, look.skin.g, look.skin.b);
     headMat.specularColor = new Color3(0.05, 0.05, 0.05);
     head.material = headMat;
-    head.parent = torsoNode;   // the head turns with the chest
+    // the head rides a carrier that YAWS on top of the chest twist, so it can turn
+    // to watch the ball / his man while the chest faces another way (see lookToward)
+    const headNode = new TransformNode(`headYaw_${team}_${idx}`, scene);
+    headNode.parent = torsoNode;
+    this.headNode = headNode;
+    head.parent = headNode;
     this.headMat = headMat;
 
     const hairMat = new StandardMaterial(`hair_${team}_${idx}`, scene);
@@ -715,7 +728,8 @@ export class Player {
   // Build the hair meshes for a hairstyle onto the (already-created) head. Split
   // out of the constructor so applyLook() can rebuild it when a roster swap gives
   // this slot a different player. 0=短髪 1=丸刈り 2=アフロ 3=フラットトップ 4=ヘッドバンド
-  // 5=ボブ 6=前髪上げ 7=モヒカン(専用クレスト) 8=マンバン 9=センター分け 10=ロング(肩まで)。
+  // 5=ボブ 6=前髪上げ 7=モヒカン 8=マンバン 9=センター分け 10=ロング(肩まで)
+  // 11=くせ毛長髪(太めの房) 12=ドレッド(細く多く長い房)。
   private buildHairMeshes(style: number): void {
     const { head, hairMat, team } = this;
     // slice = how far the dome comes down (covers sides/back, not the face);
@@ -742,6 +756,10 @@ export class Player {
       // 10 ロング: 前は開けたクラウン + 肩まで垂れる後ろ髪パーツ
       { d: 0.375, slice: 0.56, sy: 1.0, y: 0.0, tilt: 0.30,
         back: { d: 0.32, sx: 1.05, sy: 1.75, sz: 0.50, y: -0.13 } },
+      // 11 くせ毛長髪: 前は開けたクラウン + サイド〜後ろに垂らす太めの房(下の専用ブランチ)
+      { d: 0.365, slice: 0.56, sy: 1.0, y: 0.0, tilt: 0.28 },
+      // 12 ドレッド: 同じ作りで房が細く・多く・長い(下の専用ブランチ)
+      { d: 0.37, slice: 0.60, sy: 1.0, y: 0.0, tilt: 0.22 },
     ];
     const hs = HS[style];
     if (hs) {
@@ -798,6 +816,28 @@ export class Player {
       bun.position.set(0, 0.055, this.numberSide * 0.15);
       this.hairBun = bun;
     }
+    if (style === 11 || style === 12) {
+      // Strands hanging from the SIDES and BACK only (the front is kept clear so
+      // they never cover the face). All parent to ONE node whose Y-rotation flips
+      // at half-time, keeping the cluster on the correct back side.
+      //   11 くせ毛長髪 = fewer, thicker, shorter;  12 ドレッド = many, thin, long.
+      const cfg = style === 11
+        ? { n: 9, r: 0.15, dia: 0.050, hBase: 0.38, hVar: 0.045, top: 0.02, spread: 3.8 }
+        : { n: 16, r: 0.155, dia: 0.030, hBase: 0.50, hVar: 0.060, top: 0.05, spread: 4.4 };
+      const root = new TransformNode(`dread_${team}_${this.idx}`, this.scene);
+      root.parent = head;
+      root.rotation.y = this.numberSide > 0 ? 0 : Math.PI;
+      for (let i = 0; i < cfg.n; i++) {
+        const phi = -cfg.spread / 2 + (i / (cfg.n - 1)) * cfg.spread;   // about the back; skips the front
+        const H = cfg.hBase + (i % 3) * cfg.hVar;                       // slightly uneven lengths
+        const loc = MeshBuilder.CreateCylinder(`loc_${team}_${this.idx}_${i}`,
+          { height: H, diameter: cfg.dia, tessellation: 6 }, this.scene);
+        loc.material = hairMat;
+        loc.parent = root;
+        loc.position.set(Math.sin(phi) * cfg.r, cfg.top - H / 2, Math.cos(phi) * cfg.r);
+      }
+      this.hairDreads = root;
+    }
   }
 
   // Re-apply the whole procedural look (skin/hair colour + hairstyle mesh) for the
@@ -810,6 +850,10 @@ export class Player {
     this.hair?.dispose(); this.hair = null; this.hairTilt = 0;
     this.hairBun?.dispose(); this.hairBun = null;
     this.hairBack?.dispose(); this.hairBack = null;
+    if (this.hairDreads) {
+      this.hairDreads.getChildMeshes(false).forEach((m) => m.dispose());
+      this.hairDreads.dispose(); this.hairDreads = null;
+    }
     this.headband?.dispose(); this.headband = null;
     this.buildHairMeshes(look.style);
   }
@@ -846,6 +890,8 @@ export class Player {
     if (this.hairBun) this.hairBun.position.z = this.numberSide * 0.15;
     // long/bob back-hair also hangs off the BACK — re-aim it too
     if (this.hairBack) this.hairBack.position.z = this.numberSide * 0.05;
+    // the dreadlock cluster flips as a whole so it stays on the back side
+    if (this.hairDreads) this.hairDreads.rotation.y = this.numberSide > 0 ? 0 : Math.PI;
     // shoe feet: same rule, but the shoe is front/back asymmetric so its yaw
     // flips too (built toe-forward for numberSide +1). The stance sits toward
     // the back of the body with the toes fanned outward (a slight duck stance),
@@ -908,6 +954,27 @@ export class Player {
     this.torsoNode.rotation.y = this.torsoTwist;
   }
 
+  // How far the HEAD can turn past the chest (on top of the torso twist).
+  private static readonly HEAD_MAX = 0.95;   // ~54°
+
+  /** Turn the HEAD to look at a world point, ON TOP of the chest twist — so a
+   *  player moving/turned one way can still watch the ball (or his man). Clamped
+   *  to HEAD_MAX beyond the chest and eased; looking where the chest already
+   *  points unwinds it back to zero. */
+  lookToward(x: number, z: number, dt: number, rate = 11): void {
+    const s = this.numberSide;
+    const fx = x - this.pos.x, fz = z - this.pos.z;
+    let want = 0;
+    if (Math.abs(fx) + Math.abs(fz) >= 0.05) {
+      let d = Math.atan2(-s * fx, -s * fz) - this.root.rotation.y - this.torsoTwist;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      want = clamp(d, -Player.HEAD_MAX, Player.HEAD_MAX);
+    }
+    this.headYaw += clamp(want - this.headYaw, -rate * dt, rate * dt);
+    this.headNode.rotation.y = this.headYaw;
+  }
+
   /** Orient the CHEST to face (x,z) NOW (no easing) — a two-handed pass is thrown
    *  chest-on to the target. The torso twists there; the feet only turn by the
    *  part the torso can't cover (|twist| capped at TWIST_MAX), so the feet may lag
@@ -932,6 +999,8 @@ export class Player {
   resetTwist(): void {
     this.torsoTwist = 0;
     this.torsoNode.rotation.y = 0;
+    this.headYaw = 0;                                   // straighten the head too
+    if (this.headNode) this.headNode.rotation.y = 0;
     this.torsoNode.rotation.x = 0;   // clear any dejected forward hunch
     this.torsoNode.position.set(0, 0, 0);   // and the dejected waist-hinge offset
     if (!this.seated) this.acornWaistPivot.rotation.x = 0;   // waist back to vertical
@@ -1573,7 +1642,10 @@ export class Player {
       this.lockDef = !!db.lockEffort;
       this.defEffortGear = db.effort;
     }
-    if (def.name !== this.name) { this.name = def.name; this.drawNameTag(); this.applyLook(); }
+    if (def.name !== this.name) {
+      this.name = def.name;
+      if (!Player.HEADLESS) { this.drawNameTag(); this.applyLook(); }   // visuals only — skipped headless
+    }
     if (def.height !== this.height) {
       this.height = def.height;
       this.refreshScale();   // rescale the figure to the new height (keeps a seated squash)

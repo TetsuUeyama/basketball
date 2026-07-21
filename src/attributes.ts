@@ -465,6 +465,15 @@ export function clubTeam(team: number, clubIdx: number): void {
 // at the ceiling, so the effect of attributes is obvious. Re-tune for a real game.
 export const STARTERS = 5;
 export const ROSTER_SIZE = 13;
+
+// Players who are eligible at MORE than their listed position. Key = name (must
+// match playerdb exactly). Value = ADDITIONAL positions beyond their own role.
+// Everyone else can play ONLY their own role — a player is NEVER put in a
+// position that isn't in his eligible set (no adjacency, no ability substitution).
+// Add an entry here to make a player multi-position (e.g. a SF who also plays SG).
+export const EXTRA_POSITIONS: Record<string, string[]> = {
+  "クリスティアーノ・ロナウド": ["SG"],   // SF に加えて SG も可
+};
 const BENCH_ROLES = ["PG", "SG", "SF", "PF", "C", "SG", "SF", "PF"];
 
 const mk = (name: string, role: string, height: number, attr: Attributes): PlayerDef =>

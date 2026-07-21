@@ -67,6 +67,7 @@ export class UI {
   private iconKey: string[] = ["", ""];
   private iconEl = new Map<import("./entities").Player, HTMLDivElement>(); // player → its current icon element
   private iconStamina = new Map<import("./entities").Player, { bar: HTMLDivElement; fill: HTMLDivElement }>(); // player → its icon stamina bar
+  private iconRole = new Map<import("./entities").Player, HTMLDivElement>();   // player → its offence/defence role pill
   private staminaBtn: HTMLButtonElement | null = null;   // HUD toggle: gauge on name tag ⇄ face icon
   private namesBtn: HTMLButtonElement | null = null;     // HUD toggle: on-court name tags on ⇄ off
   private modelBtn: HTMLButtonElement | null = null;     // HUD toggle: 人型 ⇄ どんぐり体形
@@ -109,6 +110,7 @@ export class UI {
   onRestart: () => void = () => {};
   onStart: () => void = () => {};
   onBack: () => void = () => {};
+  onSetupLineups: () => void = () => {};   // opponent-aware DEFAULT five when a matchup is first set
   onModelToggle: () => void = () => {};   // apply HUD_OPTS.model to every player
   onUniformToggle: () => void = () => {};  // apply TEAM_UNIFORM (home/away) to every player
   // frame ONE team on the 3D court during club selection (null = restore wide)
@@ -473,6 +475,7 @@ export class UI {
     const clubBtn = bigBtn("クラブチーム対戦", "リーグとチームを選んで対戦", () => this.startClubMatchup());
     const randBtn = bigBtn("ランダム対戦", "ランダム編成で対戦（編成は自由に変更可）", () => {
       this.newMatchup();
+      this.onSetupLineups();        // opponent-aware DEFAULT five (before the editor shows)
       this.setPhase("pregame");
     });
 
@@ -818,6 +821,7 @@ export class UI {
           this.onUniformPreview(null);  // tear down the dual 3D preview
           exitPreview();
           this.closeChooser();          // remove the overlay → court/players show again
+          this.onSetupLineups();        // opponent-aware DEFAULT five (before the editor shows)
           this.refreshEditors();
           this.setPhase("pregame");
         }
@@ -1179,6 +1183,24 @@ export class UI {
     守備司令塔:            { short: "CMD", tip: "味方全体の守備位置を指示し補正する。" },
   };
 
+  // Icon-pill colour GROUPS so offence reads as one family (warm) and defence as
+  // another (cool), split by job type. Keyed by the full role name.
+  //   offence: scoring=red, support/passing=yellow, other=orange
+  //   defence: on-ball/steal=blue, interior/help=green, effort=cyan
+  private static readonly OFF_GROUP_C: Record<string, string> = {
+    エース: "rgb(216,58,58)", スポットアップ: "rgb(216,58,58)", "3&D": "rgb(216,58,58)",
+    ストレッチ: "rgb(216,58,58)", フロアスペーサー: "rgb(216,58,58)", インサイドフィニッシャー: "rgb(216,58,58)",
+    リムランナー: "rgb(216,58,58)", スラッシャー: "rgb(216,58,58)", オフボールカッター: "rgb(216,58,58)",
+    メインハンドラー: "rgb(228,180,0)", セカンドハンドラー: "rgb(228,180,0)", フロアジェネラル: "rgb(228,180,0)",
+    ポイントフォワード: "rgb(228,180,0)", プレイメイキングビッグ: "rgb(228,180,0)", スクリーナー: "rgb(228,180,0)",
+    リバウンダー: "rgb(224,123,30)", エナジーガイ: "rgb(224,123,30)",
+  };
+  private static readonly DEF_GROUP_C: Record<string, string> = {
+    ロックダウン: "rgb(53,104,208)", スイッチディフェンダー: "rgb(53,104,208)", パスカット: "rgb(53,104,208)",
+    リムプロテクター: "rgb(47,157,85)", ヘルプディフェンダー: "rgb(47,157,85)", 守備司令塔: "rgb(47,157,85)",
+    ハッスルディフェンダー: "rgb(31,166,189)", バランス: "rgb(31,166,189)", 省エネ: "rgb(31,166,189)",
+  };
+
   // Auto-assign the OFFENCE choice order (primary 1..5) from scoring ability, so
   // the ball is funnelled to the best scorers by default. Starters and the bench
   // are ranked SEPARATELY (each 1..5), so a starter's "1" and a bench "1" can
@@ -1433,35 +1455,9 @@ export class UI {
   //   フロアジェネラル(攻) = 守備司令塔(守)   … 司令塔 / on-court commander
   //   エース(攻)           = ロックダウン(守)  … the star ↔ the star-stopper
   // muted / desaturated so they sit inside the dark UI rather than shout
-  private static readonly OFF_ROLE_C: Record<string, string> = {
-    メインハンドラー:      "rgb(113,154,206)",
-    セカンドハンドラー:    "rgb(146,174,209)",
-    フロアジェネラル:      "rgb(103,131,196)",  // = 守備司令塔
-    スラッシャー:          "rgb(206,140,94)",
-    エース:                "rgb(201,111,106)",  // = ロックダウン
-    スポットアップ:        "rgb(206,177,97)",
-    "3&D":                 "rgb(182,191,103)",
-    ポイントフォワード:    "rgb(123,177,196)",
-    ストレッチ:            "rgb(206,156,113)",
-    インサイドフィニッシャー: "rgb(197,129,117)",
-    リムランナー:          "rgb(114,179,123)",
-    スクリーナー:          "rgb(172,143,114)",
-    プレイメイキングビッグ: "rgb(146,154,206)",
-    リバウンダー:          "rgb(185,153,118)",
-    フロアスペーサー:      "rgb(196,185,113)",
-    オフボールカッター:    "rgb(201,136,175)",
-  };
-  private static readonly DEF_ROLE_C: Record<string, string> = {
-    ハッスルディフェンダー: "rgb(201,136,175)",
-    バランス:              "rgb(153,156,164)",
-    省エネ:                "rgb(126,130,136)",
-    ロックダウン:          "rgb(201,111,106)",  // = 攻 エース
-    スイッチディフェンダー: "rgb(136,144,206)",
-    パスカット:            "rgb(169,141,200)",
-    リムプロテクター:      "rgb(92,170,157)",   // defence rim protector (own colour)
-    ヘルプディフェンダー:  "rgb(114,179,123)",
-    守備司令塔:            "rgb(103,131,196)",  // = 攻 フロアジェネラル
-  };
+  // (offence/defence role colours are the GROUP palettes OFF_GROUP_C / DEF_GROUP_C
+  //  defined above — warm for offence, cool for defence, shared by the in-game
+  //  icons AND the editor role pills / picker.)
   private static readonly USE_C = "rgb(198,202,212)";  // 順 primary/usage order — neutral silver
 
   // `preview` (set while carrying an incoming DB player over a target row) shows
@@ -1768,8 +1764,8 @@ export class UI {
       b.onclick = (e) => { e.stopPropagation(); onClick(); };
       return b;
     };
-    const offC = (def.evalRole && UI.OFF_ROLE_C[def.evalRole]) || "rgb(150,156,168)";
-    const defC = (def.defRole && UI.DEF_ROLE_C[def.defRole]) || "rgb(150,156,168)";
+    const offC = (def.evalRole && UI.OFF_GROUP_C[def.evalRole]) || "rgb(150,156,168)";
+    const defC = (def.defRole && UI.DEF_GROUP_C[def.defRole]) || "rgb(150,156,168)";
     const roleSel = pill(def.evalRole ? (UI.EVAL_ROLES[def.evalRole]?.short ?? "?") : "-",
       !!def.evalRole, offC, "オフェンスロール", () => this.openRolePicker(def, team, roleSel, undefined, "off"));
     const defSel = pill(def.defRole ? (UI.DEF_ROLES[def.defRole]?.short ?? "?") : "-",
@@ -1936,7 +1932,7 @@ export class UI {
     const cur = (isDef ? def.defRole : def.evalRole) ?? "自動";
     const roleColour = (nm: string): string =>
       nm === "自動" ? "rgb(150,156,168)"
-        : ((isDef ? UI.DEF_ROLE_C[nm] : UI.OFF_ROLE_C[nm]) ?? "rgb(150,156,168)");
+        : ((isDef ? UI.DEF_GROUP_C[nm] : UI.OFF_GROUP_C[nm]) ?? "rgb(150,156,168)");
     const mkBtn = (nm: string): HTMLDivElement => {
       const cell = document.createElement("div");
       Object.assign(cell.style, { display: "flex", alignItems: "center", gap: "4px" } as Partial<CSSStyleDeclaration>);
@@ -3213,9 +3209,10 @@ export class UI {
   // A small face avatar: team-coloured disc, a simple generated head, and the
   // jersey number, with the player's name beneath. No portrait art exists, so
   // the face is drawn procedurally and the number/name identify the player.
-  private makeFaceIcon(player: import("./entities").Player): HTMLDivElement {
+  private makeFaceIcon(player: import("./entities").Player, posText: string): HTMLDivElement {
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {
+      position: "relative",   // so the position badge can overlay the (clipped) face
       width: "48px", flex: "0 0 auto", display: "flex", flexDirection: "column",
       alignItems: "center", gap: "2px",
       pointerEvents: "auto", cursor: "help",   // hover shows the player's box score
@@ -3235,16 +3232,34 @@ export class UI {
     this.drawFace(canvas, player);
     face.appendChild(canvas);
 
+    wrap.appendChild(face);
+
+    // jersey number — bottom-right. Placed on WRAP (not the round, clipped face)
+    // so a 2-digit number can't be cut off at the circle's edge. The face is 46px
+    // tall (42 + 2px border), so top:32px sits it flush at the face's lower-right.
     const num = document.createElement("div");
     num.textContent = String(player.idx + 1);
     Object.assign(num.style, {
-      position: "absolute", right: "0", bottom: "0", minWidth: "15px", height: "15px",
-      lineHeight: "15px", padding: "0 2px", fontSize: "10px", fontWeight: "800",
+      position: "absolute", right: "2px", top: "32px", minWidth: "16px", height: "13px",
+      lineHeight: "13px", padding: "0 2px", fontSize: "9px", fontWeight: "800",
       textAlign: "center", color: "#fff", background: colorOf(player.team),
-      borderTopLeftRadius: "6px",
+      boxSizing: "border-box", borderRadius: "4px", zIndex: "2",
     } as Partial<CSSStyleDeclaration>);
-    face.appendChild(num);
-    wrap.appendChild(face);
+    wrap.appendChild(num);
+
+    // position badge — top-left. Placed on WRAP (not the round, clipped face) so
+    // the circle's overflow:hidden can't cut off the text, and nudged in a touch.
+    const pos = document.createElement("div");
+    pos.textContent = posText;
+    Object.assign(pos.style, {
+      position: "absolute", left: "4px", top: "0", height: "13px",
+      lineHeight: "13px", padding: "0 2px", fontSize: "8px", fontWeight: "800",
+      // fixed 2-character width so a single-letter C lines up with PG/SG/… (centred)
+      minWidth: "16px", boxSizing: "border-box", textAlign: "center",
+      color: "#fff", background: "rgba(13,16,22,0.9)",
+      borderRadius: "4px", zIndex: "2",
+    } as Partial<CSSStyleDeclaration>);
+    wrap.appendChild(pos);
 
     // stamina bar directly under the face — shown only in "icon" HUD mode
     // (in "name" mode the gauge lives on the floating 3D name tag instead).
@@ -3269,23 +3284,42 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
     wrap.appendChild(name);
 
-    // 評価ロール pill under the name — DISPLAY only (switching happens inside
-    // the ステータス確認 modal). The icon bar rebuilds when a role changes,
-    // because the role codes are part of the rebuild key.
-    const color = colorOf(player.team);
-    const cur = ROSTER[player.team]?.[player.idx]?.evalRole;
+    // role pill under the name — shows the OFFENCE role while his team has the
+    // ball and the DEFENCE role while they don't. The text/colour are refreshed
+    // each frame by updateIconRoles(), keyed off possession.
     const rolePill = document.createElement("div");
-    rolePill.textContent = cur ? (UI.EVAL_ROLES[cur]?.short ?? "?") : "-";
     Object.assign(rolePill.style, {
       width: "44px", fontSize: "8px", padding: "1px 0", textAlign: "center",
       borderRadius: "6px", boxSizing: "border-box", lineHeight: "1.4",
-      background: cur ? color : "rgba(20,24,34,0.85)",
       color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.7)",
-      border: cur ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.22)",
-      fontWeight: cur ? "800" : "600",
     } as Partial<CSSStyleDeclaration>);
     wrap.appendChild(rolePill);
+    this.iconRole.set(player, rolePill);
     return wrap;
+  }
+
+  // Per-frame: show the OFFENCE role when this player's team has the ball, the
+  // DEFENCE role otherwise — team-tinted on offence, DEF_ROLE_C-tinted on defence.
+  private updateIconRoles(game: Game): void {
+    for (const [p, pill] of this.iconRole) {
+      const def = ROSTER[p.team]?.[p.idx];
+      if (!def) continue;
+      const onDef = p.team !== game.possession;   // his team is defending
+      const code = onDef ? def.defRole : def.evalRole;
+      const short = code
+        ? ((onDef ? UI.DEF_ROLES[code]?.short : UI.EVAL_ROLES[code]?.short) ?? "?")
+        : "-";
+      const col = code
+        ? ((onDef ? UI.DEF_GROUP_C[code] : UI.OFF_GROUP_C[code]) || "rgb(150,156,168)")
+        : "rgb(150,156,168)";   // grouped colour: offence warm (赤/黄/橙), defence cool (青/緑/シアン)
+      const key = (onDef ? "D" : "O") + short;
+      if (pill.dataset.k === key) continue;        // unchanged → skip the DOM writes
+      pill.dataset.k = key;
+      pill.textContent = short;
+      pill.style.background = code ? col : "rgba(20,24,34,0.85)";
+      pill.style.border = code ? `1px solid ${col}` : "1px solid rgba(255,255,255,0.22)";
+      pill.style.fontWeight = code ? "800" : "600";
+    }
   }
 
   private drawFace(canvas: HTMLCanvasElement, player: import("./entities").Player): void {
@@ -3327,6 +3361,18 @@ export class UI {
     if (style === 7) {
       ctx.fillStyle = hair;
       ctx.fillRect(W * 0.42, H * 0.12, W * 0.16, H * 0.42);
+    }
+    // くせ毛長髪(11) / ドレッド(12) — locks hanging down the sides, framing the face
+    if (style === 11 || style === 12) {
+      ctx.fillStyle = hair;
+      const dense = style === 12;                      // dreads: more, thinner, longer
+      const span = dense ? 5 : 3, gap = dense ? 0.072 : 0.105;
+      const wid = dense ? 0.024 : 0.036, len = dense ? 0.34 : 0.26;
+      for (let i = -span; i <= span; i++) {
+        if (i === 0) continue;                         // leave the face centre clear
+        const x = W / 2 + i * W * gap - W * wid / 2;
+        ctx.fillRect(x, H * 0.46, W * wid, H * (len + (Math.abs(i) % 2) * 0.05));
+      }
     }
     // headband (style 4) — team colour across the forehead
     if (style === 4) {
@@ -3408,12 +3454,18 @@ export class UI {
           Object.assign(rw.style, { maxWidth: "", overflowX: "visible", pointerEvents: "" });
         }
       }
-      // rebuild only when the shown set (or a name / tab / 評価ロール) changes —
-      // names are in the key so a tip-off applyRoster rename rebuilds at once
+      // the badge shows the FIELD position (which slot he plays) for the on-court
+      // five; the bench (no field spot) shows each man's natural role instead.
+      const SLOT_POS = ["PG", "SG", "SF", "PF", "C"];
+      const posOf = (p: import("./entities").Player) =>
+        this.showBench[t] ? p.role : (SLOT_POS[p.slot] ?? p.role);
+      // rebuild only when the shown set (or a name / tab / 評価ロール / slot) changes —
+      // names are in the key so a tip-off applyRoster rename rebuilds at once, and
+      // slot so a substitution that changes who plays a position updates the badge
       const key = `${this.showBench[t] ? "B" : "C"}:`
         + list.map((p) => {
           const d = ROSTER[t]?.[p.idx];
-          return `${p.idx}:${p.name}:${d?.evalRole ?? ""}:${d?.defRole ?? ""}:${d?.choiceRank ?? ""}`;
+          return `${p.idx}:${p.name}:${p.slot}:${d?.evalRole ?? ""}:${d?.defRole ?? ""}:${d?.choiceRank ?? ""}`;
         }).join(",");
       if (key === this.iconKey[t]) continue;
       this.iconKey[t] = key;
@@ -3421,7 +3473,7 @@ export class UI {
       this.hideTip();   // a hovered icon may be getting replaced — drop its tip
       row.replaceChildren();
       for (const p of list) {
-        const el = this.makeFaceIcon(p);
+        const el = this.makeFaceIcon(p, posOf(p));
         this.iconEl.set(p, el);   // remember it so stat pops can anchor above it
         row.appendChild(el);
       }
@@ -3500,6 +3552,7 @@ export class UI {
     if (this.phase === "playing") {
       this.refreshPlayerBars(game);
       this.updateIconStamina(game);
+      this.updateIconRoles(game);
       this.updateStatPops(game);
     }
     this.scoreA.textContent = String(game.score[0]);

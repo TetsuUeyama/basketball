@@ -61,9 +61,14 @@ function hashName(s: string): number {
 // Hand-picked hairstyles for well-known players (roughly matching their real
 // look); everyone else gets a deterministic-random style from their name hash.
 // Style key: 0短髪 1丸刈り 2アフロ 3フラットトップ 4ヘッドバンド 5ロング(サイド長め)
-//            6前髪上げ(生え際後退) 7モヒカン 8マンバン 9センター分け(前髪おろし) 10ロング(肩まで)。
-//            名は playerdb と完全一致が必要。
+//            6前髪上げ(生え際後退) 7モヒカン 8マンバン 9センター分け(前髪おろし) 10ロング(肩まで)
+//            11くせ毛長髪 12ドレッド。名は playerdb と完全一致が必要。
 const HAIR_STYLE_OVERRIDE: Record<string, number> = {
+  "メッシ": 11,     // くせ毛長髪
+  "マルセロ": 12,   // ドレッド(黒髪は下の HAIR_COLOR_OVERRIDE で固定)
+  "ドレンテ": 12,   // ドレッド
+  "ムンタリ": 12,   // ドレッド
+  "タイウォ": 12,   // ドレッド
   "クリスティアーノ・ロナウド": 0,
   "カカ": 0,
   "トッティ": 0,
@@ -94,8 +99,8 @@ const HAIR_STYLE_OVERRIDE: Record<string, number> = {
 // Relative frequency of each hairstyle among RANDOM (non-overridden) players.
 // Most are equal (1.0); the "extreme" looks are rarer so they don't dominate —
 // mohawk especially (it was landing on too many players). Index = style number.
-//        0    1    2    3    4    5    6     7(モヒカン) 8(マンバン) 9    10
-const STYLE_WEIGHT = [1, 1, 1, 1, 1, 1, 1, 0.15, 0.55, 1, 1];
+//        0    1    2    3    4    5    6     7(モヒカン) 8(マンバン) 9    10   11(くせ毛) 12(ドレッド)
+const STYLE_WEIGHT = [1, 1, 1, 1, 1, 1, 1, 0.15, 0.55, 1, 1, 0.8, 0.4];
 
 // Deterministic weighted pick from a hash (stable per player, unlike weightedPick
 // which uses Math.random). Maps the hash to [0,total) and walks the cumulative sum.
@@ -110,10 +115,17 @@ function pickWeightedStyle(h: number): number {
   return STYLE_WEIGHT.length - 1;
 }
 
+// Per-player hair-COLOUR overrides (name → hex); everyone else derives colour
+// from the name hash. Keep the name identical to playerdb.
+const HAIR_COLOR_OVERRIDE: Record<string, string> = {
+  "マルセロ": "#0e0e0e",                    // black dreads
+  "クリスティアーノ・ロナウド": "#0e0e0e",  // 黒髪(金髪ではなく)
+};
+
 export function playerLook(name: string): PlayerLook {
   const h = hashName(name);
   const skinHex = SKIN_HEX[h % SKIN_HEX.length];
-  const hairHex = HAIR_HEX[(h >>> 3) % HAIR_HEX.length];   // unsigned shift (>> could go negative → undefined)
+  const hairHex = HAIR_COLOR_OVERRIDE[name] ?? HAIR_HEX[(h >>> 3) % HAIR_HEX.length];   // unsigned shift (>> could go negative → undefined)
   const style = HAIR_STYLE_OVERRIDE[name] ?? pickWeightedStyle(h);   // famous → fitting; others → weighted-random
   return { skinHex, hairHex, skin: hexRGB(skinHex), hair: hexRGB(hairHex), style };
 }
