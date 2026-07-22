@@ -49,8 +49,8 @@ export const PASS_SPEED = 13;     // pass travel speed
 // Shot clock scaled to the compressed quarter (60s vs the NBA's 720s) AND the
 // fast pace: 14/10 rarely bit, so 7 makes it a genuine pressure. Partial resets
 // (after a foul / offensive rebound) → 5.
-export const SHOT_CLOCK = 7;
-export const SHOT_CLOCK_PARTIAL = 5;
+export const SHOT_CLOCK = 12;
+export const SHOT_CLOCK_PARTIAL = 8;
 export const QUARTER_TIME = 60;   // game-seconds per quarter (shown on the clock)
 export const QUARTERS = 4;
 
