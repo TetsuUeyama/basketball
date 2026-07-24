@@ -3,7 +3,7 @@
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../player";
 import { COURT } from "../config";
-import { clamp, rand, chance } from "../util";
+import { rand, chance } from "../util";
 import type { Game } from "../game";
 
 export function benchSeat(game: Game, p: Player): { x: number; z: number } {

@@ -1,10 +1,9 @@
 // ゲームフロー: クォーター終了処理・ハーフ/試合終了のフィナーレ・クォーター間の
 // 退場/入場ウォーク（方式B: GameState 集約）。状態は Game に集約し各関数は第一引数
 // game を受け取る。ライブ進行(updateLive)や状況判断とは分離した進行管理レイヤ。
-import { Vector3 } from "@babylonjs/core";
 import { Player } from "../player";
 import { QUARTERS, QUARTER_TIME, SHOT_CLOCK, COURT, teamShort } from "../config";
-import { clamp, rand, dist2D, dist2DTo, moveToward2D } from "../util";
+import { clamp, rand, dist2DTo, moveToward2D } from "../util";
 import { festivePose } from "./poses";
 import { withSubs } from "../systems/subs";
 import type { Game } from "../game";

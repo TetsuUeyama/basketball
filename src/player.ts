@@ -5,7 +5,7 @@ import {
 import { TEAM_COLORS, HUD_OPTS, uniformOf, type RGB } from "./config";
 import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority, ROLE_BEHAVIOR,
   DEF_ROLE_BEHAVIOR, OffAction, offActionOf } from "./attributes";
-import { clamp, rand, chance, playerLook } from "./util";
+import { clamp, playerLook } from "./util";
 
 // 現在の試合における選手のボックススコア。`min` はコート上の時間で、
 // ゲームクロック秒（結果画面では分として表示）。
@@ -72,7 +72,6 @@ export class Player {
   // 名前が変わると再描画される浮遊ネームタグ
   private nameTex!: DynamicTexture;
   private namePlane!: Mesh;   // 浮遊ネームタグ。HUD_OPTS.showNamesがオフのとき非表示
-  private readonly teamRGB: { r: number; g: number; b: number };
   // ユニフォームキットのマテリアル — キット切替時にapplyUniform()でライブに再着色
   private topMat!: StandardMaterial;
   private bottomMat!: StandardMaterial;
@@ -327,9 +326,6 @@ export class Player {
     this.offAction = offActionOf(def.evalRole);
     this.defRole = def.defRole;
     this.choiceRank = def.choiceRank;
-
-    const c = TEAM_COLORS[team];
-    this.teamRGB = c;
 
     this.root = new TransformNode(`p_${team}_${idx}`, scene);
 

@@ -2,10 +2,8 @@
 // 向き（updateFacing）とネット演出（tickSwish/swishNet）を反映する描画寄り処理。
 // syncAll は全選手の visual sync を回す。状態は Game に集約し各関数は game を受け取る。
 // applyModelAll/applyUniforms/syncVisuals は main.ts 向け public API として Game 残置。
-import { Vector3 } from "@babylonjs/core";
-import { Player } from "../player";
-import { RIM, COURT, TEAM_COLORS } from "../config";
-import { clamp, dist2D, dist2DTo, moveToward2D, rand } from "../util";
+import { TEAM_COLORS } from "../config";
+import { dist2D, dist2DTo } from "../util";
 import { rate } from "../attributes";
 import { hoopIndex } from "../court";
 import { poseHands } from "./poses";

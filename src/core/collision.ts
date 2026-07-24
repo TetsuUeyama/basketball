@@ -2,7 +2,7 @@
 // の重み(holdWeight: ボール保持者やパサーは踏ん張る)。毎フレーム updateLive から呼ぶ。
 // 状態は Game に集約し各関数は第一引数 game を受け取る。
 import { Player } from "../player";
-import { clamp, dist2D, rand } from "../util";
+import { rand } from "../util";
 import { rate } from "../attributes";
 import type { Game } from "../game";
 

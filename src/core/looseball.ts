@@ -1,10 +1,9 @@
 // ルーズボール物理（方式B: GameState 集約）。空中/地面を転がる自由球の飛翔・反射、
 // 選手の追走、接触判定、確保(secureLoose)までを関数として集約。エントリ点である
 // goLoose/startRebound/leakOut/crashBoards は多所から使うため Game 残置。
-import { Vector3 } from "@babylonjs/core";
 import { Player } from "../player";
-import { RIM, COURT, SHOT_CLOCK, SHOT_CLOCK_PARTIAL } from "../config";
-import { clamp, dist2D, dist2DTo, moveToward2D, chance, rand } from "../util";
+import { COURT, SHOT_CLOCK, SHOT_CLOCK_PARTIAL } from "../config";
+import { dist2DTo, moveToward2D, chance, rand } from "../util";
 import { looseSecureChance } from "../reaction/rebound";
 import { rate } from "../attributes";
 import type { Game } from "../game";

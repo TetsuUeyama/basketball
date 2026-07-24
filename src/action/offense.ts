@@ -4,14 +4,13 @@
 // pickSide/setDriveSide/setDrive は Game 側に残置し game.X 経由で呼ぶ。
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../player";
-import { RIM, COURT, THREE_DIST, SHOT_CLOCK, PALM_HITBOX, MAX_PASS } from "../config";
+import { COURT, THREE_DIST, SHOT_CLOCK, PALM_HITBOX, MAX_PASS } from "../config";
 import { clamp, dist2D, dist2DTo, moveToward2D, chance, rand } from "../util";
-import { twWeight, gatherFor, effShootRange, wontLoadUp, reactionLag, palmRadius,
-  jukeDeception, jukeDiscipline, deepThreeOK, stripEdge, shotWindupFor } from "../eval";
-import { TACTICS, rate } from "../attributes";
+import { twWeight, gatherFor, effShootRange, wontLoadUp, reactionLag, palmRadius, jukeDeception, jukeDiscipline } from "../eval";
+import { rate } from "../attributes";
 import { denySmother } from "./defense";
 import { pass, passToReceiver } from "./passing";
-import { updateOffBallMotion, bestOpenSpot } from "./offball";
+import { updateOffBallMotion } from "./offball";
 import { shoot, finishAtRim } from "./shooting";
 import { laneVetoed, passRisk } from "../reaction/pass-risk";
 import { doubleTeamed } from "../core/reads";

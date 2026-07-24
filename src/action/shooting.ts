@@ -2,17 +2,14 @@
 // リムフィニッシュ、コンテスト/ブロック、シューティングファウル、アシスト評価までを
 // 関数として集約。状態は Game に集約し各関数は第一引数 game を受け取る。
 // contestLeap は defense からも使うため Game 残置（game.contestLeap 経由）。
-import { Vector3 } from "@babylonjs/core";
 import { Player } from "../player";
-import { RIM, COURT, THREE_DIST, SHOT_CLOCK, SHOT_CLOCK_PARTIAL, PALM_HITBOX, TEAM_COLORS, SHOT_SET_Y, SHOT_GATHER_Y } from "../config";
-import { clamp, dist2D, dist2DTo, moveToward2D, chance, rand } from "../util";
-import { palmRadius, twWeight, reactionLag, gatherFor, effShootRange, shotWindupFor,
-  stripEdge, deepThreeOK } from "../eval";
-import { TACTICS, rate } from "../attributes";
+import { RIM, THREE_DIST, PALM_HITBOX, SHOT_SET_Y, SHOT_GATHER_Y } from "../config";
+import { clamp, dist2D, moveToward2D, chance, rand } from "../util";
+import { shotWindupFor } from "../eval";
+import { rate } from "../attributes";
 import { jumpShotMakeProbability, rimFinishOutcome } from "../reaction/shot-outcome";
 import { bestBlocker, evadeBlockProbability } from "../reaction/contest-block";
 import { shootingFoulChance } from "../reaction/foul";
-import { looseSecureChance } from "../reaction/rebound";
 import { endQuarter } from "../core/gameflow";
 import { swishNet } from "../core/visuals";
 import { benchCheer } from "../core/bench";

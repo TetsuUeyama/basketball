@@ -1,6 +1,4 @@
-import {
-  Scene, MeshBuilder, StandardMaterial, Color3, DynamicTexture, Vector3, Mesh,
-} from "@babylonjs/core";
+import { Scene, MeshBuilder, StandardMaterial, Color3, DynamicTexture, Mesh } from "@babylonjs/core";
 import { COURT, RIM, THREE_DIST } from "./config";
 
 // フロア（ライン付き）、周囲のエプロン、両フープを構築する。

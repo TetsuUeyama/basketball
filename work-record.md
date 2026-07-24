@@ -4057,3 +4057,12 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - B の土台: mid と three を別エントリにし、各種別を独立にカーブ/頻度調整できる状態にした。
 - 検証: tsc✓ / vite build✓(14.55s) / headless 40試合 28.3・30.0(基準28-30内、式保持で挙動等価)。
 - ⚠️ 未コミット(74f32e3 の上に 306/307/308/309/本310)。
+
+## 2026-07-24 (311) 未使用 import・宣言の一掃（全ファイル）
+
+- ユーザー指摘「使っていないのに残っている import 等が多い」。tsc `--noUnusedLocals`(tsconfig非変更・CLI検査のみ)で全 src の未使用を権威的に洗い出し(59件/14ファイル)、除去。
+- **未使用 named import 約63件**をスクリプト除去(unused.txt を解析→import文から該当名のみ削除、空になれば行ごと削除、6192の全未使用importも展開して除去)。対象: action/shooting(15)・core/visuals(7)・action/offense(6)・poses(5)・looseball(4)・player-react/facing/legs 等。過去の分割/翻訳で蓄積した死語 import。
+- **未使用の宣言(手動)**: player.ts の `teamRGB`(write-onlyフィールド＝宣言＋`const c`＋代入を削除、読み出しゼロ)。ui.ts の `openClubPicker`(**107行のデッドな旧クラブ選択UIメソッド**、呼び出しゼロ＝コメントごと削除)。closeClubPicker/clubPicker は他所(行1019)で使用中のためカスケードなし。
+- 未使用**パラメータ**(poses等の未使用 game 引数、SHOT_PARAMS の _f 等)は方式Aの統一シグネチャ維持のため除去せず据え置き。
+- 検証: tsc✓ / tsc --noUnusedLocals=**残0** / vite build✓(18.67s) / headless 40試合 29.0(基準内)。未使用コード除去のみ＝挙動不変。
+- ⚠️ 未コミット(0d2775c の上に本311)。openClubPicker は git 履歴から復元可能。
