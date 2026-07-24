@@ -6,9 +6,9 @@ import { RIM, PALM_HITBOX } from "../config";
 import { rate } from "../attributes";
 import { clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";
 import { twWeight, palmRadius, reactionLag, effShootRange, stripEdge } from "../eval";
-import { reachInFoulRate } from "../resolution/foul";
+import { reachInFoulRate } from "../reaction/foul";
 import { pickDefScheme, runZoneDefense, runPress } from "./defense-schemes";
-import { defensiveFoul } from "./deadball";
+import { defensiveFoul } from "../core/deadball";
 import type { Game } from "../game";
 
 // この守備者が今どれだけ守備で動くか。オフェンスのスター(高オフェンス優先度)は脚を
@@ -16,7 +16,7 @@ import type { Game } from "../game";
 export function defEffort(game: Game, d: Player, protect: Vector3): number {
   if (game.quarter >= 4 && Math.abs(game.score[0] - game.score[1]) <= 6) return 1;   // 終盤接戦
   if (d.lockDef) return 1;                                  // 常時全力ロール
-  const nearGoal = clamp(1 - dist2D(d.pos, protect) / 9, 0, 1); // 1 at the rim
+  const nearGoal = clamp(1 - dist2D(d.pos, protect) / 9, 0, 1); // リムで1
   // 守備ロールのギア(優先): 省エネは脚を温存、ツーウェイ/バランスは多く出す
   if (d.defEffortGear !== undefined) {
     return clamp(d.defEffortGear + (1 - d.defEffortGear) * nearGoal, 0, 1);
@@ -24,7 +24,7 @@ export function defEffort(game: Game, d: Player, protect: Vector3): number {
   // 旧フォールバック(defRole未設定): オフェンスのスターは少し流す
   if (d.evalRole === "ロックダウン" || d.evalRole === "スイッチディフェンダー"
     || d.evalRole === "エナジーガイ" || d.evalRole === "3&D") return 1;
-  const star = clamp((d.offPriority - 0.45) / 0.4, 0, 1);  // 0 role .. 1 star
+  const star = clamp((d.offPriority - 0.45) / 0.4, 0, 1);  // 0=ロール .. 1=スター
   if (star <= 0) return 1;
   const e = 0.68 + (0.9 - 0.68) * nearGoal;   // 流し 0.68 .. ゴール前 0.9
   return 1 - star * (1 - e);
@@ -69,7 +69,7 @@ export function defendOnBall(game: Game, dt: number, d: Player, man: Player, pro
 
   const dx = protect.x - man.pos.x, dz = protect.z - man.pos.z;
   const len = Math.hypot(dx, dz) || 1;
-  const ux = dx / len, uz = dz / len;        // handler -> basket
+  const ux = dx / len, uz = dz / len;        // ハンドラー -> ゴール
   // lean はこのデュエルの横軸に乗る。world 軸を最新に保ち movement(leanFactor)へ反映。
   d.leanAxisX = -uz; d.leanAxisZ = ux;
 
@@ -79,9 +79,9 @@ export function defendOnBall(game: Game, dt: number, d: Player, man: Player, pro
   // 密着限界: どこまで詰めるかは守備能力 vs 相手のオフェンス能力。深い(ゴール近い)ほど
   // 全員がタイトに(レイアップは絶対に許さない)、高い位置ではミスマッチが大きなサグに。
   const diff = clamp(rate(d.attr.defense) - rate(man.attr.offense), -0.5, 0.5);
-  const depth = clamp((dist2D(man.pos, protect) - 3) / 6, 0, 1);  // 0 at the rim .. 1 beyond ~9m
+  const depth = clamp((dist2D(man.pos, protect) - 3) / 6, 0, 1);  // リムで0 .. 約9m超で1
   let gap = postUp
-    ? 0.45 - game.tactics[d.team].defense.pressure * 0.1   // ~0.35 (tight) on the post
+    ? 0.45 - game.tactics[d.team].defense.pressure * 0.1   // ポストでは約0.35(タイト)
     : (1.25 - game.tactics[d.team].defense.pressure * 0.35 - diff * 0.7)
       * (0.45 + 0.55 * depth);
   if (d.has("manMark")) gap *= 0.85;
@@ -346,10 +346,10 @@ export function runDefenseDuringDeadish(game: Game, dt: number): void {
 // stealLunge)と、密集からのはたき(swarmStrips)。実際の奪取確定は Game.steal。
 // ---------------------------------------------------------------------------
 
-  // Off-ball defenders who have collapsed onto the ball-handler ALSO dig at it,
-  // so being swarmed by 2-3 is genuinely dangerous for a poor handler and barely
-  // a bother for a great one (the on-ball defender's own poke is in runDefense).
-  // Easier to strip while the ball is down at the floor between dribbles.
+  // ハンドラーに寄せてきたオフボール守備者もボールを掘る。2〜3人に群がられると
+  // 下手なハンドラーには本当に危険で、上手い選手にはほとんど苦にならない
+  // (オンボール守備者自身のはたきは runDefense 内)。
+  // ドリブルの合間、ボールが床近くにある時ほどはたきやすい。
 export function swarmStrips(game: Game, dt: number): void {
     const h = game.handler;
     if (!h || game.ballMode !== "held") return;
@@ -365,93 +365,90 @@ export function swarmStrips(game: Game, dt: number): void {
     }
   }
 
-  // 収まる前のスティール: while the receiver is still corralling a bobbled catch
-  // (gatherT), the ball is loose in his hands — any defender right on him can dig
-  // it out and knock it away (a live loose ball, not a clean pick). The worse the
-  // bobble (deeper into the 硬直) and the weaker his 技術 vs the defender's hands,
-  // the more likely. A clean catch (gatherT≈0) is never exposed this way.
+  // 収まる前のスティール: レシーバーがまだ弾いたキャッチ(gatherT)を捕まえきれて
+  // いない間、ボールは手の中で不安定 — 密着した守備者なら誰でも掘り出してはじく
+  // (綺麗なピックではなくライブのルーズボール)。もたつき(硬直の深さ)が大きく、技術が
+  // 守備者の手に対して弱いほど起こりやすい。綺麗なキャッチ(gatherT≈0)ではこの露出は無い。
 export function catchStrips(game: Game, dt: number): void {
     const h = game.handler;
     if (!h || game.ballMode !== "held" || h.gatherT <= 0) return;
-    const bobble = clamp(h.gatherT * 2.4, 0.2, 1.3);       // how loose the ball still is
+    const bobble = clamp(h.gatherT * 2.4, 0.2, 1.3);       // ボールがまだどれだけ不安定か
     const b = game.ball.pos;
-    // the man guarding him JUMPS the bobble: he steps in and digs at the loose
-    // ball (the reach pose is in poseHands, gated on the same gatherT). A help
-    // defender close by can also poke, but only the primary lunges in.
+    // 担当守備者がもたつきに跳びかかる: 踏み込んでルーズボールを掘る(リーチのポーズは
+    // poseHands 内、同じ gatherT でゲート)。近くのヘルプ守備者も突けるが、飛び込むのは
+    // 主担当のみ。
     const onBall = game.onBallDefender(h);
-    // how far the receiver has TURNED to shield the ball (0 = just caught, exposed
-    // out front; 1 = tucked to the far hip). A fast handler/short gather shields
-    // almost instantly; a bobbled catch stays exposed longer.
+    // レシーバーがボールを隠すためにどれだけ体を回したか(0 = 取った直後で前に露出、
+    // 1 = 遠い腰に収めた)。速いハンドラー/短いギャザーはほぼ即座に隠す。弾いた
+    // キャッチは長く露出したまま。
     const shielded = h.gatherDur > 0 ? clamp(1 - h.gatherT / h.gatherDur, 0, 1) : 1;
     const exposed = clamp(1 - shielded, 0, 1);
     for (const d of game.teamPlayers(1 - h.team)) {
       if (d.airborne) continue;
       const gap = dist2D(d.pos, h.pos);
       if (gap > 1.8) continue;
-      // lunge in to attack the loose ball (don't crawl onto his back)
+      // ルーズボールを攻めに飛び込む(背中に這い上がらない)
       if (d === onBall && gap > 0.75) moveToward2D(d.pos, b.x, b.z, d.accelSpeed(dt, 1.2) * dt * 0.8);
-      // CONTACT はじき: his hand REACHES the ball while it's still EXPOSED (not yet
-      // shielded) → he BATS it away (a live loose ball that sprays off, not popped
-      // to him). The race is his REACTION/reach vs the receiver's shield turn: a
-      // fast-reacting man in contact gets there before it's tucked; once shielded
-      // (exposed → 0) it's safe, and a secure handler (技術) protects it anyway.
+      // CONTACT はじき: まだ露出している(隠されていない)うちに手がボールに届く
+      // → はじく(彼に収まるのではなく飛び散るライブのルーズボール)。競争は
+      // 反応/リーチ vs レシーバーの隠す回転: 密着して反応の速い者は収められる前に届く。
+      // 一度隠されれば(露出→0)安全で、確かなハンドラー(技術)はいずれにせよ守る。
       const toBall = dist2D(d.pos, b);
       if (toBall < 0.5) {
         const reach = 0.35 + rate(d.attr.reaction) * 0.65 - rate(h.attr.handling) * 0.4;
         if (chance(clamp(reach, 0.05, 0.9) * exposed * dt * 18)) { deflectCatch(game, h, d); return; }
       } else if (toBall < 1.15 && d.landT <= 0 && d.plantT <= 0) {
-        // JUST out of reach → 平行ジャンプステップ: he GAMBLES a lateral hop to the
-        // ball (reaction/aggression decide if he goes). If his hand gets there he bats
-        // it away; either way the lunge is committed (crossover-plant 硬直 in stealLunge).
+        // 届くか届かないか → 平行ジャンプステップ: ボールへ横っ飛びをギャンブル
+        // (反応/攻撃性が行くか決める)。手が届けばはじく。いずれにせよ飛び込みは
+        // 確定(stealLunge のクロスオーバープラント硬直)。
         const gamble = rate(d.attr.reaction) * 0.5 + rate(d.attr.aggression) * 0.35;
         if (chance(clamp(gamble, 0.05, 0.9) * exposed * dt * 6)) {
           stealLunge(game, d, b.x, b.z);
           if (chance(clamp(0.7 - rate(h.attr.handling) * 0.5, 0.15, 0.8) * exposed)) { deflectCatch(game, h, d); return; }
-          continue;   // he committed the hop but didn't get a clean hand on it
+          continue;   // 飛び込みは仕掛けたが、綺麗に手を掛けられなかった
         }
       }
       const close = 1 - clamp(gap / 1.8, 0, 1);
-      const edge = 0.18 + stripEdge(d, h) * 0.65;     // defender hands vs handler security
+      const edge = 0.18 + stripEdge(d, h) * 0.65;     // 守備者の手 vs ハンドラーの安全性
       if (chance(Math.max(0, edge) * close * bobble * exposed * dt)) { deflectCatch(game, h, d); return; }
     }
   }
 
-  // A hand on the ball at the catch BATS it AWAY — a live loose ball that sprays
-  // off in a mostly-random direction (a deflection), NOT popped cleanly to the
-  // defender the way a dribble strip is. Contested by everyone once it lands; the
-  // steal/turnover is only credited when someone secures it (secureLoose).
+  // キャッチ際にボールに触れた手がはじく — ほぼランダムな方向へ飛び散るライブの
+  // ルーズボール(はじき)であって、ドリブルのはたきのように守備者へ綺麗に収まるの
+  // ではない。着地すれば全員が競り合う。スティール/ターンオーバーは誰かが確保した
+  // 時(secureLoose)にのみ記録される。
 export function deflectCatch(game: Game, h: Player, d: Player): void {
-    // The deflection depends on WHERE the hand caught the ball. A hand coming up
-    // UNDER it flicks it UP; a hand clipping its SIDE sprays it out roughly PARALLEL
-    // to the floor; a hand slapping down over the TOP knocks it DOWN to skid away.
-    // Direction is random horizontally; power varies from a soft nick to a hard swat.
+    // はじき方は手がボールのどこを捉えたかで決まる。下から入った手は上へ弾き、
+    // 側面をかすめた手はほぼ床と平行に飛ばし、上から叩いた手は下へ叩き落として
+    // 転がす。方向は水平にランダム。威力は軽く触れる程度から強打まで様々。
     const ang = rand(0, Math.PI * 2);
-    const ballY = clamp(game.ball.pos.y, 0.35, 1.4);   // start from where the ball ACTUALLY was
+    const ballY = clamp(game.ball.pos.y, 0.35, 1.4);   // ボールが実際に在った位置から始める
     const contact = rand(0, 1);
     let vy: number, horiz: number;
-    if (contact < 0.34) {                 // caught from UNDER → pops up and out
+    if (contact < 0.34) {                 // 下から捉えた → 上外へ跳ねる
       vy = rand(2.4, 4.6); horiz = rand(1.0, 3.2);
-    } else if (contact < 0.67) {          // clipped on the SIDE → flies out ~parallel
+    } else if (contact < 0.67) {          // 側面をかすめた → ほぼ平行に飛ぶ
       vy = rand(-0.4, 0.9); horiz = rand(4.2, 7.5);
-    } else {                              // slapped down over the TOP → knocked to the floor
+    } else {                              // 上から叩いた → 床へ叩き落とす
       vy = rand(-2.6, -0.6); horiz = rand(2.0, 5.0);
     }
     game.ball.pos.set(h.pos.x, ballY, h.pos.z);
     game.ball.vel.set(Math.cos(ang) * horiz, vy, Math.sin(ang) * horiz);
     game.lastTouch = d;
-    h.touchCool = 0.5;                             // knocked off the catch — can't re-grab instantly
+    h.touchCool = 0.5;                             // キャッチをはじかれた — すぐには再確保できない
     d.digReach(new Vector3(game.ball.pos.x, 0.9, game.ball.pos.z));
     game.goLoose(h.team, 1.8, { stealBy: d, victim: h, grabAfter: 0.6 });
   }
 
-  // 平行ジャンプステップ: a steal from JUST out of reach — the defender pushes off
-  // and hops LATERALLY to the ball (a diagonal jump-step, low, staying square), his
-  // hand landing on it. A committed gamble, so the recovery uses the crossover PLANT
-  // logic (動き直し) — the same 0.3 s (quick) .. 2.5 s (slow) 硬直 as a hard cut.
+  // 平行ジャンプステップ: 届くか届かないかの距離からのスティール — 守備者が踏み切って
+  // ボールへ横っ飛び(低く、正対を保った斜めのジャンプステップ)し、手を乗せる。
+  // 確定したギャンブルなので、復帰はクロスオーバーのプラント処理(動き直し)を使う —
+  // 鋭いカットと同じ 0.3秒(速い) .. 2.5秒(遅い) の硬直。
 export function stealLunge(game: Game, d: Player, tx: number, tz: number): void {
     const dx = tx - d.pos.x, dz = tz - d.pos.z;
     const gap = Math.hypot(dx, dz) || 1;
-    const leap = clamp(gap - 0.25, 0, 0.95);       // hop that lands his hand at the ball
-    d.jump(0.16, 0.3, (dx / gap) * leap, (dz / gap) * leap);   // low PARALLEL jump-step
-    d.setPlant(0.3 + (1 - rate(d.attr.agility)) * 2.2);        // crossover-plant 硬直
+    const leap = clamp(gap - 0.25, 0, 0.95);       // 手がボールに乗る跳躍
+    d.jump(0.16, 0.3, (dx / gap) * leap, (dz / gap) * leap);   // 低い平行ジャンプステップ
+    d.setPlant(0.3 + (1 - rate(d.attr.agility)) * 2.2);        // クロスオーバープラント硬直
   }

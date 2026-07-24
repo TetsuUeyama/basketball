@@ -1,8 +1,8 @@
-// Per-CLUB uniforms: each real club's HOME and AWAY kit, coloured from its
-// actual team colours (identified by club name + league). Four parts each:
-// top (上半身) / bottom (下半身/shorts) / sleeve (そで+上腕) / shoes (シューズ).
-// Keyed by the exact club name in clubdb; uniformOf() falls back to the
-// team-slot default (BLAZE/WAVE) for a random, non-club roster.
+// クラブ別ユニフォーム: 各実在クラブのホーム/アウェイのキット。実際のチームカラー
+// （クラブ名＋リーグで識別）で色付けする。各キットは4パーツ:
+// top（上半身）/ bottom（下半身/ショーツ）/ sleeve（そで+上腕）/ shoes（シューズ）。
+// clubdb の正確なクラブ名をキーとする。uniformOf() は、クラブ外のランダムな
+// ロスターに対してはチームスロットの既定値（BLAZE/WAVE）にフォールバックする。
 import type { Uniform, RGB } from "./config";
 
 const x = (h: string): RGB => ({
@@ -10,14 +10,14 @@ const x = (h: string): RGB => ({
   g: parseInt(h.slice(2, 4), 16) / 255,
   b: parseInt(h.slice(4, 6), 16) / 255,
 });
-// kit(top, bottom, sleeve, shoes) — all hex "rrggbb"
+// kit(top, bottom, sleeve, shoes) — すべて16進数 "rrggbb"
 const k = (t: string, b: string, s: string, sh: string): Uniform =>
   ({ top: x(t), bottom: x(b), sleeve: x(s), shoes: x(sh) });
 
-const W = "f2f2f2", K = "1a1a1a";   // default home shoe (white) / away shoe (dark)
+const W = "f2f2f2", K = "1a1a1a";   // 既定のホームシューズ（白）/ アウェイシューズ（黒）
 
 export const CLUB_KITS: Record<string, [Uniform, Uniform]> = {
-  // ===== England =====
+  // ===== イングランド =====
   "アーセナル":        [k("e01414", "ffffff", "ffffff", W), k("f4e04a", "12213f", "12213f", K)],
   "エヴァートン":      [k("11317a", "ffffff", "11317a", W), k("f0e14a", "1a1a1a", "f0e14a", K)],
   "マンチェスター・C": [k("6cabdd", "ffffff", "6cabdd", W), k("14202e", "14202e", "14202e", K)],
@@ -39,7 +39,7 @@ export const CLUB_KITS: Record<string, [Uniform, Uniform]> = {
   "サンダーランド":    [k("d21024", "d21024", "ffffff", W), k("1a1a1a", "1a1a1a", "1a1a1a", K)],
   "ウエスト・ハム・U": [k("7a1030", "12213f", "6cabdd", W), k("6cabdd", "12213f", "6cabdd", K)],
 
-  // ===== Italy =====
+  // ===== イタリア =====
   "インテル":          [k("1a1f6e", "1a1a1a", "1a1a1a", W), k("f2f2f2", "1a1f6e", "f2f2f2", K)],
   "ACミラン":          [k("bd1220", "1a1a1a", "1a1a1a", W), k("f2f2f2", "1a1a1a", "f2f2f2", K)],
   "ASローマ":          [k("8a1a2a", "8a1a2a", "e8a020", W), k("f2e6c8", "8a1a2a", "f2e6c8", K)],
@@ -62,7 +62,7 @@ export const CLUB_KITS: Record<string, [Uniform, Uniform]> = {
   "パルマ":            [k("f0e84a", "12213f", "12213f", K), k("ffffff", "12213f", "12213f", K)],
   "レッチェ":          [k("f0d84a", "d01824", "d01824", K), k("d01824", "f0d84a", "d01824", K)],
 
-  // ===== Spain =====
+  // ===== スペイン =====
   "バルセロナ":        [k("14235a", "14235a", "8a1030", W), k("f28a1a", "14235a", "f28a1a", K)],
   "レアル・マドリッド": [k("f6f6f6", "f6f6f6", "f6f6f6", W), k("2a2a2a", "2a2a2a", "2a2a2a", K)],
   "レアル・サラゴサ":  [k("ffffff", "12213f", "1a4ba0", W), k("12213f", "12213f", "12213f", K)],
@@ -88,7 +88,7 @@ export const CLUB_KITS: Record<string, [Uniform, Uniform]> = {
   "デポルティボ・クエンカ": [k("d01828", "1a1a1a", "d01828", W), k("1a1a1a", "d01828", "1a1a1a", K)],
   "ラシン・サンタンデール": [k("2a8a3a", "ffffff", "ffffff", W), k("1a1a1a", "2a8a3a", "1a1a1a", K)],
 
-  // ===== Netherlands =====
+  // ===== オランダ =====
   "ローダJC":          [k("f0d020", "1a1a1a", "1a1a1a", K), k("1a1a1a", "f0d020", "1a1a1a", K)],
   "フェイエノールト":  [k("d01828", "1a1a1a", "ffffff", K), k("f2f2f2", "1a1a1a", "d01828", K)],
   "VVVフェンロ":       [k("f0d020", "1a1a1a", "1a1a1a", K), k("1a1a1a", "f0d020", "1a1a1a", K)],
@@ -108,7 +108,7 @@ export const CLUB_KITS: Record<string, [Uniform, Uniform]> = {
   "FCトゥウェンテ":    [k("d01828", "ffffff", "d01828", W), k("1a1a1a", "d01828", "1a1a1a", K)],
   "フィテッセ":        [k("1a1a1a", "1a1a1a", "f0d020", K), k("f0d020", "1a1a1a", "f0d020", K)],
 
-  // ===== France =====
+  // ===== フランス =====
   "ヴァランシアンヌ":  [k("d01828", "ffffff", "1a1a1a", W), k("1a1a1a", "d01828", "1a1a1a", K)],
   "カーン":            [k("d01828", "12213f", "12213f", W), k("f2f2f2", "12213f", "f2f2f2", K)],
   "リヨン":            [k("ffffff", "ffffff", "1a4ba0", W), k("12213f", "d01828", "12213f", K)],
@@ -130,7 +130,7 @@ export const CLUB_KITS: Record<string, [Uniform, Uniform]> = {
   "ACアルル":          [k("1a56b0", "ffffff", "1a56b0", W), k("f2f2f2", "1a56b0", "f2f2f2", K)],
   "スタード・レンヌ":  [k("d01828", "1a1a1a", "1a1a1a", W), k("f2f2f2", "1a1a1a", "d01828", K)],
 
-  // ===== League A (Europe misc) =====
+  // ===== 他リーグA（欧州その他） =====
   "ベンフィカ":        [k("d01828", "ffffff", "d01828", W), k("2a2a2a", "d01828", "2a2a2a", K)],
   "FCポルト":          [k("1a4ba0", "ffffff", "1a4ba0", W), k("1a1a1a", "1a4ba0", "1a1a1a", K)],
   "オリンピアコス":    [k("d01828", "ffffff", "d01828", W), k("1a1a1a", "d01828", "1a1a1a", K)],
@@ -146,7 +146,7 @@ export const CLUB_KITS: Record<string, [Uniform, Uniform]> = {
   "レッドスター":      [k("d01828", "ffffff", "d01828", W), k("f2f2f2", "d01828", "f2f2f2", K)],
   "セルティック":      [k("1a8a4a", "ffffff", "ffffff", W), k("f0d84a", "1a8a4a", "f0d84a", K)],
 
-  // ===== Argentina =====
+  // ===== アルゼンチン =====
   "CAコロン":          [k("d01828", "1a1a1a", "1a1a1a", W), k("f2f2f2", "1a1a1a", "d01828", K)],
   "ベレス・サルスフィエルド": [k("ffffff", "ffffff", "1a4ba0", W), k("1a4ba0", "ffffff", "1a4ba0", K)],
   "エストゥディアンテス・LP": [k("d01828", "1a1a1a", "ffffff", W), k("1a1a1a", "d01828", "1a1a1a", K)],
@@ -155,71 +155,71 @@ export const CLUB_KITS: Record<string, [Uniform, Uniform]> = {
   "ニューウェルズ・OB": [k("d01828", "1a1a1a", "1a1a1a", W), k("f2f2f2", "1a1a1a", "d01828", K)],
   "ボカ・ジュニオルス": [k("12285a", "12285a", "e8b020", W), k("f0d020", "12285a", "f0d020", K)],
 
-  // ===== Brazil =====
+  // ===== ブラジル =====
   "コリンチャンス":    [k("f2f2f2", "1a1a1a", "1a1a1a", W), k("1a1a1a", "f2f2f2", "1a1a1a", K)],
   "フラメンゴ":        [k("c81828", "1a1a1a", "1a1a1a", W), k("f2f2f2", "c81828", "1a1a1a", K)],
   "サン・パウロFC":    [k("ffffff", "1a1a1a", "d01828", W), k("d01828", "1a1a1a", "d01828", K)],
   "SCブラガ":          [k("c81828", "ffffff", "c81828", W), k("1a1a1a", "c81828", "1a1a1a", K)],
   "クルゼイロ":        [k("1a4ba0", "ffffff", "1a4ba0", W), k("f2f2f2", "1a4ba0", "f2f2f2", K)],
 
-  // ===== Mexico =====
+  // ===== メキシコ =====
   "モナルカス・モレリア": [k("c81828", "f0d020", "c81828", K), k("f0d020", "c81828", "f0d020", K)],
   "サン・ルイスFC":    [k("c81828", "ffffff", "c81828", W), k("f2f2f2", "c81828", "f2f2f2", K)],
   "CFモンテレイ":      [k("12213f", "ffffff", "12213f", W), k("f2f2f2", "12213f", "f2f2f2", K)],
   "CDグアダラハラ":    [k("c81828", "12213f", "ffffff", W), k("f2f2f2", "12213f", "c81828", K)],
   "エストゥディアンテス・TC": [k("1a1a1a", "1a1a1a", "c81828", W), k("c81828", "1a1a1a", "c81828", K)],
 
-  // ===== Uruguay =====
+  // ===== ウルグアイ =====
   "クラブ・ナシオナル(U)": [k("ffffff", "12417a", "12417a", W), k("12417a", "ffffff", "12417a", K)],
   "RCモンテビデオ":    [k("1a7a3a", "ffffff", "d01828", W), k("f2f2f2", "1a7a3a", "d01828", K)],
   "CAセロ":            [k("6cabdd", "ffffff", "6cabdd", W), k("12417a", "6cabdd", "12417a", K)],
 
-  // ===== Chile =====
+  // ===== チリ =====
   "ウニベルシダ・デ・チリ": [k("12417a", "ffffff", "12417a", W), k("f2f2f2", "12417a", "f2f2f2", K)],
   "ウニベルシダ・カトリカ": [k("ffffff", "12417a", "12417a", W), k("12417a", "ffffff", "12417a", K)],
   "CSDコロ・コロ":     [k("ffffff", "1a1a1a", "1a1a1a", W), k("1a1a1a", "ffffff", "1a1a1a", K)],
 
-  // ===== Paraguay =====
+  // ===== パラグアイ =====
   "クラブ・リベルタ":  [k("1a1a1a", "1a1a1a", "ffffff", W), k("f2f2f2", "1a1a1a", "f2f2f2", K)],
   "クラブ・ナシオナル(P)": [k("1a4ba0", "ffffff", "1a4ba0", W), k("f2f2f2", "1a4ba0", "f2f2f2", K)],
   "セロ・ポルテーニョ": [k("d01828", "12285a", "12285a", W), k("f2f2f2", "d01828", "12285a", K)],
 
-  // ===== Peru =====
+  // ===== ペルー =====
   "ウニベルシタリオ・D": [k("f0ead0", "1a1a1a", "f0ead0", K), k("8a1030", "f0ead0", "8a1030", K)],
   "アリアンサ・リマ":  [k("12417a", "ffffff", "12417a", W), k("f0d84a", "12417a", "f0d84a", K)],
   "ファン・アウリチ":  [k("f0d020", "1a1a1a", "f0d020", K), k("1a1a1a", "f0d020", "1a1a1a", K)],
 
-  // ===== Bolivia =====
+  // ===== ボリビア =====
   "クラブ・ブルーミング": [k("6cabdd", "ffffff", "6cabdd", W), k("f2f2f2", "6cabdd", "f2f2f2", K)],
   "レアル・ポトシ":    [k("7a3ca8", "ffffff", "7a3ca8", W), k("f2f2f2", "7a3ca8", "f2f2f2", K)],
   "クラブ・ボリバル":  [k("2a72c8", "ffffff", "2a72c8", W), k("f2f2f2", "2a72c8", "f2f2f2", K)],
 
-  // ===== Russia =====
+  // ===== ロシア =====
   "スパルタク・モスクワ": [k("d01828", "ffffff", "ffffff", W), k("1a1a1a", "d01828", "1a1a1a", K)],
   "ゼニト":            [k("2a86d8", "ffffff", "2a86d8", W), k("12213f", "2a86d8", "12213f", K)],
   "ルビン・カザン":    [k("8a1030", "1a7a3a", "8a1030", W), k("1a7a3a", "8a1030", "1a7a3a", K)],
 
-  // ===== Greece =====
+  // ===== ギリシャ =====
   "PAOKテッサロニキ":  [k("1a1a1a", "1a1a1a", "ffffff", W), k("f2f2f2", "1a1a1a", "f2f2f2", K)],
   "AEKアテネ":         [k("f0d020", "1a1a1a", "1a1a1a", K), k("1a1a1a", "f0d020", "1a1a1a", K)],
 
-  // ===== Colombia =====
+  // ===== コロンビア =====
   "アトレチコ・ジュニオール": [k("d01828", "ffffff", "1a1a1a", W), k("1a1a1a", "d01828", "1a1a1a", K)],
   "オンセ・カルダス":  [k("ffffff", "1a1a1a", "d01828", W), k("1a1a1a", "ffffff", "d01828", K)],
 
-  // ===== Czech =====
+  // ===== チェコ =====
   "スパルタ・プラハ":  [k("8a1030", "1a1a1a", "8a1030", W), k("f2f2f2", "8a1030", "f2f2f2", K)],
   "スラビア・プラハ":  [k("d01828", "ffffff", "ffffff", W), k("1a1a1a", "d01828", "1a1a1a", K)],
 
-  // ===== Germany =====
+  // ===== ドイツ =====
   "ブレーメン":        [k("1a8a4a", "ffffff", "1a8a4a", W), k("1a1a1a", "1a8a4a", "1a1a1a", K)],
   "バイエルン・ミュンヘン": [k("d21024", "d21024", "d21024", W), k("101014", "d21024", "101014", K)],
 
-  // ===== Belgium =====
+  // ===== ベルギー =====
   "クラブ・ブルージュ": [k("1a5ac0", "1a1a1a", "1a1a1a", W), k("f2f2f2", "1a5ac0", "f2f2f2", K)],
   "アンデルレヒト":    [k("7a3ca8", "ffffff", "7a3ca8", W), k("f2f2f2", "7a3ca8", "f2f2f2", K)],
 
-  // ===== Others (single-team leagues) =====
+  // ===== 単独リーグ =====
   "シャフタール・ドネツク": [k("f37a1a", "1a1a1a", "1a1a1a", K), k("1a1a1a", "f37a1a", "1a1a1a", K)],
   "CSエメルク":        [k("1a5ac0", "ffffff", "1a5ac0", W), k("f2f2f2", "1a5ac0", "f2f2f2", K)],
   "FCバーゼル":        [k("d01828", "12417a", "d01828", W), k("12417a", "d01828", "12417a", K)],

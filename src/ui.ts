@@ -14,8 +14,8 @@ const colorOf = (team: number): string => {
 
 type Phase = "title" | "pregame" | "playing" | "result";
 
-// Stats that pop a floating "＋" badge over a player's icon the moment he earns
-// them (score / assist / rebound / steal / block / turnover).
+// 選手がスタッツを記録した瞬間に、彼のアイコン上へ浮遊する「＋」バッジをポップ
+// させる対象スタッツ（得点 / アシスト / リバウンド / スティール / ブロック / ターンオーバー）。
 const POP_STATS: { key: keyof import("./player").Stats; label: string; color: string }[] = [
   { key: "pts", label: "P", color: "#63e08c" },
   { key: "ast", label: "A", color: "#5ec8ff" },
@@ -25,99 +25,99 @@ const POP_STATS: { key: keyof import("./player").Stats; label: string; color: st
   { key: "tov", label: "TO", color: "#ff6b6b" },
 ];
 
-// A DOM overlay with three screens: a pre-game roster editor, the in-game HUD,
-// and a final result screen with each player's box score.
+// 3画面を持つ DOM オーバーレイ: 試合前のロスターエディタ、試合中の HUD、
+// そして各選手のボックススコアを表示する最終リザルト画面。
 export class UI {
   private root: HTMLDivElement;
   private hud: HTMLDivElement;
   private titlePanel!: HTMLDivElement;
-  private chooser: HTMLDivElement | null = null;   // league/team selection wizard overlay
+  private chooser: HTMLDivElement | null = null;   // リーグ/チーム選択ウィザードのオーバーレイ
   private pregamePanel!: HTMLDivElement;
   private editorHost!: HTMLDivElement;
   private resultPanel!: HTMLDivElement;
   private resultScore!: HTMLDivElement;
   private resultWinner!: HTMLDivElement;
   private resultStats!: HTMLDivElement;
-  // result-screen tabs: team comparison ⇄ each team's box score
+  // リザルト画面のタブ: チーム比較 ⇄ 各チームのボックススコア
   private resultGame: Game | null = null;
   private resultTab: "team" | "blue" | "red" = "team";
   private resultContent: HTMLDivElement | null = null;
   private resultTabBtns: { key: "team" | "blue" | "red"; el: HTMLButtonElement }[] = [];
   private tooltip!: HTMLDivElement;
-  private tipHideT = 0;   // pending grace-period hide (see scheduleHideTip)
+  private tipHideT = 0;   // 猶予期間つきの非表示待ち（scheduleHideTip 参照）
   private tipTitle!: HTMLDivElement;
   private tipBody!: HTMLDivElement;
 
   private scoreA: HTMLSpanElement;
   private scoreB: HTMLSpanElement;
-  private nameA!: HTMLElement;       // scoreboard team label (left) — abbr once a club is picked
-  private nameB!: HTMLElement;       // scoreboard team label (right)
+  private nameA!: HTMLElement;       // スコアボードのチームラベル（左）— クラブ選択後は略称
+  private nameB!: HTMLElement;       // スコアボードのチームラベル（右）
   private clock: HTMLSpanElement;
   private quarter: HTMLSpanElement;
   private shot: HTMLSpanElement;
-  private shotBox!: HTMLDivElement;   // shot-clock container — flashes in the last 3s
+  private shotBox!: HTMLDivElement;   // ショットクロックのコンテナ — 残り3秒で点滅する
   private banner: HTMLDivElement;
-  private bannerKey = "";           // current banner content, to avoid rebuilding each frame
+  private bannerKey = "";           // 現在のバナー内容（毎フレームの再構築を避けるため）
   private subFeed!: HTMLDivElement;
   private speedBtns: HTMLButtonElement[] = [];
-  // bottom player bars: face icons for each team, toggling on-court ⇄ bench
+  // 下部の選手バー: 各チームの顔アイコン。コート上 ⇄ ベンチを切り替える
   private iconRows: HTMLDivElement[] = [];
   private iconTabs: HTMLButtonElement[][] = [[], []];
   private showBench: boolean[] = [false, false];
   private iconKey: string[] = ["", ""];
-  private iconEl = new Map<import("./player").Player, HTMLDivElement>(); // player → its current icon element
-  private iconStamina = new Map<import("./player").Player, { bar: HTMLDivElement; fill: HTMLDivElement }>(); // player → its icon stamina bar
-  private iconRole = new Map<import("./player").Player, HTMLDivElement>();   // player → its offence/defence role pill
-  private staminaBtn: HTMLButtonElement | null = null;   // HUD toggle: gauge on name tag ⇄ face icon
-  private namesBtn: HTMLButtonElement | null = null;     // HUD toggle: on-court name tags on ⇄ off
-  private modelBtn: HTMLButtonElement | null = null;     // HUD toggle: 人型 ⇄ どんぐり体形
-  private statSnap = new Map<import("./player").Player, number[]>();     // last-seen POP_STATS values
-  private controls!: HTMLDivElement;      // speed / RESTART row
-  private menuBtn!: HTMLButtonElement;    // ☰ hamburger — rides the top edge until the scoreboard reaches it
-  private camHint!: HTMLDivElement;       // "drag: orbit" hint — kept level with the ☰ on the left
-  private board!: HTMLDivElement;         // centred scoreboard (its width decides where the ☰ can sit)
-  private iconPanels: HTMLDivElement[] = []; // the two team face-icon panels
-  private layoutMode = "";                // "desktop" | "phone" — recomputed on resize
+  private iconEl = new Map<import("./player").Player, HTMLDivElement>(); // 選手 → 現在のアイコン要素
+  private iconStamina = new Map<import("./player").Player, { bar: HTMLDivElement; fill: HTMLDivElement }>(); // 選手 → アイコンの体力バー
+  private iconRole = new Map<import("./player").Player, HTMLDivElement>();   // 選手 → オフェンス/守備ロールのピル
+  private staminaBtn: HTMLButtonElement | null = null;   // HUD トグル: ゲージを名前タグ上 ⇄ 顔アイコン
+  private namesBtn: HTMLButtonElement | null = null;     // HUD トグル: コート上の名前タグ 表示 ⇄ 非表示
+  private modelBtn: HTMLButtonElement | null = null;     // HUD トグル: 人型 ⇄ どんぐり体形
+  private statSnap = new Map<import("./player").Player, number[]>();     // 最後に確認した POP_STATS の値
+  private controls!: HTMLDivElement;      // 速度 / RESTART の行
+  private menuBtn!: HTMLButtonElement;    // ☰ ハンバーガー — スコアボードが届くまでは上端に乗る
+  private camHint!: HTMLDivElement;       // 「drag: orbit」ヒント — 左側で ☰ と同じ高さに保つ
+  private board!: HTMLDivElement;         // 中央寄せのスコアボード（その幅が ☰ の位置を決める）
+  private iconPanels: HTMLDivElement[] = []; // 2チームの顔アイコンパネル
+  private layoutMode = "";                // "desktop" | "phone" — リサイズ時に再計算
 
   private phase: Phase = "pregame";
-  private playerCard!: HTMLDivElement;  // floating pregame detail card (hex chart)
-  private vsBoard: HTMLDivElement | null = null;  // VS strength board (avoid overlapping it)
-  private vsPreviewActive = false;                // a swap/role preview is currently on the board
-  private dragFrom: { team: number; idx: number } | null = null; // bar being carried
-  private dragGhost: HTMLDivElement | null = null;               // the carried name bar
-  private dragHl: HTMLElement | null = null;                     // highlighted drop row
-  // "carry" mode: an incoming DB player follows the cursor until dropped on a
-  // roster row of his team to replace that player (started from the picker).
+  private playerCard!: HTMLDivElement;  // 試合前の浮遊詳細カード（ヘックスチャート）
+  private vsBoard: HTMLDivElement | null = null;  // VS 戦力ボード（重ならないようにする）
+  private vsPreviewActive = false;                // 交代/ロールのプレビューがボード上に表示中
+  private dragFrom: { team: number; idx: number } | null = null; // 運搬中のバー
+  private dragGhost: HTMLDivElement | null = null;               // 運ばれている名前バー
+  private dragHl: HTMLElement | null = null;                     // ハイライトされたドロップ先の行
+  // 「carry」モード: DB から取り込む選手がカーソルに追従し、彼のチームのロスター
+  // 行にドロップして選手を入れ替えるまで続く（ピッカーから開始）。
   private carry: { team: number; dbp: DbPlayer } | null = null;
   private carryGhost: HTMLDivElement | null = null;
   private carryHint: HTMLDivElement | null = null;
   private carryHl: HTMLElement | null = null;
   private carryCleanup: (() => void) | null = null;
-  private rolePicker: HTMLDivElement | null = null;              // open 評価ロール menu
+  private rolePicker: HTMLDivElement | null = null;              // 開いている評価ロールメニュー
   private rolePickerCloser: ((e: PointerEvent) => void) | null = null;
-  private detailModal: HTMLDivElement | null = null;             // full-ratings modal
+  private detailModal: HTMLDivElement | null = null;             // 全能力値モーダル
   private playerPicker: HTMLDivElement | null = null;            // 4000+選手データベースからの選手交代モーダル
   private clubPicker: HTMLDivElement | null = null;              // 実クラブでロスターを組むモーダル
-  // the built-in team names, captured before any club rename so ランダム編成 can restore them
+  // ビルトインのチーム名。クラブ名への変更前に捕捉しておき、ランダム編成で復元できるようにする
   private static readonly DEFAULT_NAMES = [TEAM_NAMES[0], TEAM_NAMES[1]];
-  // Cached, OVR-sorted view of the whole database (built once on first open):
-  // { p, ovr, lower(name) } so keystroke filtering is a plain array scan.
+  // データベース全体を OVR 順にソートしたキャッシュビュー（初回オープン時に一度構築）:
+  // { p, ovr, lower(name) } なので、キーストロークによる絞り込みは単純な配列走査で済む。
   private dbIndex: { p: DbPlayer; ovr: number; lower: string }[] | null = null;
-  private rosterTab = 0;         // phone: which team's roster card is shown
-  private pregameMode = "";      // "phone" | "desktop" — re-render on crossing 640px
+  private rosterTab = 0;         // モバイル: どちらのチームのロスターカードを表示するか
+  private pregameMode = "";      // "phone" | "desktop" — 640px を跨いだら再描画
 
   speed = 1;
   onRestart: () => void = () => {};
   onStart: () => void = () => {};
   onBack: () => void = () => {};
-  onSetupLineups: () => void = () => {};   // opponent-aware DEFAULT five when a matchup is first set
-  onModelToggle: () => void = () => {};   // apply HUD_OPTS.model to every player
-  onUniformToggle: () => void = () => {};  // apply TEAM_UNIFORM (home/away) to every player
-  // frame ONE team on the 3D court during club selection (null = restore wide)
+  onSetupLineups: () => void = () => {};   // マッチアップが最初に決まったときの、相手を考慮した DEFAULT の5人
+  onModelToggle: () => void = () => {};   // HUD_OPTS.model を全選手に適用
+  onUniformToggle: () => void = () => {};  // TEAM_UNIFORM（ホーム/アウェイ）を全選手に適用
+  // クラブ選択中に3Dコート上の1チームだけをフレーミング（null = 全景に戻す）
   onShowcaseTeam: (team: number | null) => void = () => {};
-  // dual 3D uniform preview during club selection: render the home team's players
-  // into the `left` window rect and the away team's into `right` (cycling one at a
-  // time). null tears the preview down and restores the normal camera.
+  // クラブ選択中の3Dユニフォーム二画面プレビュー: ホームチームの選手を `left` の
+  // ウィンドウ矩形に、アウェイチームの選手を `right` に描画する（1人ずつ巡回）。
+  // null にするとプレビューを解体し、通常のカメラに戻す。
   onUniformPreview: (cfg: { left: DOMRect; right: DOMRect; leftTeam: number; rightTeam: number } | null) => void = () => {};
 
   get playing(): boolean {
@@ -127,8 +127,8 @@ export class UI {
   constructor() {
     const css = (el: HTMLElement, s: Partial<CSSStyleDeclaration>) => Object.assign(el.style, s);
 
-    // scrollable rows that must NOT grow when the scrollbar appears (the icon
-    // rows swap between a fitting and an overflowing list) hide the bar itself
+    // スクロールバーが現れても伸びてはいけないスクロール行（アイコン行は収まる
+    // リストとあふれるリストを切り替える）。バー自体を隠す
     const st = document.createElement("style");
     st.textContent =
       ".bball-hscroll{scrollbar-width:none;-ms-overflow-style:none}"
@@ -146,7 +146,7 @@ export class UI {
     css(this.hud, { position: "absolute", inset: "0", pointerEvents: "none" });
     this.root.appendChild(this.hud);
 
-    // ---- scoreboard ----
+    // ---- スコアボード ----
     const board = document.createElement("div");
     css(board, {
       position: "absolute", top: "14px", left: "50%", transform: "translateX(-50%)",
@@ -173,7 +173,7 @@ export class UI {
     this.scoreB = this.scoreEl(colB); board.appendChild(this.scoreB);
     this.nameB = this.teamBlock(teamAbbr(1), colB, "left"); board.appendChild(this.nameB);
 
-    // ---- shot clock ----
+    // ---- ショットクロック ----
     const sc = document.createElement("div");
     css(sc, {
       position: "absolute", top: "92px", left: "50%", transform: "translateX(-50%)",
@@ -185,9 +185,9 @@ export class UI {
     this.hud.appendChild(sc);
     this.shotBox = sc;
 
-    // ---- substitution feed (メンバーチェンジ) ----
-    // centre of the screen, just below the main event banner (FOUL etc.), so a
-    // foul banner and the resulting substitutions can show together
+    // ---- 交代フィード（メンバーチェンジ） ----
+    // 画面中央、メインのイベントバナー（FOUL 等）のすぐ下。ファウルのバナーと
+    // それに伴う交代を一緒に表示できるようにする
     this.subFeed = document.createElement("div");
     css(this.subFeed, {
       position: "absolute", top: "33%", left: "50%", transform: "translateX(-50%)",
@@ -196,16 +196,16 @@ export class UI {
     });
     this.hud.appendChild(this.subFeed);
 
-    // ---- event banner ----
+    // ---- イベントバナー ----
     this.banner = document.createElement("div");
     css(this.banner, {
       position: "absolute", top: "27%", left: "50%", transform: "translate(-50%,-50%)",
-      // responsive: full size on a wide view, shrinks as the window narrows
+      // レスポンシブ: 広い画面ではフルサイズ、ウィンドウが狭まると縮小
       fontSize: "clamp(28px,6.5vw,52px)", fontWeight: "800", letterSpacing: "2px", opacity: "0",
       textAlign: "center", transition: "opacity 0.2s", whiteSpace: "nowrap", maxWidth: "96vw",
-      // crisp dark outline (8-way) + a soft drop shadow, so the team-coloured text
-      // reads sharply against the court instead of blurring into it. text-shadow
-      // is inherited, so the scorer/assist sub-lines get the same outline.
+      // くっきりした暗い縁取り（8方向）+ 柔らかいドロップシャドウ。チームカラーの
+      // 文字がコートに溶け込まず鮮明に読めるようにする。text-shadow は継承される
+      // ため、得点者/アシストのサブ行も同じ縁取りになる。
       textShadow: [
         "1px 1px 0 #000", "-1px 1px 0 #000", "1px -1px 0 #000", "-1px -1px 0 #000",
         "0 2px 0 #000", "0 -2px 0 #000", "2px 0 0 #000", "-2px 0 0 #000",
@@ -214,9 +214,9 @@ export class UI {
     });
     this.hud.appendChild(this.banner);
 
-    // ---- controls: a hamburger menu at the right. It rides the top edge (level
-    // with the scoreboard) on a wide screen, and only drops below the board when
-    // the centred scoreboard grows wide enough to reach it (see positionMenu). ----
+    // ---- コントロール: 右側のハンバーガーメニュー。広い画面では上端（スコア
+    // ボードと同じ高さ）に乗り、中央寄せのスコアボードが届くほど広がったときだけ
+    // ボードの下に落ちる（positionMenu 参照）。 ----
     const menuBtn = this.button("☰");
     this.menuBtn = menuBtn;
     Object.assign(menuBtn.style, {
@@ -260,8 +260,8 @@ export class UI {
     this.refreshStaminaBtn();
     staminaBtn.onclick = () => {
       HUD_OPTS.staminaOn = HUD_OPTS.staminaOn === "name" ? "icon" : "name";
-      HUD_OPTS.rev++;                 // force every name tag to repaint
-      this.iconKey = ["", ""];        // force the icon rows to rebuild (bar shows/hides)
+      HUD_OPTS.rev++;                 // 全ての名前タグを再描画させる
+      this.iconKey = ["", ""];        // アイコン行を再構築させる（バーの表示/非表示）
       this.refreshStaminaBtn();
     };
     controls.appendChild(staminaBtn);
@@ -272,7 +272,7 @@ export class UI {
     this.refreshNamesBtn();
     namesBtn.onclick = () => {
       HUD_OPTS.showNames = !HUD_OPTS.showNames;
-      HUD_OPTS.rev++;                 // force every name tag to repaint (applies visibility)
+      HUD_OPTS.rev++;                 // 全ての名前タグを再描画させる（表示状態を反映）
       this.refreshNamesBtn();
     };
     controls.appendChild(namesBtn);
@@ -293,9 +293,9 @@ export class UI {
     controls.appendChild(restart);
 
     const hint = document.createElement("div");
-    // top-LEFT, kept level with the ☰ (positionMenu syncs its top). The bottom
-    // is taken by the face-icon HUD and the centred scoreboard overlaps a fixed
-    // top:10px, so it rides the same row as the menu, on the opposite side.
+    // 左上。☰ と同じ高さに保つ（positionMenu が top を同期させる）。下部は顔
+    // アイコン HUD に取られ、中央寄せのスコアボードは固定の top:10px と重なる
+    // ため、メニューと同じ行の反対側に乗せる。
     css(hint, {
       position: "absolute", top: "14px", left: "12px", fontSize: "12px",
       opacity: "0.5", pointerEvents: "none",
@@ -311,18 +311,18 @@ export class UI {
     this.buildResult();
     this.refreshSpeed();
     this.setPhase("title");
-    // rects are only valid after the first layout pass
+    // 矩形は最初のレイアウトパスの後でのみ有効
     requestAnimationFrame(() => this.positionMenu());
     window.addEventListener("resize", () => this.positionMenu());
   }
 
-  // A small floating explanation shown on hover, anchored under the header.
+  // ホバー時に表示される小さな浮遊説明。ヘッダーの下にアンカーされる。
   private buildTooltip(): void {
     const tip = document.createElement("div");
     Object.assign(tip.style, {
-      // fixed on <body> (NOT inside root): root is a fixed-position stacking
-      // context, so a tooltip inside it could never rise above the body-level
-      // pop-ups (role picker z80, drag ghost z70) it has to annotate
+      // <body> に fixed で配置（root の内側ではない）: root は fixed-position の
+      // スタッキングコンテキストなので、その内側のツールチップは、注釈すべき
+      // body レベルのポップアップ（ロールピッカー z80、ドラッグゴースト z70）より上に出られない
       position: "fixed", display: "none", maxWidth: "300px",
       background: "rgba(18,22,30,0.98)", border: "1px solid rgba(255,255,255,0.25)",
       borderRadius: "8px", padding: "10px 12px", pointerEvents: "none", zIndex: "90",
@@ -336,28 +336,28 @@ export class UI {
     Object.assign(this.tipBody.style, { fontSize: "12px", lineHeight: "1.65", opacity: "0.92" });
 
     tip.append(this.tipTitle, this.tipBody);
-    // the stat tip carries a button, so the tip itself must survive the mouse
-    // travelling onto it (hide is scheduled with a grace period instead)
+    // スタッツのツールチップはボタンを含むため、マウスがツールチップ上に移動
+    // しても消えてはならない（代わりに猶予期間つきで非表示をスケジュールする）
     tip.onmouseenter = () => { if (this.tipHideT) { window.clearTimeout(this.tipHideT); this.tipHideT = 0; } };
     tip.onmouseleave = () => this.hideTip();
     document.body.appendChild(tip);
     this.tooltip = tip;
   }
 
-  // Same floating tooltip, but with free-form title/body (role explanations
-  // and the like — anything not registered in INFO).
+  // 同じ浮遊ツールチップだが、自由形式のタイトル/本文（ロールの説明など —
+  // INFO に登録されていないもの全般）。
   private showTextTip(title: string, body: string, anchor: HTMLElement): void {
-    // showing a fresh tip cancels any pending grace-period hide left over from
-    // the icon/anchor the mouse just left — otherwise that stale timer fires
-    // and hides THIS tip (the "appears then vanishes" flicker between icons)
+    // 新しいツールチップを表示するときは、マウスが直前に離れたアイコン/アンカー
+    // に残っている猶予期間つきの非表示待ちをキャンセルする — さもないと古い
+    // タイマーが発火してこのツールチップを消してしまう（アイコン間で「出てすぐ消える」ちらつき）
     if (this.tipHideT) { window.clearTimeout(this.tipHideT); this.tipHideT = 0; }
     this.tipTitle.style.color = "#fff";
     this.tipTitle.textContent = title;
     this.tipBody.textContent = body;
     const tip = this.tooltip;
-    tip.style.pointerEvents = "none";   // a plain text tip carries no button
+    tip.style.pointerEvents = "none";   // 単なるテキストのツールチップはボタンを持たない
     tip.style.display = "block";
-    // anchor under the header, clamped to the viewport once its width is known
+    // ヘッダーの下にアンカーし、幅が判明したらビューポート内に収める
     const r = anchor.getBoundingClientRect();
     let left = r.left;
     const tw = tip.offsetWidth;
@@ -373,17 +373,17 @@ export class UI {
     this.tooltip.style.pointerEvents = "none";
   }
 
-  /** Hide the tooltip after a short grace period — cancelled if the mouse
-   *  arrives on the tooltip itself (it may hold a button). */
+  /** 短い猶予期間の後にツールチップを非表示にする — マウスがツールチップ自体
+   *  に到達した場合はキャンセルされる（ボタンを持つことがあるため）。 */
   private scheduleHideTip(): void {
     if (this.tipHideT) window.clearTimeout(this.tipHideT);
     this.tipHideT = window.setTimeout(() => { this.tipHideT = 0; this.hideTip(); }, 200);
   }
 
-  // Hover a player icon → show his live box score, floated ABOVE the icon (the
-  // icons sit near the bottom of the screen).
+  // 選手アイコンをホバー → 彼のライブなボックススコアを、アイコンの上に浮かせて
+  // 表示する（アイコンは画面下部付近にある）。
   private showStatTip(player: import("./player").Player, anchor: HTMLElement): void {
-    // cancel a stale grace-period hide from the icon just left (see showTextTip)
+    // 直前に離れたアイコンからの古い猶予期間つき非表示をキャンセル（showTextTip 参照）
     if (this.tipHideT) { window.clearTimeout(this.tipHideT); this.tipHideT = 0; }
     this.tipTitle.style.color = colorOf(player.team);
     this.tipTitle.textContent = `#${player.idx + 1}  ${player.name}`;
@@ -394,8 +394,8 @@ export class UI {
       `<div>${cell("PTS", s.pts)}${cell("REB", s.reb)}${cell("AST", s.ast)}</div>` +
       `<div>${cell("STL", s.stl)}${cell("BLK", s.blk)}${cell("TO", s.tov)}</div>` +
       `<div style="margin-top:3px;opacity:.8">FG ${s.fgm}/${s.fga}　MIN ${(s.min / 60).toFixed(1)}</div>`;
-    // ステータス確認 → the pregame full-ratings modal (25 ratings, hexagon,
-    // 特殊能力 and the hand-set 評価ロール) for this player
+    // ステータス確認 → この選手の試合前の全能力値モーダル（25 の能力値、
+    // ヘックスチャート、特殊能力、手動設定の評価ロール）
     const btn = this.button("ステータス確認");
     Object.assign(btn.style, {
       display: "block", width: "100%", marginTop: "7px", fontSize: "11px",
@@ -408,17 +408,17 @@ export class UI {
     };
     this.tipBody.appendChild(btn);
     const tip = this.tooltip;
-    tip.style.pointerEvents = "auto";   // the button must be clickable
+    tip.style.pointerEvents = "auto";   // ボタンをクリック可能にする必要がある
     tip.style.display = "block";
     const r = anchor.getBoundingClientRect();
     const tw = tip.offsetWidth, th = tip.offsetHeight;
     let left = r.left + r.width / 2 - tw / 2;
     left = Math.max(8, Math.min(left, window.innerWidth - 8 - tw));
     tip.style.left = `${left}px`;
-    tip.style.top = `${Math.max(8, r.top - th - 8)}px`;   // above the icon
+    tip.style.top = `${Math.max(8, r.top - th - 8)}px`;   // アイコンの上
   }
 
-  // ---- screens -----------------------------------------------------------
+  // ---- 画面 -----------------------------------------------------------
 
   private panel(): HTMLDivElement {
     const p = document.createElement("div");
@@ -434,9 +434,9 @@ export class UI {
     return p;
   }
 
-  // ---- title screen -------------------------------------------------------
-  // The very first screen: pick クラブチーム対戦 (league → team wizard) or
-  // ランダム対戦 (jump straight into the existing random-roster editor).
+  // ---- タイトル画面 -------------------------------------------------------
+  // 一番最初の画面: クラブチーム対戦（リーグ → チームのウィザード）か、
+  // ランダム対戦（既存のランダムロスターエディタへ直行）を選ぶ。
   private buildTitle(): void {
     const p = this.panel();
     p.style.gap = "16px";
@@ -475,7 +475,7 @@ export class UI {
     const clubBtn = bigBtn("クラブチーム対戦", "リーグとチームを選んで対戦", () => this.startClubMatchup());
     const randBtn = bigBtn("ランダム対戦", "ランダム編成で対戦（編成は自由に変更可）", () => {
       this.newMatchup();
-      this.onSetupLineups();        // opponent-aware DEFAULT five (before the editor shows)
+      this.onSetupLineups();        // 相手を考慮した DEFAULT の5人（エディタ表示前）
       this.setPhase("pregame");
     });
 
@@ -488,31 +488,31 @@ export class UI {
     if (this.chooser) { this.chooser.remove(); this.chooser = null; }
   }
 
-  // Distinct leagues, in first-seen order (matches the clubdb grouping).
+  // 重複を除いたリーグ一覧。初出順（clubdb のグルーピングに一致）。
   private leaguesInOrder(): string[] {
     const out: string[] = [];
     for (const [, lg] of CLUBS) if (!out.includes(lg)) out.push(lg);
     return out;
   }
 
-  // Apply a real club to ONE team (roster + name + kit + auto lineup/roles),
-  // WITHOUT rebuilding the editors — the caller decides when to refresh/leave.
+  // 実クラブを1チームに適用する（ロスター + 名前 + ユニフォーム + 自動ライン
+  // ナップ/ロール）。エディタの再構築はしない — いつ更新/離脱するかは呼び出し側が決める。
   private assignClub(team: number, idx: number): void {
     clubTeam(team, idx);
     TEAM_NAMES[team] = CLUBS[idx][0];
-    TEAM_CLUB[team] = CLUBS[idx][0];   // this team now wears the club's own kit
+    TEAM_CLUB[team] = CLUBS[idx][0];   // このチームはクラブ独自のユニフォームを着る
     this.onUniformToggle();
     this.optimizeLineup(team);
     this.autoAssignRoles(team);
     this.autoAssignChoiceRanks(team);
   }
 
-  // League GROUPS shown as buttons. The top leagues (through 他リーグA) each
-  // stay their own group; everything below is folded into 南米 and その他B.
+  // ボタンとして表示されるリーグのグループ。上位リーグ（他リーグA まで）は
+  // それぞれ独自のグループのまま。それ以下は 南米 と その他B にまとめられる。
   private leagueGroups(): { label: string; leagues: string[] }[] {
     const order = this.leaguesInOrder();
-    const cut = order.indexOf("他リーグA");   // last league kept as-is
-    // South-American leagues in the DB (メキシコ is CONCACAF → その他B).
+    const cut = order.indexOf("他リーグA");   // そのまま残す最後のリーグ
+    // DB 内の南米リーグ（メキシコは CONCACAF → その他B）。
     const SOUTH = new Set([
       "アルゼンチン", "ブラジル", "ウルグアイ", "チリ", "パラグアイ",
       "ペルー", "ボリビア", "コロンビア", "エクアドル", "ベネズエラ",
@@ -529,11 +529,11 @@ export class UI {
     return groups;
   }
 
-  // Wizard entry: choose the home (team 0) then away (team 1) club. The court and
-  // players stay HIDDEN behind an opaque overlay for the whole wizard, until the
-  // matchup is confirmed. From the start it shows the strength bar plus the
-  // league / club selection — league buttons and the club flag list occupy the
-  // SAME area and swap in place (pick a league → its clubs; リーグ選択 → back).
+  // ウィザードの入口: ホーム（team 0）、続いてアウェイ（team 1）のクラブを選ぶ。
+  // コートと選手は、マッチアップが確定するまでウィザードの間ずっと不透明な
+  // オーバーレイの後ろに隠れたままになる。最初から戦力バーとリーグ/クラブ選択を
+  // 表示する — リーグボタンとクラブのフラッグ一覧は同じ領域を占め、その場で
+  // 入れ替わる（リーグを選ぶ → そのクラブ群; リーグ選択 → 戻る）。
   private startClubMatchup(): void {
     this.titlePanel.style.display = "none";
     this.openMatchupWizard();
@@ -543,17 +543,17 @@ export class UI {
     this.closeChooser();
 
     const OPAQUE = "#080a0f";
-    // Overlay is TRANSPARENT itself. Opaque tiles cover the whole screen EXCEPT
-    // two transparent "windows" where the 3D home / away players are rendered
-    // (by main.ts, via onUniformPreview). The tiles are laid out ADJACENTLY (no
-    // overlap, no gaps) so nothing else of the court ever shows.
+    // オーバーレイ自体は透明。不透明なタイルが、3Dのホーム/アウェイの選手が
+    // 描画される2つの透明な「ウィンドウ」を除いて画面全体を覆う（main.ts が
+    // onUniformPreview 経由で描画）。タイルは隣接して（重なりも隙間もなく）配置
+    // されるため、コートの他の部分が見えることはない。
     const overlay = document.createElement("div");
     Object.assign(overlay.style, {
       position: "absolute", inset: "0", display: "flex", flexDirection: "column",
       pointerEvents: "auto",
     } as Partial<CSSStyleDeclaration>);
 
-    // 1) top cover (opaque) — the strength bar
+    // 1) 上部カバー（不透明）— 戦力バー
     const topCover = document.createElement("div");
     Object.assign(topCover.style, {
       width: "100%", background: OPAQUE, display: "flex", justifyContent: "center", padding: "14px 0 8px",
@@ -563,8 +563,8 @@ export class UI {
     const renderBar = () => barHost.replaceChildren(this.buildVsBoard());
     topCover.appendChild(barHost);
 
-    // 2) uniform band — two TRANSPARENT windows (3D shows through), the rest opaque.
-    //    Home window left, away window right, contrasted like the strength bar.
+    // 2) ユニフォーム帯 — 2つの透明なウィンドウ（3Dが透けて見える）、残りは不透明。
+    //    ホームのウィンドウは左、アウェイは右。戦力バーと同様に対比させる。
     const WIN_W = 120, WIN_H = 150;
     const cover = (flex: string): HTMLDivElement => {
       const d = document.createElement("div");
@@ -574,13 +574,13 @@ export class UI {
     const windowCell = (t: number): { cell: HTMLDivElement; win: HTMLDivElement; lab: HTMLDivElement } => {
       const cell = document.createElement("div");
       Object.assign(cell.style, { width: `${WIN_W}px`, display: "flex", flexDirection: "column" } as Partial<CSSStyleDeclaration>);
-      const win = document.createElement("div");   // TRANSPARENT — the 3D player shows here
+      const win = document.createElement("div");   // 透明 — 3Dの選手がここに表示される
       Object.assign(win.style, {
         position: "relative", width: "100%", height: `${WIN_H}px`, background: "transparent",
       } as Partial<CSSStyleDeclaration>);
-      // the 3D viewport is a rectangle; to get ROUNDED corners we (a) cover the 4
-      // corner triangles with opaque wedges (radial-gradient masks) and (b) draw a
-      // rounded coloured border on top. Both overlays sit over the window.
+      // 3Dビューポートは矩形。角を丸くするために、(a) 4隅の三角形を不透明な
+      // くさび（radial-gradient マスク）で覆い、(b) その上に丸い色付きの枠線を
+      // 描く。どちらのオーバーレイもウィンドウの上に重なる。
       const R = 8;
       const g = (at: string, pos: string) =>
         `radial-gradient(circle ${R}px at ${at}, transparent ${R}px, ${OPAQUE} ${R}px) ${pos} / ${R}px ${R}px no-repeat`;
@@ -598,7 +598,7 @@ export class UI {
         border: `2px solid ${colorOf(t)}`, borderRadius: `${R}px`,
       } as Partial<CSSStyleDeclaration>);
       win.append(mask, frame);
-      const lab = document.createElement("div");   // opaque label strip under it
+      const lab = document.createElement("div");   // その下の不透明なラベル帯
       Object.assign(lab.style, {
         background: OPAQUE, textAlign: "center", padding: "3px 0", fontSize: "11px", fontWeight: "800",
         color: colorOf(t), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
@@ -614,11 +614,10 @@ export class UI {
     midLbl.textContent = "ユニフォーム";
     Object.assign(midLbl.style, { fontSize: "10px", fontWeight: "800", opacity: "0.45", letterSpacing: "2px" } as Partial<CSSStyleDeclaration>);
     midCover.appendChild(midLbl);
-    // The windows sit at the two ends of a centred container that is EXACTLY the
-    // strength bar's width (min(560px,94vw)), so the home window's left edge and
-    // the away window's right edge line up with the bar's edges. NOTE: no element
-    // in the transparent chain may have a background — coverage comes only from the
-    // opaque sibling tiles (side covers / midCover / label strips).
+    // ウィンドウは、戦力バーとちょうど同じ幅（min(560px,94vw)）の中央寄せ
+    // コンテナの両端に位置するため、ホームウィンドウの左端とアウェイウィンドウの
+    // 右端がバーの端に揃う。注意: 透明な連鎖の中の要素は背景を持ってはならない —
+    // カバーは不透明な兄弟タイル（両側のカバー / midCover / ラベル帯）だけが担う。
     const inner = document.createElement("div");
     Object.assign(inner.style, { width: "min(560px,94vw)", display: "flex", alignItems: "stretch" } as Partial<CSSStyleDeclaration>);
     inner.append(homeCell.cell, midCover, awayCell.cell);
@@ -626,7 +625,7 @@ export class UI {
     Object.assign(band.style, { width: "100%", height: `${WIN_H + 24}px`, display: "flex", alignItems: "stretch", justifyContent: "center" } as Partial<CSSStyleDeclaration>);
     band.append(cover("1 1 auto"), inner, cover("1 1 auto"));
 
-    // 3) filler (opaque) fills the remaining space down to the sheet
+    // 3) フィラー（不透明）がシートまでの残りのスペースを埋める
     const filler = cover("1 1 auto");
 
     const refreshTop = () => {
@@ -635,9 +634,9 @@ export class UI {
       awayCell.lab.textContent = `アウェイ　${teamAbbr(1)}`;
     };
 
-    // bottom sheet: the visible panel is capped at 1200px and CENTRED; its content
-    // is centred too (alignItems:center + each row centred). The dark preview
-    // background means the area beside the capped panel simply stays dark.
+    // ボトムシート: 表示されるパネルは 1200px で頭打ちにして中央寄せ。その内容も
+    // 中央寄せ（alignItems:center + 各行を中央寄せ）。暗いプレビュー背景により、
+    // 頭打ちにしたパネルの脇の領域は単に暗いままになる。
     const sheet = document.createElement("div");
     Object.assign(sheet.style, {
       width: "100%", maxWidth: "1200px", alignSelf: "center", boxSizing: "border-box",
@@ -659,7 +658,7 @@ export class UI {
     this.chooser = overlay;
     refreshTop();
 
-    // start the dual 3D preview once the windows have a real on-screen rect
+    // ウィンドウが実際の画面上の矩形を持ったら、3D二画面プレビューを開始する
     const sendPreview = () => {
       if (this.chooser !== overlay) return;
       this.onUniformPreview({
@@ -676,31 +675,31 @@ export class UI {
     const exitPreview = () => window.removeEventListener("resize", sendPreview);
     const exitToTitle = () => { this.onUniformPreview(null); exitPreview(); this.closeChooser(); this.titlePanel.style.display = "flex"; };
 
-    // League "flags": national-flag-like designs (same format/size as club flags).
-    // 他リーグA / 南米 / その他B are groups, not countries → neutral / continental.
+    // リーグの「フラッグ」: 国旗風のデザイン（クラブフラッグと同じ形式/サイズ）。
+    // 他リーグA / 南米 / その他B はグループであって国ではない → 中立 / 大陸風。
     const LEAGUE_FLAGS: Record<string, string[]> = {
-      "イングランド": ["c", "f2f2f2", "e01414"],            // St George cross
-      "イタリア": ["v", "1f8a3b", "f2f2f2", "e01414"],       // green-white-red
-      "スペイン": ["h", "e01414", "f2c11a", "e01414"],       // red-yellow-red
-      "オランダ": ["h", "e01414", "f2f2f2", "1a4fd0"],       // red-white-blue
-      "フランス": ["v", "1a4fd0", "f2f2f2", "e01414"],       // blue-white-red
-      "他リーグA": ["h", "2a3550", "46557a"],                // neutral (mixed leagues)
-      "南米": ["v", "1f8a3b", "f2c11a", "1a9ee0"],           // continental (green/yellow/sky)
-      "その他B": ["h", "5a4a34", "7a6a52"],                  // neutral (mixed leagues)
+      "イングランド": ["c", "f2f2f2", "e01414"],            // セントジョージ十字
+      "イタリア": ["v", "1f8a3b", "f2f2f2", "e01414"],       // 緑-白-赤
+      "スペイン": ["h", "e01414", "f2c11a", "e01414"],       // 赤-黄-赤
+      "オランダ": ["h", "e01414", "f2f2f2", "1a4fd0"],       // 赤-白-青
+      "フランス": ["v", "1a4fd0", "f2f2f2", "e01414"],       // 青-白-赤
+      "他リーグA": ["h", "2a3550", "46557a"],                // 中立（混成リーグ）
+      "南米": ["v", "1f8a3b", "f2c11a", "1a9ee0"],           // 大陸風（緑/黄/空色）
+      "その他B": ["h", "5a4a34", "7a6a52"],                  // 中立（混成リーグ）
     };
 
-    // Shared builders so the league list and the club list are IDENTICAL in
-    // format, flag size and vertical height (maxRows rows, then scroll).
+    // リーグ一覧とクラブ一覧が形式・フラッグサイズ・縦の高さで同一になるための
+    // 共有ビルダー（maxRows 行まで、それを超えるとスクロール）。
     const IDLE_BORDER = "rgba(255,255,255,0.16)";
     const COL = 100, GAP = 8, ROW_H = 54;
     const makeScroll = (): { scrollArea: HTMLDivElement; grid: HTMLDivElement } => {
       const maxRows = window.innerWidth <= 480 ? 3 : 4;
       const scrollArea = document.createElement("div");
       Object.assign(scrollArea.style, { maxHeight: `${maxRows * ROW_H}px`, overflowY: "auto", width: "100%" } as Partial<CSSStyleDeclaration>);
-      // The grid is a flex-wrap row of fixed-width flags, LEFT-aligned, and the
-      // grid BLOCK is centred (margin:auto) at a width of exactly N columns (see
-      // centerGrid). So a full row fills the block edge-to-edge (looks centred),
-      // and the last, partial row is left-aligned under the first flag.
+      // グリッドは固定幅フラッグの flex-wrap 行で左揃え。グリッドのブロック自体は
+      // ちょうど N 列の幅で中央寄せ（margin:auto、centerGrid 参照）。よって、
+      // 埋まった行はブロックを端から端まで満たし（中央寄せに見える）、最後の
+      // 半端な行は最初のフラッグの下で左揃えになる。
       const grid = document.createElement("div");
       Object.assign(grid.style, {
         display: "flex", flexWrap: "wrap", justifyContent: "flex-start", alignContent: "flex-start",
@@ -709,8 +708,8 @@ export class UI {
       scrollArea.append(grid);
       return { scrollArea, grid };
     };
-    // size the grid block to a whole number of columns that fit, so it centres
-    // while leaving the last row left-aligned. Call AFTER it is in the DOM.
+    // グリッドブロックを、収まる整数個の列幅にサイズ調整し、最後の行は左揃えの
+    // まま中央寄せする。DOM に入った後で呼ぶこと。
     const centerGrid = (scrollArea: HTMLDivElement, grid: HTMLDivElement): void => {
       const avail = scrollArea.clientWidth || COL;
       const cols = Math.max(1, Math.floor((avail + GAP) / (COL + GAP)));
@@ -719,11 +718,11 @@ export class UI {
     const makeFlag = (design: string[] | undefined, overlay: string, label: string): HTMLButtonElement => {
       const btn = document.createElement("button");
       Object.assign(btn.style, {
-        // frame via INSET box-shadow (not border): a real border with
-        // border-radius + overflow:hidden bleeds the child bg ~1px at the rounded
-        // corners; an inset shadow follows the radius cleanly.
+        // 枠線は INSET の box-shadow で（border ではない）: border-radius +
+        // overflow:hidden の実際の border は、丸めた角で子要素の背景が約1px
+        // にじむ。inset の shadow なら半径にきれいに沿う。
         display: "flex", flexDirection: "column", cursor: "pointer", padding: "0",
-        width: "100px", flex: "0 0 100px",   // fixed size flex item (centred by the row)
+        width: "100px", flex: "0 0 100px",   // 固定サイズの flex アイテム（行によって中央寄せ）
         borderRadius: "8px", overflow: "hidden", color: "#fff", boxSizing: "border-box",
         background: "rgba(255,255,255,0.05)", border: "0", boxShadow: `inset 0 0 0 2px ${IDLE_BORDER}`,
       } as Partial<CSSStyleDeclaration>);
@@ -792,8 +791,8 @@ export class UI {
           selectedBtn = btn;
           btn.style.boxShadow = `inset 0 0 0 2px ${colorOf(team)}`;
           picked[team] = true;
-          this.assignClub(team, idx);   // roster + name + kit
-          refreshTop();                 // strength bar + uniform preview switch to it
+          this.assignClub(team, idx);   // ロスター + 名前 + ユニフォーム
+          refreshTop();                 // 戦力バー + ユニフォームプレビューがそれに切り替わる
           confirm.style.opacity = "1";
           confirm.style.pointerEvents = "auto";
         };
@@ -818,10 +817,10 @@ export class UI {
           team = 1;
           showLeagues();
         } else {
-          this.onUniformPreview(null);  // tear down the dual 3D preview
+          this.onUniformPreview(null);  // 3D二画面プレビューを解体
           exitPreview();
-          this.closeChooser();          // remove the overlay → court/players show again
-          this.onSetupLineups();        // opponent-aware DEFAULT five (before the editor shows)
+          this.closeChooser();          // オーバーレイを除去 → コート/選手が再び表示される
+          this.onSetupLineups();        // 相手を考慮した DEFAULT の5人（エディタ表示前）
           this.refreshEditors();
           this.setPhase("pregame");
         }
@@ -832,8 +831,8 @@ export class UI {
     showLeagues();
   }
 
-  // Build a CSS background for a club "flag" from its CLUB_FLAGS design
-  // ([pattern, ...hexColours]). Falls back to a neutral grey if a club has none.
+  // CLUB_FLAGS のデザイン（[pattern, ...hexColours]）から、クラブ「フラッグ」用の
+  // CSS 背景を組み立てる。クラブに定義がなければ中立的なグレーにフォールバックする。
   private static flagCss(def: string[] | undefined): string {
     if (!def || def.length < 2) return "rgba(255,255,255,0.12)";
     const [pat, ...cols] = def;
@@ -845,15 +844,15 @@ export class UI {
     };
     switch (pat) {
       case ".": return c(0);
-      case "v": return bands(90);          // vertical stripes / left-right split
-      case "h": return bands(180);         // horizontal bands
-      case "s": return `linear-gradient(180deg, ${c(0)} 0 34%, ${c(1)} 34% 66%, ${c(0)} 66% 100%)`;  // centre sash
-      case "b": return `linear-gradient(90deg, ${c(0)} 0 33%, ${c(1)} 33% 67%, ${c(0)} 67% 100%)`;   // vertical centre band
-      case "d": return `linear-gradient(120deg, ${c(0)} 0 40%, ${c(1)} 40% 60%, ${c(0)} 60% 100%)`;  // diagonal sash
-      case "o": return `repeating-linear-gradient(180deg, ${c(0)} 0 18%, ${c(1)} 18% 36%)`;          // hoops
-      case "dh": return `linear-gradient(135deg, ${c(0)} 0 50%, ${c(1)} 50% 100%)`;                  // diagonal halves
-      case "q": return `conic-gradient(${c(0)} 0 25%, ${c(1)} 25% 50%, ${c(0)} 50% 75%, ${c(1)} 75% 100%)`; // quartered
-      case "c": // cross: vertical + horizontal band[1] over base[0]
+      case "v": return bands(90);          // 縦縞 / 左右分割
+      case "h": return bands(180);         // 横帯
+      case "s": return `linear-gradient(180deg, ${c(0)} 0 34%, ${c(1)} 34% 66%, ${c(0)} 66% 100%)`;  // 中央の帯（サッシュ）
+      case "b": return `linear-gradient(90deg, ${c(0)} 0 33%, ${c(1)} 33% 67%, ${c(0)} 67% 100%)`;   // 縦の中央帯
+      case "d": return `linear-gradient(120deg, ${c(0)} 0 40%, ${c(1)} 40% 60%, ${c(0)} 60% 100%)`;  // 斜めの帯（サッシュ）
+      case "o": return `repeating-linear-gradient(180deg, ${c(0)} 0 18%, ${c(1)} 18% 36%)`;          // 横縞（フープ）
+      case "dh": return `linear-gradient(135deg, ${c(0)} 0 50%, ${c(1)} 50% 100%)`;                  // 斜め二分割
+      case "q": return `conic-gradient(${c(0)} 0 25%, ${c(1)} 25% 50%, ${c(0)} 50% 75%, ${c(1)} 75% 100%)`; // 四分割
+      case "c": // 十字: base[0] の上に縦 + 横の band[1]
         return `linear-gradient(90deg, transparent 38%, ${c(1)} 38% 62%, transparent 62%),`
           + `linear-gradient(180deg, transparent 34%, ${c(1)} 34% 66%, transparent 66%), ${c(0)}`;
       default: return c(0);
@@ -864,18 +863,18 @@ export class UI {
   private buildPregame(): void {
     const p = this.panel();
 
-    // the pregame modal hugs its content: no padding / no inter-element gap so
-    // there is no empty band above, below or beside the rosters
+    // 試合前モーダルは内容に密着させる: padding も要素間の gap もなし。ロスターの
+    // 上下や脇に空の帯が出ないようにする
     p.style.padding = "0";
-    p.style.gap = "0";                  // overflow stays auto (tall rosters scroll)
-    // no title row — the modal opens straight into the buttons and rosters
+    p.style.gap = "0";                  // overflow は auto のまま（背の高いロスターはスクロール）
+    // タイトル行なし — モーダルはボタンとロスターに直接開く
     this.editorHost = document.createElement("div");
     Object.assign(this.editorHost.style, {
       width: "100%", display: "flex", flexDirection: "column", alignItems: "stretch", gap: "0",
     } as Partial<CSSStyleDeclaration>);
     p.appendChild(this.editorHost);
 
-    // the floating player-detail card (hexagon + 特殊能力), shown on row hover
+    // 浮遊する選手詳細カード（ヘックスチャート + 特殊能力）。行のホバー時に表示
     this.playerCard = document.createElement("div");
     Object.assign(this.playerCard.style, {
       position: "fixed", display: "none", zIndex: "60", pointerEvents: "none",
@@ -885,63 +884,62 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
     document.body.appendChild(this.playerCard);
 
-    // TIP OFF is no longer a top row — it sits BETWEEN the two teams, built
-    // inside refreshEditors so it lands between the cards (side-by-side) or
-    // between the team tabs (narrow toggle view).
+    // TIP OFF はもう上段の行ではない — 2チームの間に置かれ、refreshEditors の中で
+    // 構築されて、カードの間（横並び）またはチームタブの間（狭いトグル表示）に配置される。
 
     this.root.appendChild(p);
     this.pregamePanel = p;
-    // crossing the side-by-side / tab-toggle breakpoint re-lays-out the rosters
+    // 横並び / タブトグルのブレークポイントを跨ぐとロスターを再レイアウトする
     window.addEventListener("resize", () => {
       if (this.phase !== "pregame") return;
       const mode = this.rostersFitSideBySide() ? "desktop" : "phone";
       if (mode !== this.pregameMode) this.refreshEditors();
     });
-    this.newMatchup();   // the first matchup is drawn at once
+    this.newMatchup();   // 最初のマッチアップを即座に描く
   }
 
-  /** Draw a fresh random matchup from the database and rebuild the editors. */
+  /** データベースから新たなランダムマッチアップを引き、エディタを再構築する。 */
   private newMatchup(): void {
-    TEAM_NAMES[0] = UI.DEFAULT_NAMES[0];   // a random draw is BLAZE/WAVE again
+    TEAM_NAMES[0] = UI.DEFAULT_NAMES[0];   // ランダム抽選は再び BLAZE/WAVE
     TEAM_NAMES[1] = UI.DEFAULT_NAMES[1];
-    TEAM_CLUB[0] = TEAM_CLUB[1] = "";       // ...and back to the generic team kits
+    TEAM_CLUB[0] = TEAM_CLUB[1] = "";       // ...そして汎用のチームユニフォームに戻す
     this.onUniformToggle();
     randomizeRosters();
-    this.optimizeLineup(0); this.optimizeLineup(1);   // strongest at each position start
-    this.autoAssignRoles();        // sensible default 攻守ロール for the fresh draw
-    this.autoAssignChoiceRanks();  // primary 1..5 by scoring ability (starters + bench)
+    this.optimizeLineup(0); this.optimizeLineup(1);   // 各ポジションの最強選手が先発
+    this.autoAssignRoles();        // 新規抽選に対する妥当なデフォルトの攻守ロール
+    this.autoAssignChoiceRanks();  // 得点力によるプライマリ 1..5（先発 + ベンチ）
     this.refreshEditors();
   }
 
-  /** Re-draw ONE team's roster (the other team is left untouched) and rebuild. */
+  /** 1チームのロスターだけを引き直し（もう一方のチームはそのまま）、再構築する。 */
   private randomizeOne(team: number): void {
-    TEAM_NAMES[team] = UI.DEFAULT_NAMES[team];   // back from a club name
-    TEAM_CLUB[team] = "";                        // ...and back to the generic team kit
+    TEAM_NAMES[team] = UI.DEFAULT_NAMES[team];   // クラブ名から戻す
+    TEAM_CLUB[team] = "";                        // ...そして汎用のチームユニフォームに戻す
     this.onUniformToggle();
     randomizeTeam(team);
-    this.optimizeLineup(team);         // put the strongest player at each position in the lineup
-    this.autoAssignRoles(team);        // default 攻守ロール for this team's fresh draw
-    this.autoAssignChoiceRanks(team);  // primary 1..5 for this team only
+    this.optimizeLineup(team);         // 各ポジションの最強選手をラインナップに入れる
+    this.autoAssignRoles(team);        // このチームの新規抽選に対するデフォルトの攻守ロール
+    this.autoAssignChoiceRanks(team);  // このチームだけのプライマリ 1..5
     this.refreshEditors();
   }
 
-  // Optimise the STARTING FIVE from the drawn squad: at each position (PG..C) the
-  // best-fitting player starts and the rest drop to the bench, so a strong player
-  // never sits behind a weaker one at his spot. Positions are preserved (a PG slot
-  // still gets a PG) — only starter/bench order within each position changes.
+  // 抽選したスカッドから先発5人を最適化する: 各ポジション（PG..C）で最も適した
+  // 選手が先発し、残りはベンチに落ちる。強い選手が自分のスポットで弱い選手の
+  // 後ろに座ることがないようにする。ポジションは保たれる（PG スロットには依然
+  // PG が入る）— 変わるのは各ポジション内の先発/ベンチの順序だけ。
   private optimizeLineup(team: number): void {
     const byPos: Record<string, number[]> = {};
     ROSTER[team].forEach((d, i) => { (byPos[d.role] ??= []).push(i); });
     for (const pos of Object.keys(byPos)) {
-      const slots = byPos[pos].slice().sort((a, b) => a - b);   // starter slot (lowest index) first
+      const slots = byPos[pos].slice().sort((a, b) => a - b);   // 先発スロット（最小インデックス）が先
       const defs = slots.map((i) => ROSTER[team][i])
-        .sort((a, b) => this.posValue(b, pos) - this.posValue(a, pos)); // strongest first
+        .sort((a, b) => this.posValue(b, pos) - this.posValue(a, pos)); // 最強が先
       slots.forEach((slot, k) => { ROSTER[team][slot] = defs[k]; });
     }
   }
 
-  // How well a player fits a POSITION — his six-axis digest weighted by the
-  // position's needs plus its height premium (same weights the strength bars use).
+  // 選手がそのポジションにどれだけ適合するか — 彼の6軸ダイジェストを、ポジション
+  // の必要性とその身長プレミアムで重み付けしたもの（戦力バーが使うのと同じ重み）。
   private posValue(def: PlayerDef, pos: string): number {
     const w = UI.ROLE_W[pos] ?? UI.ROLE_W.SF;
     const ax = this.axesOf(def);
@@ -950,18 +948,18 @@ export class UI {
     return s + w.ht * UI.heightValue(def.height * 100);
   }
 
-  /** Re-optimise ONE team's 攻守ロール + primary order for its CURRENT roster —
-   *  handy after swapping players in/out — without changing who is on the team. */
+  /** 1チームの攻守ロール + プライマリ順序を、その現在のロスターに対して再最適化
+   *  する — 選手の入れ替え後に便利 — チームの構成員は変えずに。 */
   private reassignRoles(team: number): void {
     this.autoAssignRoles(team);
     this.autoAssignChoiceRanks(team);
     this.refreshEditors();
   }
 
-  // Hand every player a default 評価ロール from the fresh draw: the role his
-  // profile fits best among those his position can take, with a team-balance
-  // penalty so five エース never happens — the roles spread across the squad.
-  // Starters are assigned first (they define the team's shape), then the bench.
+  // 新規抽選から各選手にデフォルトの評価ロールを割り当てる: 彼のポジションが
+  // 取れるロールの中で、彼のプロフィールに最も合うもの。5人のエースが決して
+  // 起きないようチームバランスのペナルティを付け、ロールをスカッド全体に散らす。
+  // 先発が先に割り当てられ（チームの形を決める）、次にベンチ。
   private autoAssignRoles(only?: number): void {
     for (let t = 0; t < 2; t++) {
       if (only !== undefined && t !== only) continue;
@@ -973,30 +971,30 @@ export class UI {
         let best = "";
         let bestS = -Infinity;
         for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
-          if (UI.DEF_ONLY.has(nm)) continue;   // defence jobs live in the DEF role now
+          if (UI.DEF_ONLY.has(nm)) continue;   // 守備の仕事は今は DEF ロール側にある
           if (r.pos && !r.pos.includes(def.role)) continue;
           let s = r.ht * hs, tot = r.ht;
           for (let k = 0; k < ax.length; k++) { s += r.ax[k] * ax[k]; tot += r.ax[k]; }
           s /= tot;
-          s -= (taken.get(nm) ?? 0) * 4;   // balance: each repeat costs 4 pts
+          s -= (taken.get(nm) ?? 0) * 4;   // バランス: 重複ごとに 4 点のコスト
           if (s > bestS) { bestS = s; best = nm; }
         }
         def.evalRole = best || undefined;
         if (best) taken.set(best, (taken.get(best) ?? 0) + 1);
       }
-      this.assignDefRoles(t);   // draft a balanced set of DEFENSE roles across the unit
+      this.assignDefRoles(t);   // ユニット全体でバランスの取れた守備ロールのセットをドラフトする
     }
   }
 
-  // The big blue "start the game" button — placed BETWEEN the two teams (in the
-  // middle of the side-by-side view, or between the team tabs when narrow).
+  // 大きな青い「試合開始」ボタン — 2チームの間に置かれる（横並び表示の中央、
+  // または狭いときはチームタブの間）。
   private tipOffButton(): HTMLButtonElement {
     const b = this.button("TIP OFF");
     Object.assign(b.style, {
       fontSize: "clamp(13px,3.3vw,17px)", fontWeight: "800", flexShrink: "0",
       padding: "clamp(7px,1.8vw,11px) clamp(14px,3.4vw,24px)",
-      // neutral silver — belongs to neither the RED nor the BLUE team, so the
-      // tip-off reads as fair rather than favouring the blue side
+      // 中立的なシルバー — RED にも BLUE にも属さないので、ティップオフが青側を
+      // ひいきするのではなく公平に見える
       background: "rgba(232,235,242,0.96)", color: "#10131a",
       border: "1px solid rgba(255,255,255,0.5)",
     } as Partial<CSSStyleDeclaration>);
@@ -1004,15 +1002,15 @@ export class UI {
     return b;
   }
 
-  // Two 320px cards + the TIP OFF column + gaps ≈ 760px of content; with the
-  // modal capped at 96vw plus its padding, that only fits once the viewport is
-  // ~830px wide. Below that the modal can't hold both, so we fall back to the
-  // tab toggle rather than let the cards overflow / wrap.
+  // 2枚の 320px カード + TIP OFF 列 + gap ≈ 760px の内容。モーダルは 96vw と
+  // padding で頭打ちなので、これが収まるのはビューポートが約 830px 幅になって
+  // から。それ未満ではモーダルが両方を保持できないため、カードをあふれさせ/
+  // 折り返すのではなく、タブトグルにフォールバックする。
   private rostersFitSideBySide(): boolean {
     return window.innerWidth >= 840;
   }
 
-  /** Rebuild the VS board and both roster cards from the current ROSTER. */
+  /** 現在の ROSTER から VS ボードと両方のロスターカードを再構築する。 */
   private refreshEditors(): void {
     this.hidePlayerCard();
     this.closeRolePicker();
@@ -1021,12 +1019,12 @@ export class UI {
     this.closeClubPicker();
     const sideBySide = this.rostersFitSideBySide();
     this.pregameMode = sideBySide ? "desktop" : "phone";
-    // side-by-side: hug the two-column content; toggle view: a fixed comfortable
-    // width that both the VS board and the single card fill edge-to-edge
+    // 横並び: 2列の内容に密着させる; トグル表示: VS ボードと単一カードの両方が
+    // 端から端まで満たす、固定の快適な幅
     this.editorHost.style.width = sideBySide ? "auto" : "min(560px, 96vw)";
     this.editorHost.replaceChildren();
 
-    // top bar ABOVE the strength board: 戻る (back to the title) + TIP OFF (start).
+    // 戦力ボードの上のトップバー: 戻る（タイトルへ戻る） + TIP OFF（開始）。
     const topBar = document.createElement("div");
     Object.assign(topBar.style, {
       display: "flex", gap: "10px", justifyContent: "center", alignItems: "center",
@@ -1040,16 +1038,16 @@ export class UI {
 
     this.vsBoard = this.buildVsBoard();
     if (sideBySide) {
-      // full-width bars over the two-column layout look stretched — cap the VS
-      // board and centre it above the rosters
+      // 2列レイアウトの上で全幅のバーは間延びして見える — VS ボードを頭打ちに
+      // してロスターの上で中央寄せする
       this.vsBoard.style.width = "min(560px, 100%)";
       this.vsBoard.style.alignSelf = "center";
     }
     this.editorHost.appendChild(this.vsBoard);
 
     if (!sideBySide) {
-      // one roster at a time behind team tabs — two stacked 13-man cards would
-      // scroll forever on a phone. TIP OFF sits between the two team tabs.
+      // チームタブの後ろに一度に1つのロスター — 13人カードを2枚重ねるとモバイル
+      // では延々とスクロールしてしまう。TIP OFF は2つのチームタブの間に置く。
       const tabs = document.createElement("div");
       Object.assign(tabs.style, { display: "flex", gap: "8px", justifyContent: "center", alignItems: "center", flexWrap: "wrap" } as Partial<CSSStyleDeclaration>);
       const teamTab = (t: number): HTMLButtonElement => {
@@ -1065,29 +1063,28 @@ export class UI {
         b.onclick = () => { this.rosterTab = t; this.refreshEditors(); };
         return b;
       };
-      tabs.append(teamTab(0), teamTab(1));   // TIP OFF now lives in the top bar
+      tabs.append(teamTab(0), teamTab(1));   // TIP OFF は今はトップバーにある
       this.editorHost.appendChild(tabs);
       const card = this.rosterCard(this.rosterTab);
-      card.style.width = "100%";   // fill the modal width (no side band under the VS board)
+      card.style.width = "100%";   // モーダルの幅を満たす（VS ボードの下に脇の帯なし）
       this.editorHost.appendChild(card);
       return;
     }
 
-    // side by side: [team 0 card] [TIP OFF] [team 1 card]
+    // 横並び: [team 0 カード] [TIP OFF] [team 1 カード]
     const cols = document.createElement("div");
     Object.assign(cols.style, {
       display: "flex", gap: "12px", flexWrap: "nowrap", justifyContent: "center",
       alignItems: "stretch", width: "100%",
     } as Partial<CSSStyleDeclaration>);
-    cols.append(this.rosterCard(0), this.rosterCard(1));   // TIP OFF now lives in the top bar
+    cols.append(this.rosterCard(0), this.rosterCard(1));   // TIP OFF は今はトップバーにある
     this.editorHost.appendChild(cols);
   }
 
-  // ---- pregame: VS strength board + compact roster cards ------------------
+  // ---- 試合前: VS 戦力ボード + コンパクトなロスターカード ------------------
 
-  // The six axes of the hexagon chart AND the team-strength comparison —
-  // weighted digests of the 25 ratings (ratings themselves are no longer
-  // edited here, only read).
+  // ヘックスチャートおよびチーム戦力比較の6軸 — 25 の能力値の重み付け
+  // ダイジェスト（能力値そのものはここでは編集されず、読み取るだけ）。
   private static readonly HEX_AXES: { label: string; calc: (a: Attributes) => number }[] = [
     { label: "シュート", calc: (a) => a.midAcc * 0.45 + a.threeAcc * 0.35 + a.shotTech * 0.2 },
     { label: "ドリブル", calc: (a) => a.handling * 0.4 + a.dribbleAcc * 0.35 + a.dribbleSpd * 0.25 },
@@ -1100,9 +1097,9 @@ export class UI {
     return UI.HEX_AXES.map((x) => x.calc(def.attr));
   }
 
-  // What each position actually needs, axis by axis (same order as HEX_AXES),
-  // plus how much raw HEIGHT matters there. A flat average made every player
-  // rate the same — this weights the role's needs and the player's peaks.
+  // 各ポジションが実際に必要とするもの、軸ごとに（HEX_AXES と同じ順）、加えて
+  // そこで素の身長がどれだけ重要か。単純平均では全選手が同じ評価になってしまう —
+  // これはロールの必要性と選手のピークを重み付けする。
   private static readonly ROLE_W: Record<string, { ax: number[]; ht: number }> = {
     //        シュート ドリブル  パス  スピード フィジカル 守備     身長
     PG: { ax: [0.16, 0.24, 0.28, 0.20, 0.03, 0.09], ht: 0.00 },
@@ -1112,12 +1109,12 @@ export class UI {
     C:  { ax: [0.10, 0.04, 0.05, 0.08, 0.35, 0.23], ht: 0.15 },
   };
 
-  // 評価ロール: a hand-set role overrides the position weights — the same
-  // player rates differently as an エース than as a 3&D piece. Roles also
-  // CHANGE IN-GAME BEHAVIOUR via ROLE_BEHAVIOR in attributes.ts (virtual
-  // abilities + priority/playmaking shifts, applied at tip-off in applyDef).
-  // `pos` = which positions can take the role; undefined = 全ポジション共通
-  // (the modern position-crossing jobs). `short` = the code shown on the pill.
+  // 評価ロール: 手動設定したロールはポジションの重みを上書きする — 同じ選手でも
+  // エースとしてと 3&D 要員としてとでは評価が変わる。ロールは attributes.ts の
+  // ROLE_BEHAVIOR 経由で試合中の挙動も変える（仮想の特殊能力 + 優先度/プレイ
+  // メイキングのシフト。applyDef 内でティップオフ時に適用）。
+  // `pos` = そのロールを取れるポジション; undefined = 全ポジション共通
+  // （現代のポジション横断的な仕事）。`short` = ピルに表示されるコード。
   private static readonly EVAL_ROLES: Record<string, { ax: number[]; ht: number; short: string; pos?: string[]; tip: string }> = {
     //                       シュート ドリブル  パス  スピード フィジカル 守備      身長
     // --- ガード/ハンドラー系 ---
@@ -1164,9 +1161,9 @@ export class UI {
       tip: "ハッスルプレイとルーズボールで試合の流れを変える仕事人（全ポジション共通）。" },
   };
 
-  // Roles from EVAL_ROLES that are actually DEFENCE jobs — they now live in the
-  // DEFENSE picker (def.defRole), not the offence one, so exclude them from the
-  // offence picker and the offence auto-assign.
+  // EVAL_ROLES のうち実際には守備の仕事であるロール — それらは今はオフェンス
+  // ではなく守備のピッカー（def.defRole）にあるため、オフェンスのピッカーと
+  // オフェンスの自動割り当てからは除外する。
   private static readonly DEF_ONLY = new Set(["ロックダウン", "スイッチディフェンダー", "エナジーガイ"]);
 
   // ディフェンスロールのカタログ（オフェンスロールと独立に選択）。effort ギアは
@@ -1183,10 +1180,10 @@ export class UI {
     守備司令塔:            { short: "CMD", tip: "味方全体の守備位置を指示し補正する。" },
   };
 
-  // Icon-pill colour GROUPS so offence reads as one family (warm) and defence as
-  // another (cool), split by job type. Keyed by the full role name.
-  //   offence: scoring=red, support/passing=yellow, other=orange
-  //   defence: on-ball/steal=blue, interior/help=green, effort=cyan
+  // アイコンピルの色グループ。オフェンスが1つの系統（暖色）、守備が別の系統
+  // （寒色）として読めるように、仕事の種類で分ける。フルのロール名がキー。
+  //   オフェンス: 得点=赤、サポート/パス=黄、その他=橙
+  //   守備: オンボール/スティール=青、インテリア/ヘルプ=緑、エフォート=シアン
   private static readonly OFF_GROUP_C: Record<string, string> = {
     エース: "rgb(216,58,58)", スポットアップ: "rgb(216,58,58)", "3&D": "rgb(216,58,58)",
     ストレッチ: "rgb(216,58,58)", フロアスペーサー: "rgb(216,58,58)", インサイドフィニッシャー: "rgb(216,58,58)",
@@ -1201,11 +1198,11 @@ export class UI {
     ハッスルディフェンダー: "rgb(31,166,189)", バランス: "rgb(31,166,189)", 省エネ: "rgb(31,166,189)",
   };
 
-  // Auto-assign the OFFENCE choice order (primary 1..5) from scoring ability, so
-  // the ball is funnelled to the best scorers by default. Starters and the bench
-  // are ranked SEPARATELY (each 1..5), so a starter's "1" and a bench "1" can
-  // coexist — that's fine (they're never on the floor as two #1s unless the user
-  // wants it; the engine treats a genuine tie as a shared co-primary).
+  // オフェンスの選択順位（プライマリ 1..5）を得点力から自動割り当てし、デフォルト
+  // ではボールが最良のスコアラーに集まるようにする。先発とベンチは別々に順位
+  // 付けされる（それぞれ 1..5）ので、先発の「1」とベンチの「1」が共存できる —
+  // それでよい（ユーザーが望まない限り2人の #1 が同時にコートに立つことはない;
+  // エンジンは本当のタイを共有の co-primary として扱う）。
   private autoAssignChoiceRanks(only?: number): void {
     for (let t = 0; t < 2; t++) {
       if (only !== undefined && t !== only) continue;
@@ -1218,8 +1215,8 @@ export class UI {
       .sort((a, b) => b.s - a.s)
       .forEach((o, k) => { o.d.choiceRank = Math.min(k + 1, 5); });
   }
-  // Rank ONE freshly-placed player among his unit by ability (used on a swap, so
-  // teammates' hand-set ranks are left alone). Ties are allowed.
+  // 新しく配置された1選手を、彼のユニット内で能力によって順位付けする（交代時に
+  // 使うので、チームメイトの手動設定の順位はそのまま）。タイは許容。
   private assignRankFor(def: PlayerDef, team: number, idx: number): void {
     const grp = idx < STARTERS ? ROSTER[team].slice(0, STARTERS) : ROSTER[team].slice(STARTERS);
     const mine = scoringPower(def.attr);
@@ -1228,8 +1225,8 @@ export class UI {
     def.choiceRank = Math.min(higher + 1, 5);
   }
 
-  // Best OFFENCE role for one player from his rating axes (no team balancing —
-  // used on a single swap; autoAssignRoles does the team-wide balanced version).
+  // 1選手にとって最良のオフェンスロールを、彼の能力軸から求める（チームバランス
+  // なし — 単一の交代時に使う; チーム全体でバランスした版は autoAssignRoles）。
   private bestOffRole(def: PlayerDef): string | undefined {
     const ax = this.axesOf(def);
     const hs = UI.heightValue(def.height * 100);
@@ -1245,12 +1242,12 @@ export class UI {
     return best || undefined;
   }
 
-  // Auto default DEFENSE role from a player's ratings: a strong defender locks
-  // down (two-way if he's also a scorer), a rim-protecting big anchors, a high-
-  // usage offensive specialist conserves (省エネ), everyone else is バランス.
-  // Fit score for each DEF role from this player's position, physique and
-  // defensive strengths — higher = better suited. assignDefRoles drafts a
-  // balanced lineup from these; pickDefRole is the single-player pick.
+  // 選手の能力値からデフォルトの守備ロールを自動判定する: 強力なディフェンダーは
+  // ロックダウン（本人がスコアラーでもあれば両面）、リムを守るビッグはアンカー、
+  // 使用率の高いオフェンス専門家は温存（省エネ）、その他は皆バランス。
+  // この選手のポジション・体格・守備の強みから、各守備ロールへの適合スコアを出す
+  // — 高いほど適している。assignDefRoles はこれらからバランスの取れたラインナップ
+  // をドラフトする; pickDefRole は単一選手の選択。
   private defRoleFits(def: PlayerDef): Record<string, number> {
     const a = def.attr;
     const r = (x: number) => Math.max(0, Math.min(1, x / 100));
@@ -1258,7 +1255,7 @@ export class UI {
     const jmp = r(a.jump), dnk = r(a.dunk), bal = r(a.balance);
     const mnt = r(a.mental), tmw = r(a.teamwork);
     const ht = Math.max(0, Math.min(1, (def.height - 1.85) / 0.3));   // 1.85m→0 .. 2.15m→1
-    const off = Math.max(r(a.threeAcc), r(a.midAcc)) * 0.55 + r(a.aggression) * 0.45; // scoring load
+    const off = Math.max(r(a.threeAcc), r(a.midAcc)) * 0.55 + r(a.aggression) * 0.45; // 得点負荷
     const big = def.role === "PF" || def.role === "C";
     const guard = def.role === "PG" || def.role === "SG";
     const wing = def.role === "SF";
@@ -1271,14 +1268,14 @@ export class UI {
       ヘルプディフェンダー:    def_ * 0.32 + mnt * 0.28 + rea * 0.18 + bal * 0.16,
       守備司令塔:             mnt * 0.40 + tmw * 0.36 + def_ * 0.24 + (guard ? 0.06 : -0.08),
       ハッスルディフェンダー:  (def_ + agi + rea) / 3 * 0.48 + off * 0.28 + bal * 0.20,
-      省エネ:                 (off - 0.5) * 1.2 + (0.5 - def_) * 0.9 + 0.28,   // a scorer who can't defend
-      バランス:               0.50,                                            // steady baseline fallback
+      省エネ:                 (off - 0.5) * 1.2 + (0.5 - def_) * 0.9 + 0.28,   // 守備ができないスコアラー
+      バランス:               0.50,                                            // 安定したベースラインのフォールバック
     };
   }
-  private static readonly DEF_ROLE_SPREAD = 0.15;   // penalty per repeat when spreading roles across a unit
+  private static readonly DEF_ROLE_SPREAD = 0.15;   // ユニット全体にロールを散らす際の、重複ごとのペナルティ
 
-  // Best-fit DEF role for one player, optionally spreading duplicates (a role
-  // already used in his unit costs a penalty). Used when a single player is placed.
+  // 1選手にとって最も適合する守備ロール。任意で重複を散らす（彼のユニットで
+  // 既に使われているロールにはペナルティ）。単一選手が配置されたときに使う。
   private pickDefRole(def: PlayerDef, taken?: Map<string, number>): string {
     const fit = this.defRoleFits(def);
     let best = "バランス", bestV = -Infinity;
@@ -1289,11 +1286,12 @@ export class UI {
     return best;
   }
 
-  // Draft DEF roles across a UNIT (the five starters, then the eight bench) so the
-  // lineup gets a BALANCED defence: each role goes to the player who fits it best,
-  // most-confident assignments first, with a penalty that spreads duplicates — so
-  // a lineup ends up with a rim protector, an on-ball lock, a lane thief, a floor
-  // general, help men, etc., matched to who is actually suited to each.
+  // ユニット全体（先発5人、次にベンチ8人）に守備ロールをドラフトし、ライン
+  // ナップがバランスの取れた守備になるようにする: 各ロールはそれに最も適合する
+  // 選手に割り当てられ、確信度の高い割り当てから先に、重複を散らすペナルティ
+  // つきで — こうしてラインナップには、リムプロテクター、オンボールのロック、
+  // レーンの泥棒、フロアジェネラル、ヘルプ役などが、実際に各々に適した者に
+  // 合わせて揃う。
   private assignDefRoles(team: number): void {
     for (const unit of [ROSTER[team].slice(0, STARTERS), ROSTER[team].slice(STARTERS)]) {
       const taken = new Map<string, number>();
@@ -1314,15 +1312,15 @@ export class UI {
     }
   }
 
-  // The weights actually used for a player: his hand-set 評価ロール, or his
-  // position's profile when left on 自動.
+  // 選手に実際に使われる重み: 彼の手動設定の評価ロール、または 自動 のままの
+  // 場合は彼のポジションのプロフィール。
   private effWeights(def: PlayerDef): { ax: number[]; ht: number } {
     return (def.evalRole && UI.EVAL_ROLES[def.evalRole])
       || UI.ROLE_W[def.role] || UI.ROLE_W.SF;
   }
 
-  // The five position chips in a row — every position this player can cover
-  // (his own included) lit in the SAME team-colour highlight, the rest dimmed.
+  // 一列に並ぶ5つのポジションチップ — この選手がカバーできる全ポジション
+  // （自分自身を含む）が同じチームカラーのハイライトで点灯し、残りは暗くなる。
   private positionChips(def: PlayerDef, color: string): HTMLDivElement {
     const covers = new Set(this.coverablePositions(def));
     const row = document.createElement("div");
@@ -1343,9 +1341,9 @@ export class UI {
     return row;
   }
 
-  // 守れるポジション: the game's substitution adjacency (roleFit in game.ts),
-  // gated per player — the BIGGER slot only with the size for it, the SMALLER
-  // slot only with the feet for it. Display heuristic; first entry = his own.
+  // 守れるポジション: ゲームの交代隣接関係（game.ts の roleFit）を、選手ごとに
+  // ゲートする — 大きいスロットはそれ相応のサイズがあるときだけ、小さいスロット
+  // はそれ相応の脚力があるときだけ。表示用のヒューリスティック; 最初の要素 = 自分自身。
   private coverablePositions(def: PlayerDef): string[] {
     const ADJ: Record<string, string[]> = {
       PG: ["SG"], SG: ["PG", "SF"], SF: ["SG", "PF"], PF: ["SF", "C"], C: ["PF"],
@@ -1362,28 +1360,28 @@ export class UI {
     return res;
   }
 
-  // The raw ratings the "peak" scan considers — a specialist's two best single
-  // abilities are his calling card, and they are far sharper than any averaged
-  // axis (mental/stamina/teamwork type ratings are deliberately left out).
+  // 「ピーク」走査が考慮する素の能力値 — 専門家の上位2つの単一能力は彼の看板で
+  // あり、平均化されたどの軸よりもはるかに際立つ（精神/スタミナ/連携系の能力値は
+  // 意図的に除外）。
   private static readonly PEAK_KEYS: (keyof Attributes)[] = [
     "offense", "defense", "balance", "speed", "accel", "reaction", "agility",
     "dribbleAcc", "dribbleSpd", "passAcc", "passSpd", "threeAcc", "threeRange",
     "midAcc", "shotStrength", "shotTech", "bank", "dunk", "jump", "handling", "aggression",
   ];
 
-  // OVR = 50% "what his position needs" (incl. height for bigs) + 50% his two
-  // best RAW abilities, then stretched around the league median — a flat
-  // average made everyone rate ~70-76; this spreads the field (measured on the
-  // real DB: sd 2.2 → 4.4, band ≈ 68..96).
-  // 身長→戦力値: 180cm = 70, 200cm = 100 (linear, clamped — the user's
-  // calibration for how much size is worth on this scale).
+  // OVR = 50%「彼のポジションが必要とするもの」（ビッグは身長を含む） + 50% 彼の
+  // 上位2つの素の能力、そしてリーグ中央値の周りに引き伸ばす — 単純平均では全員
+  // が約 70-76 になってしまう; これがフィールドを広げる（実際の DB で計測: sd 2.2
+  // → 4.4、帯域 ≈ 68..96）。
+  // 身長→戦力値: 180cm = 70, 200cm = 100（線形、クランプ — このスケールで
+  // サイズがどれだけの価値かのユーザーのキャリブレーション）。
   private static heightValue(cm: number): number {
     return Math.max(0, Math.min(100, 70 + (cm - 180) * 1.5));
   }
 
   private ovrOf(def: PlayerDef): number {
     const ax = this.axesOf(def);
-    const w = this.effWeights(def);   // position profile, or the hand-set 評価ロール
+    const w = this.effWeights(def);   // ポジションのプロフィール、または手動設定の評価ロール
     const htScore = UI.heightValue(def.height * 100);
     let pos = w.ht * htScore, tot = w.ht;
     for (let i = 0; i < ax.length; i++) { pos += w.ax[i] * ax[i]; tot += w.ax[i]; }
@@ -1392,20 +1390,20 @@ export class UI {
     const v = pos * 0.5 + ((raw[0] + raw[1]) / 2) * 0.5;
     return Math.round(Math.max(40, Math.min(99, 74 + (v - 74) * 1.4)));
   }
-  // Team strength per axis: NOT a flat average — each player counts toward an
-  // axis in proportion to how responsible his position (or hand-set 評価ロール)
-  // is for it: the PG's passing IS the team's passing, while the C barely
-  // moves that needle. Starters carry 70%, the bench rotation 30%.
+  // 軸ごとのチーム戦力: 単純平均ではない — 各選手は、彼のポジション（または手動
+  // 設定の評価ロール）がその軸にどれだけ責任を持つかに比例して軸に寄与する:
+  // PG のパスはチームのパスそのものだが、C はその針をほとんど動かさない。
+  // 先発が 70%、ベンチのローテーションが 30% を担う。
   private teamAxes(team: number): number[] {
     return this.teamAxesOf(ROSTER[team]);
   }
-  // Same computation over an arbitrary roster array (used to preview a swap).
+  // 任意のロスター配列に対する同じ計算（交代のプレビューに使う）。
   private teamAxesOf(r: PlayerDef[]): number[] {
     return UI.HEX_AXES.map((x, i) => {
       const grp = (from: number, to: number): number => {
         let v = 0, w = 0;
         for (let j = from; j < to; j++) {
-          const wt = this.effWeights(r[j]).ax[i] + 0.02; // tiny floor: everyone counts a little
+          const wt = this.effWeights(r[j]).ax[i] + 0.02; // わずかな下限: 誰もが少しは寄与する
           v += x.calc(r[j].attr) * wt;
           w += wt;
         }
@@ -1415,9 +1413,9 @@ export class UI {
     });
   }
 
-  // Head-to-head board: the two teams' six axes side by side, tornado-style,
-  // with the stronger side's number lit up.
-  // A team's number for the header: the players' OVRs, starters 70% bench 30%.
+  // 直接対決ボード: 2チームの6軸を左右に並べたトルネード型。強い側の数字が
+  // 点灯する。
+  // ヘッダー用のチームの数値: 選手の OVR、先発 70% ベンチ 30%。
   private teamOvr(team: number): number {
     return this.teamOvrOf(ROSTER[team]);
   }
@@ -1428,9 +1426,9 @@ export class UI {
     return Math.round((st / STARTERS) * 0.7 + (bn / (ROSTER_SIZE - STARTERS)) * 0.3);
   }
 
-  // ...and its size: height in cm, weighted by how much height MATTERS for
-  // each man's position/role — the C's reach is the team's size, a PG's
-  // stature barely registers.
+  // ...そしてそのサイズ: cm 単位の身長を、各人のポジション/ロールにとって身長が
+  // どれだけ重要かで重み付け — C のリーチはチームのサイズだが、PG の身長は
+  // ほとんど影響しない。
   private teamHeight(team: number): number {
     return this.teamHeightOf(ROSTER[team]);
   }
@@ -1447,40 +1445,40 @@ export class UI {
     return (grp(0, STARTERS) * 0.7 + grp(STARTERS, ROSTER_SIZE) * 0.3) * 100;
   }
 
-  // Pale-green (gain) / light-red (loss) tints for the swap-preview deltas.
+  // 交代プレビューの増減用の、淡い緑（増加）/ 薄い赤（減少）の色。
   private static readonly GAIN = "rgb(120,225,140)";
   private static readonly LOSS = "rgb(240,140,130)";
-  // Each ROLE carries its own accent colour so they are told apart at a glance.
-  // Offence and defence roles that form a natural pair share one colour:
-  //   フロアジェネラル(攻) = 守備司令塔(守)   … 司令塔 / on-court commander
-  //   エース(攻)           = ロックダウン(守)  … the star ↔ the star-stopper
-  // muted / desaturated so they sit inside the dark UI rather than shout
-  // (offence/defence role colours are the GROUP palettes OFF_GROUP_C / DEF_GROUP_C
-  //  defined above — warm for offence, cool for defence, shared by the in-game
-  //  icons AND the editor role pills / picker.)
-  private static readonly USE_C = "rgb(198,202,212)";  // 順 primary/usage order — neutral silver
+  // 各ロールは独自のアクセントカラーを持ち、一目で見分けられるようにする。
+  // 自然なペアを成すオフェンスと守備のロールは1つの色を共有する:
+  //   フロアジェネラル(攻) = 守備司令塔(守)   … 司令塔 / コート上の指揮官
+  //   エース(攻)           = ロックダウン(守)  … スター ↔ スターを止める者
+  // 主張しすぎず暗い UI に馴染むよう、彩度を落として抑えてある
+  // （オフェンス/守備のロール色は上で定義したグループパレット OFF_GROUP_C /
+  //  DEF_GROUP_C — オフェンスは暖色、守備は寒色。試合中のアイコンとエディタの
+  //  ロールピル / ピッカーで共有される。）
+  private static readonly USE_C = "rgb(198,202,212)";  // 順 プライマリ/使用率順 — 中立的なシルバー
 
-  // `preview` (set while carrying an incoming DB player over a target row) shows
-  // how one team's strength bars WOULD change if the swap happened: the changed
-  // portion of each bar and a ±N number are tinted pale green / light red.
+  // `preview`（取り込む DB 選手を対象行の上に運んでいる間に設定される）は、
+  // 交代が起きたら1チームの戦力バーがどう変わるかを示す: 各バーの変化した
+  // 部分と ±N の数値が淡い緑 / 薄い赤で色付けされる。
   private buildVsBoard(preview?: { team: number; roster: PlayerDef[] }): HTMLDivElement {
     const baseAxes = [this.teamAxes(0), this.teamAxes(1)];
     const dispAxes = [baseAxes[0].slice(), baseAxes[1].slice()];
     if (preview) dispAxes[preview.team] = this.teamAxesOf(preview.roster);
     const colA = colorOf(0), colB = colorOf(1);
-    // whether a given side is being previewed
+    // 指定した側がプレビュー中かどうか
     const prev = (t: number) => (preview && preview.team === t);
 
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {
       width: "100%", boxSizing: "border-box", padding: "7px 14px",
       background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.14)",
-      // gap: vertical spacing between the stacked comparison rows (shot / dribble
-      // / …) — kept tight so the bars sit close together
+      // gap: 積み重ねた比較行（シュート / ドリブル / …）間の縦の間隔 — バーが
+      // 近くに並ぶよう詰めておく
       borderRadius: "12px", display: "flex", flexDirection: "column", gap: "1px",
     } as Partial<CSSStyleDeclaration>);
 
-    // header: TEAM A  <OVR>  VS  <OVR>  TEAM B
+    // ヘッダー: TEAM A  <OVR>  VS  <OVR>  TEAM B
     const head = document.createElement("div");
     Object.assign(head.style, {
       display: "grid", gridTemplateColumns: "1fr auto auto auto 1fr", gap: "10px",
@@ -1522,37 +1520,37 @@ export class UI {
     );
     wrap.appendChild(head);
 
-    // comparison rows: value | ←bar | label | bar→ | value. The bar spreads a
-    // declared band (ratings are compressed) — the exact numbers sit beside it.
-    // `dA`/`dB` are the previewed team's per-row delta (else null).
+    // 比較行: 値 | ←バー | ラベル | バー→ | 値。バーは宣言された帯域を広げる
+    // （能力値は圧縮されている）— 正確な数値はその脇に置かれる。
+    // `dA`/`dB` はプレビュー中のチームの行ごとの増減（それ以外は null）。
     const addRow = (label: string, a: number, b: number, lo: number, hi: number,
                     oldA: number | null, oldB: number | null) => {
       const row = document.createElement("div");
       Object.assign(row.style, {
-        // value columns hold just the number, pushed to the outer edges, so the
-        // two bars run long and sit close together across a tight centre label.
-        // The preview ±N floats (absolute) and so costs no column width — the
-        // board never reflows and the bars never shrink when a delta appears.
+        // 値の列は数字だけを保持し、外側の端に寄せる。こうして2本のバーが長く
+        // 伸び、詰まった中央ラベルを挟んで近くに並ぶ。プレビューの ±N は浮遊
+        // （absolute）するので列幅を消費しない — 増減が現れてもボードは再フロー
+        // せず、バーも縮まない。
         display: "grid", gridTemplateColumns: "40px 1fr 54px 1fr 40px", gap: "6px",
         alignItems: "center",
       } as Partial<CSSStyleDeclaration>);
       const scale = (v: number) => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
-      // value cell: the number hugs the OUTER edge; the tinted ±N (shown only
-      // when previewed) floats inward over the bar's empty end, painted on top so
-      // it is never hidden and never widens the cell.
+      // 値のセル: 数字は外側の端に密着する; 色付きの ±N（プレビュー時のみ表示）
+      // はバーの空いた端の上に内向きに浮遊し、上に描かれるので決して隠れず、
+      // セルを広げることもない。
       const val = (v: number, win: boolean, align: string, old: number | null): HTMLDivElement => {
         const d = document.createElement("div");
         Object.assign(d.style, {
           position: "relative", display: "flex", alignItems: "center", whiteSpace: "nowrap",
-          // hug the OUTER edge: team A (left col) to the left, team B to the right
+          // 外側の端に密着: team A（左列）は左へ、team B は右へ
           justifyContent: align === "right" ? "flex-start" : "flex-end",
         } as Partial<CSSStyleDeclaration>);
         const n = document.createElement("span");
         Object.assign(n.style, { fontSize: "12px", fontWeight: "800", color: "#fff", opacity: win ? "1" : "0.5" });
-        n.textContent = v.toFixed(1);   // 0.1 precision so small swaps are visible
+        n.textContent = v.toFixed(1);   // 0.1 の精度で小さな交代も見えるように
         d.appendChild(n);
-        // TRUE change to one decimal — bench / starter⇄bench swaps move the team
-        // value by less than a whole point, so an integer delta would vanish.
+        // 小数第1位までの真の変化 — ベンチ / 先発⇄ベンチの交代はチームの値を
+        // 1点未満しか動かさないので、整数の増減では消えてしまう。
         const raw = old !== null ? v - old : 0;
         const delta = Math.round(raw * 10) / 10;
         if (delta !== 0) {
@@ -1560,7 +1558,7 @@ export class UI {
           Object.assign(dl.style, {
             position: "absolute", top: "50%", fontSize: "10px", fontWeight: "800",
             color: delta > 0 ? UI.GAIN : UI.LOSS, zIndex: "5", pointerEvents: "none",
-            // float toward the centre/bar so the outer number keeps its place
+            // 中央/バーの方へ浮かせ、外側の数字が位置を保つようにする
             ...(align === "right"
               ? { right: "0", transform: "translate(calc(100% + 3px), -50%)" }
               : { left: "0", transform: "translate(calc(-100% - 3px), -50%)" }),
@@ -1570,8 +1568,8 @@ export class UI {
         }
         return d;
       };
-      // bar: base fill in team colour; if previewed, the changed slice is tinted
-      // pale green (gain) or light red (loss), extending outward from centre.
+      // バー: チームカラーのベース塗り; プレビュー時は、変化した部分が淡い緑
+      // （増加）または薄い赤（減少）で色付けされ、中央から外向きに伸びる。
       const bar = (v: number, color: string, win: boolean, fromRight: boolean, old: number | null): HTMLDivElement => {
         const track = document.createElement("div");
         Object.assign(track.style, {
@@ -1592,8 +1590,8 @@ export class UI {
           const gain = sNew >= sOld;
           const baseSeg = seg(Math.max(1, baseW), color);
           const deltaSeg = deltaW > 0.15 ? seg(deltaW, gain ? UI.GAIN : UI.LOSS) : null;
-          // outward direction: A grows leftward (delta OUTSIDE the base = before it
-          // in a flex-end row); B grows rightward (delta AFTER the base).
+          // 外向きの方向: A は左へ伸びる（増減はベースの外側 = flex-end 行では
+          // ベースの前）; B は右へ伸びる（増減はベースの後）。
           if (fromRight) { if (deltaSeg) track.appendChild(deltaSeg); track.appendChild(baseSeg); }
           else { track.appendChild(baseSeg); if (deltaSeg) track.appendChild(deltaSeg); }
         }
@@ -1615,8 +1613,8 @@ export class UI {
       addRow(UI.HEX_AXES[i].label, dispAxes[0][i], dispAxes[1][i], 40, 99,
         prev(0) ? baseAxes[0][i] : null, prev(1) ? baseAxes[1][i] : null);
     }
-    // team size — responsibility-weighted height converted to a strength value
-    // on the user's calibration (180cm → 70, 200cm → 100), same band as the axes
+    // チームのサイズ — 責任で重み付けした身長を、ユーザーのキャリブレーション
+    // （180cm → 70, 200cm → 100）で戦力値に変換。軸と同じ帯域
     const hBase = [UI.heightValue(this.teamHeight(0)), UI.heightValue(this.teamHeight(1))];
     const hDisp = hBase.slice();
     if (preview) hDisp[preview.team] = UI.heightValue(this.teamHeightOf(preview.roster));
@@ -1625,30 +1623,30 @@ export class UI {
     return wrap;
   }
 
-  // Swap the live VS board element for a freshly built one (optionally a preview).
+  // ライブの VS ボード要素を新しく構築したものに差し替える（任意でプレビュー）。
   private replaceVsBoard(next: HTMLDivElement): void {
     if (this.vsBoard?.parentElement) this.vsBoard.parentElement.replaceChild(next, this.vsBoard);
     this.vsBoard = next;
   }
-  // Show / clear the "what this swap does to team strength" preview on the board.
+  // 「この交代がチーム戦力に何をするか」のプレビューをボード上に表示/クリアする。
   private showVsPreview(team: number, idx: number, dbp: DbPlayer): void {
     const roster = ROSTER[team].slice();
     roster[idx] = makeDefFromDb(dbp);
     this.vsPreviewActive = true;
     this.replaceVsBoard(this.buildVsBoard({ team, roster }));
   }
-  // Preview how a 評価ロール change would move this player's team's strength bars.
+  // 評価ロールの変更がこの選手のチームの戦力バーをどう動かすかをプレビューする。
   private previewRole(def: PlayerDef, team: number, role: string): void {
     const idx = ROSTER[team].indexOf(def);
     if (idx < 0) return;
     const roster = ROSTER[team].slice();
-    roster[idx] = { ...def, evalRole: role === "自動" ? undefined : role };  // attr shared (read-only)
+    roster[idx] = { ...def, evalRole: role === "自動" ? undefined : role };  // attr は共有（読み取り専用）
     this.vsPreviewActive = true;
     this.replaceVsBoard(this.buildVsBoard({ team, roster }));
   }
-  // Preview how EXCHANGING two of a team's roster slots (starter ⇄ bench, via
-  // drag & drop) would move its strength bars — starters count 70%, bench 30%,
-  // so moving a strong reserve into the starting five lifts the team.
+  // チームのロスタースロットを2つ交換（先発 ⇄ ベンチ、ドラッグ＆ドロップで）
+  // したときに戦力バーがどう動くかをプレビューする — 先発は 70%、ベンチは 30%
+  // なので、強い控えを先発5人に入れるとチームが底上げされる。
   private showSwapPreview(team: number, idxA: number, idxB: number): void {
     const roster = ROSTER[team].slice();
     [roster[idxA], roster[idxB]] = [roster[idxB], roster[idxA]];
@@ -1661,9 +1659,9 @@ export class UI {
     this.replaceVsBoard(this.buildVsBoard());
   }
 
-  // One team's roster: compact rows (position / name / height / OVR), starters
-  // above the bench divider. Click a player, then click another to swap them —
-  // hover shows the detail card (hexagon chart + 特殊能力).
+  // 1チームのロスター: コンパクトな行（ポジション / 名前 / 身長 / OVR）、先発は
+  // ベンチの区切りの上。選手をクリックし、次に別の選手をクリックすると入れ替え —
+  // ホバーで詳細カード（ヘックスチャート + 特殊能力）が表示される。
   private rosterCard(team: number): HTMLDivElement {
     const color = colorOf(team);
     const wrap = document.createElement("div");
@@ -1673,7 +1671,7 @@ export class UI {
       display: "flex", flexDirection: "column", gap: "1px", textAlign: "left",
     } as Partial<CSSStyleDeclaration>);
 
-    // header: team name + a "選手を交代" button that opens the 4000+ DB picker
+    // ヘッダー: チーム名 + 4000人超の DB ピッカーを開く「選手を交代」ボタン
     const head = document.createElement("div");
     Object.assign(head.style, {
       display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -1682,9 +1680,9 @@ export class UI {
     const teamName = document.createElement("span");
     Object.assign(teamName.style, { fontSize: "15px", fontWeight: "800", color });
     teamName.textContent = TEAM_NAMES[team];
-    // per-team controls beside the name: re-draw this squad / re-optimise its
-    // roles for the current line-up / swap a player from the DB. Kept compact so
-    // all three fit the card, and allowed to wrap on a very narrow view.
+    // 名前の脇のチームごとのコントロール: このスカッドを引き直す / 現在のライン
+    // ナップに合わせてロールを再最適化 / DB から選手を交代。3つがカードに収まる
+    // ようコンパクトにし、非常に狭い表示では折り返しを許す。
     const ctrlBtn = (label: string, filled: boolean, onClick: () => void): HTMLButtonElement => {
       const b = this.button(label);
       Object.assign(b.style, {
@@ -1730,7 +1728,7 @@ export class UI {
     const ovr = this.ovrOf(def);
 
     const row = document.createElement("div");
-    row.dataset.dropTeam = String(team);   // drag-&-drop hit-testing
+    row.dataset.dropTeam = String(team);   // ドラッグ＆ドロップのヒットテスト
     row.dataset.dropIdx = String(i);
     Object.assign(row.style, {
       display: "grid", gridTemplateColumns: "26px 30px 30px 22px 1fr 24px 22px 24px", gap: "5px",
@@ -1744,11 +1742,11 @@ export class UI {
     Object.assign(pos.style, { fontSize: "10px", fontWeight: "800", color, border: `1px solid ${color}`, borderRadius: "5px", textAlign: "center", padding: "1px 0" });
     pos.textContent = def.role;
 
-    // Three POS-chip-sized pills, editable right here in the roster row:
-    //   攻 = offence role, 守 = defence role, 順 = offence choice order (usage).
-    // The 攻/守 pills take the SELECTED role's own colour (paired offence/defence
-    // roles share one), so roles are told apart at a glance. (full names / tips
-    // live in the picker + 詳細)
+    // ポジションチップと同サイズの3つのピル。このロスター行でそのまま編集できる:
+    //   攻 = オフェンスロール, 守 = 守備ロール, 順 = オフェンス選択順位（使用率）。
+    // 攻/守 のピルは選択したロール自身の色を取る（ペアのオフェンス/守備ロールは
+    // 1色を共有）ので、ロールが一目で見分けられる。（フルの名前 / ヒントは
+    // ピッカー + 詳細 にある）
     const pill = (text: string, active: boolean, accent: string, title: string, onClick: () => void): HTMLButtonElement => {
       const b = document.createElement("button");
       b.textContent = text; b.title = title;
@@ -1788,7 +1786,7 @@ export class UI {
     Object.assign(num.style, { fontSize: "13px", fontWeight: "800", color: "#fff", textAlign: "right" });
     num.textContent = String(ovr);
 
-    // 詳細 — opens the full-ratings modal (all 25 ratings + 特殊能力)
+    // 詳細 — 全能力値モーダルを開く（全 25 能力値 + 特殊能力）
     const det = document.createElement("button");
     det.textContent = "詳";
     Object.assign(det.style, {
@@ -1807,17 +1805,17 @@ export class UI {
     return row;
   }
 
-  // DRAG & DROP swap: grab a player's bar, carry it (it follows the cursor),
-  // and drop it on a team-mate — starter ⇄ bench included — to exchange the
-  // two roster slots. On touch a LONG-PRESS lifts the bar (a plain swipe still
-  // scrolls the list).
+  // ドラッグ＆ドロップの入れ替え: 選手のバーを掴み、運び（カーソルに追従する）、
+  // チームメイトの上にドロップする — 先発 ⇄ ベンチも含む — と2つのロスター
+  // スロットが交換される。タッチでは長押しでバーが持ち上がる（単なるスワイプは
+  // これまで通りリストをスクロールする）。
   private beginDrag(team: number, idx: number, ev: PointerEvent): void {
-    if (this.carry) return;   // an incoming DB player is being placed — ignore row drags
+    if (this.carry) return;   // 取り込む DB 選手を配置中 — 行のドラッグは無視
     if (ev.pointerType === "mouse" && ev.button !== 0) return;
     const ox = ev.clientX, oy = ev.clientY;
     let lifted = false;
     let timer = 0;
-    let previewIdx = -1;   // roster slot whose swap is currently previewed on the VS board
+    let previewIdx = -1;   // 現在 VS ボード上で交代がプレビューされているロスタースロット
     const lift = (x: number, y: number) => {
       lifted = true;
       this.hidePlayerCard();
@@ -1840,8 +1838,8 @@ export class UI {
     const place = (x: number, y: number) => {
       if (!this.dragGhost) return;
       this.dragGhost.style.left = `${x}px`;
-      this.dragGhost.style.top = `${y - 18}px`;   // ride just above the pointer
-      // light up the row it would swap with
+      this.dragGhost.style.top = `${y - 18}px`;   // ポインタのすぐ上に乗せる
+      // 入れ替え対象になる行を点灯させる
       const t = this.dropTargetAt(x, y);
       const valid = t && t.team === team && t.idx !== idx ? t : null;
       if (this.dragHl && this.dragHl !== valid?.el) {
@@ -1854,7 +1852,7 @@ export class UI {
         valid.el.style.background = "rgba(90,140,255,0.22)";
         this.dragHl = valid.el;
       }
-      // preview how strength would move if these two slots were exchanged
+      // これら2つのスロットを交換したら戦力がどう動くかをプレビュー
       const wantIdx = valid ? valid.idx : -1;
       if (wantIdx !== previewIdx) {
         previewIdx = wantIdx;
@@ -1865,7 +1863,7 @@ export class UI {
     const blockTouch = (te: TouchEvent) => { if (lifted) te.preventDefault(); };
     const move = (e: PointerEvent) => {
       if (!lifted) {
-        // moved before the long-press fired → it's a scroll, not a drag
+        // 長押しが発火する前に動いた → ドラッグではなくスクロール
         if (Math.hypot(e.clientX - ox, e.clientY - oy) > 8) teardown();
         return;
       }
@@ -1883,7 +1881,7 @@ export class UI {
         this.dragHl.style.background = "rgba(255,255,255,0.04)";
         this.dragHl = null;
       }
-      if (previewIdx >= 0) { previewIdx = -1; this.clearVsPreview(); }   // drop the swap preview
+      if (previewIdx >= 0) { previewIdx = -1; this.clearVsPreview(); }   // 交代プレビューを取り下げる
       this.dragFrom = null;
     };
     const up = (e: PointerEvent) => {
@@ -1893,7 +1891,7 @@ export class UI {
       if (t && t.team === team && t.idx !== idx) {
         const r = ROSTER[team];
         [r[idx], r[t.idx]] = [r[t.idx], r[idx]];
-        this.refreshEditors();   // rosters AND the VS board (starters changed)
+        this.refreshEditors();   // ロスターと VS ボード（先発が変わった）
       }
     };
     window.addEventListener("pointermove", move);
@@ -1904,8 +1902,8 @@ export class UI {
     else timer = window.setTimeout(() => lift(ox, oy), 280);
   }
 
-  // The roster row under the pointer, if any (the ghost ignores pointer events,
-  // so elementFromPoint sees straight through it).
+  // ポインタの下のロスター行（あれば）。ゴーストはポインタイベントを無視する
+  // ため、elementFromPoint はそれを素通しで見る。
   private dropTargetAt(x: number, y: number): { team: number; idx: number; el: HTMLElement } | null {
     const el = document.elementFromPoint(x, y) as HTMLElement | null;
     const row = el?.closest("[data-drop-team]") as HTMLElement | null;
@@ -1913,9 +1911,8 @@ export class UI {
     return { team: Number(row.dataset.dropTeam), idx: Number(row.dataset.dropIdx), el: row };
   }
 
-  // Floating role-picker menu: press the pill → choose the 評価ロール from a
-  // list (the current one is lit in the team colour). Closes on pick or on any
-  // press outside.
+  // 浮遊するロールピッカーのメニュー: ピルを押す → 一覧から評価ロールを選ぶ
+  // （現在のものはチームカラーで点灯）。選択時、または外側を押したときに閉じる。
   private openRolePicker(def: PlayerDef, team: number, anchor: HTMLElement,
                          onPick?: () => void, kind: "off" | "def" = "off"): void {
     this.closeRolePicker();
@@ -1936,8 +1933,8 @@ export class UI {
     const mkBtn = (nm: string): HTMLDivElement => {
       const cell = document.createElement("div");
       Object.assign(cell.style, { display: "flex", alignItems: "center", gap: "4px" } as Partial<CSSStyleDeclaration>);
-      // each option is tinted with the role's OWN colour so the picker doubles as
-      // a legend; the selected one fills solid
+      // 各選択肢はロール自身の色で色付けされ、ピッカーが凡例も兼ねる;
+      // 選択されたものは塗りつぶしになる
       const acc = roleColour(nm);
       const dot = document.createElement("span");
       Object.assign(dot.style, { width: "9px", height: "9px", borderRadius: "50%", background: acc, flexShrink: "0" } as Partial<CSSStyleDeclaration>);
@@ -1956,16 +1953,16 @@ export class UI {
         else def.evalRole = nm === "自動" ? undefined : nm;
         this.closeRolePicker();
         if (onPick) onPick();
-        else this.refreshEditors();   // OVR + team bars re-evaluate
+        else this.refreshEditors();   // OVR + チームバーを再評価
       };
-      // real-time: hovering an OFFENCE role previews how it moves the team's bars
-      // (only on the pregame roster; defence roles don't change the OVR bars)
+      // リアルタイム: オフェンスロールをホバーすると、それがチームのバーをどう
+      // 動かすかをプレビュー（試合前のロスターのみ; 守備ロールは OVR バーを変えない）
       if (!this.detailModal && !isDef) {
         b.onmouseenter = () => this.previewRole(def, team, nm);
         b.onmouseleave = () => this.clearVsPreview();
       }
       cell.append(dot, b);
-      // ⓘ — press (or hover) to read what the role means / what it rewards
+      // ⓘ — 押す（またはホバー）と、そのロールの意味 / 何を評価するかが読める
       const tip = nm === "自動"
         ? (isDef ? "能力から自動でディフェンスロールを選びます。" : "ポジション標準の重みで評価します（ロール未設定）。")
         : (isDef ? UI.DEF_ROLES[nm]?.tip : UI.EVAL_ROLES[nm]?.tip);
@@ -1996,13 +1993,13 @@ export class UI {
     };
     menu.appendChild(mkBtn("自動"));
     if (isDef) {
-      // one flat list of DEFENSE roles (effort gears + specialists)
+      // 守備ロールの一つのフラットなリスト（エフォートのギア + 専門家）
       const dg = grid();
       for (const nm of Object.keys(UI.DEF_ROLES)) dg.appendChild(mkBtn(nm));
       menu.appendChild(header("ディフェンスロール"));
       menu.appendChild(dg);
     } else {
-      // OFFENCE roles this POSITION can take (defence-only names excluded)...
+      // このポジションが取れるオフェンスロール（守備専用の名前は除外）...
       const posGrid = grid();
       for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
         if (UI.DEF_ONLY.has(nm)) continue;
@@ -2012,7 +2009,7 @@ export class UI {
         menu.appendChild(header(`${def.role} のロール`));
         menu.appendChild(posGrid);
       }
-      // ...and the modern position-crossing jobs, open to everyone
+      // ...そして現代のポジション横断的な仕事。全員に開かれている
       const crossGrid = grid();
       for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
         if (!r.pos && !UI.DEF_ONLY.has(nm)) crossGrid.appendChild(mkBtn(nm));
@@ -2043,11 +2040,11 @@ export class UI {
       window.removeEventListener("pointerdown", this.rolePickerCloser, true);
       this.rolePickerCloser = null;
     }
-    this.clearVsPreview();   // drop any role-hover preview (no-op if none active)
+    this.clearVsPreview();   // ロールホバーのプレビューを取り下げる（有効なものがなければ何もしない）
   }
 
-  // Full-ratings modal (the 詳 button): every one of the 25 ratings with a
-  // value bar, the hexagon digest, and the 特殊能力 — over a dimmed backdrop.
+  // 全能力値モーダル（詳 ボタン）: 25 の能力値それぞれを値バーつきで、ヘックス
+  // ダイジェスト、そして特殊能力 — 暗くした背景の上に。
   private openDetailModal(def: PlayerDef, team: number): void {
     this.closeDetailModal();
     this.hidePlayerCard();
@@ -2062,8 +2059,8 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
     overlay.onclick = (e) => { if (e.target === overlay) this.closeDetailModal(); };
 
-    // phone: a tall single-column layout that stays inside the screen width;
-    // desktop: chart and ratings side by side
+    // モバイル: 画面幅に収まる、縦長の単一列レイアウト;
+    // デスクトップ: チャートと能力値を左右に並べる
     const phone = window.innerWidth < 640;
     const panel = document.createElement("div");
     Object.assign(panel.style, {
@@ -2075,8 +2072,8 @@ export class UI {
       display: "flex", flexDirection: "column", gap: "10px", textAlign: "left",
     } as Partial<CSSStyleDeclaration>);
 
-    // header: name on its own line (shown in full — the panel widens to fit,
-    // ellipsis only if it would exceed the panel/screen), then height/OVR/role
+    // ヘッダー: 名前は独立した行に（フルで表示 — パネルが収まるよう広がる。
+    // パネル/画面を超える場合のみ省略記号）、続いて身長/OVR/ロール
     const head = document.createElement("div");
     Object.assign(head.style, { display: "flex", flexDirection: "column", gap: "4px" } as Partial<CSSStyleDeclaration>);
     const nm = document.createElement("div");
@@ -2090,11 +2087,11 @@ export class UI {
     const meta = document.createElement("div");
     Object.assign(meta.style, { fontSize: "12px", opacity: "0.8", whiteSpace: "nowrap" });
     meta.textContent = `${Math.round(def.height * 100)}cm ${def.hand === "L" ? "左" : "右"}利き  OVR ${this.ovrOf(def)}`;
-    // 役割 — switched HERE (the icon pill is display-only): opens the same
-    // picker as the pregame roster, then the modal rebuilds with the new role
+    // 役割 — ここで切り替える（アイコンピルは表示専用）: 試合前ロスターと同じ
+    // ピッカーを開き、その後モーダルが新しいロールで再構築される
     const reopen = () => {
-      this.refreshEditors();            // pregame VS board / rosters re-evaluate
-      this.openDetailModal(def, team);  // ...and this modal reopens up to date
+      this.refreshEditors();            // 試合前VSボード / ロスターを再評価
+      this.openDetailModal(def, team);  // ...そしてこのモーダルが最新の状態で開き直される
     };
     const pill = (label: string, set: boolean): HTMLButtonElement => {
       const b = document.createElement("button");
@@ -2108,20 +2105,20 @@ export class UI {
       } as Partial<CSSStyleDeclaration>);
       return b;
     };
-    // OFFENCE role, DEFENCE role and CHOICE ORDER — all switched here.
+    // オフェンスロール、守備ロール、選択順位 — 全てここで切り替える。
     const roleBtn = pill(`攻: ${def.evalRole ?? "自動"} ▾`, !!def.evalRole);
     roleBtn.onclick = () => this.openRolePicker(def, team, roleBtn, reopen, "off");
     const defBtn = pill(`守: ${def.defRole ?? "自動"} ▾`, !!def.defRole);
     defBtn.onclick = () => this.openRolePicker(def, team, defBtn, reopen, "def");
-    // choice order cycles 自動→1→2→…→5→自動 (1 = first option / most usage)
+    // 選択順位は 自動→1→2→…→5→自動 と循環（1 = 最初の選択肢 / 最も高い使用率）
     const rankBtn = pill(`プライマリ: ${def.choiceRank ?? "自動"}`, !!def.choiceRank);
     rankBtn.onclick = () => {
       const next = def.choiceRank === undefined ? 1 : def.choiceRank >= 5 ? undefined : def.choiceRank + 1;
       def.choiceRank = next;
       reopen();
     };
-    // Layout under 身長・利き腕: [オフェンスロール | プライマリ] on one row, and
-    // ディフェンスロール on the row below at the SAME total width.
+    // 身長・利き腕 の下のレイアウト: [オフェンスロール | プライマリ] を1行、そして
+    // その下の行にディフェンスロールを同じ総幅で。
     const roleBox = document.createElement("div");
     Object.assign(roleBox.style, {
       display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px",
@@ -2131,7 +2128,7 @@ export class UI {
     Object.assign(roleRow.style, { display: "flex", gap: "6px", alignItems: "center" } as Partial<CSSStyleDeclaration>);
     Object.assign(roleBtn.style, { flex: "1.6", boxSizing: "border-box", textAlign: "center" } as Partial<CSSStyleDeclaration>);
     Object.assign(rankBtn.style, { flex: "1", boxSizing: "border-box", textAlign: "center" } as Partial<CSSStyleDeclaration>);
-    // プライマリの説明 (ⓘ: hover / tap で表示)
+    // プライマリの説明（ⓘ: ホバー / タップで表示）
     const rankTip = "プライマリ＝オフェンスの選択順位（誰にボールを集めて攻撃をけん引させるか）。1が最優先で、数字が大きいほど使用率が下がる。「自動」はチーム内の得点力で自動割当。同じ番号を複数の選手に付けると2人でボールをシェア（co-primary）。";
     rankBtn.title = rankTip;
     const rankInfo = document.createElement("span");
@@ -2148,8 +2145,8 @@ export class UI {
     sub.append(meta);
     head.append(nm, sub, roleBox);
 
-    // TOP ROW: name / role / coverable positions on the left, hexagon chart on
-    // the right (stacked on the phone). The ratings grid goes FULL WIDTH below.
+    // 上段: 左に 名前 / ロール / カバー可能ポジション、右にヘックスチャート
+    // （モバイルでは縦積み）。能力値グリッドはその下に全幅で。
     const infoCol = document.createElement("div");
     Object.assign(infoCol.style, {
       display: "flex", flexDirection: "column", gap: "6px",
@@ -2169,7 +2166,7 @@ export class UI {
     topRow.append(infoCol, cv);
     panel.appendChild(topRow);
 
-    // STATUS: all 25 ratings across the full width below
+    // ステータス: 下に全幅で 25 の能力値すべて
     const grid = document.createElement("div");
     Object.assign(grid.style, {
       display: "grid", gap: "6px 12px", width: "100%",
@@ -2199,7 +2196,7 @@ export class UI {
     }
     panel.appendChild(grid);
 
-    // 特殊能力 chips (with their explanations on hover)
+    // 特殊能力 チップ（ホバーで説明つき）
     const chips = document.createElement("div");
     Object.assign(chips.style, { display: "flex", flexWrap: "wrap", gap: "4px" } as Partial<CSSStyleDeclaration>);
     const owned = ABILITY_META.filter((m) => def.abilities?.includes(m.key));
@@ -2237,8 +2234,8 @@ export class UI {
     this.hideTip();
   }
 
-  // Build (once) an OVR-sorted view of the whole 4000+ player database so the
-  // picker's keystroke filtering is a plain array scan over cached fields.
+  // 4000人超の選手データベース全体を OVR 順にソートしたビューを（一度）構築し、
+  // ピッカーのキーストローク絞り込みがキャッシュ済みフィールドの単純な配列走査で済むようにする。
   private ensureDbIndex(): { p: DbPlayer; ovr: number; lower: string }[] {
     if (!this.dbIndex) {
       this.dbIndex = PLAYER_DB
@@ -2248,10 +2245,10 @@ export class UI {
     return this.dbIndex;
   }
 
-  // 選手を交代: opened from the team-name header. Pick any of the 4000+ database
-  // players (search / position filter / OVR); on pick the modal closes and the
-  // player is "carried" on the cursor — drop him on a roster row of his team to
-  // replace that player (see startCarry).
+  // 選手を交代: チーム名ヘッダーから開く。4000人超のデータベース選手のいずれかを
+  // 選ぶ（検索 / ポジションフィルタ / OVR）; 選択するとモーダルが閉じ、選手が
+  // カーソルに「運ばれる」 — 彼のチームのロスター行にドロップして選手を入れ替える
+  // （startCarry 参照）。
   private openPlayerPicker(team: number): void {
     this.closeRolePicker();
     this.hidePlayerCard();
@@ -2281,13 +2278,13 @@ export class UI {
     document.body.appendChild(overlay);
     this.playerPicker = overlay;
 
-    // pick → close the modal and start carrying this player on the cursor
+    // 選択 → モーダルを閉じ、この選手をカーソルに運び始める
     const onPick = (dbp: DbPlayer): void => {
       this.closePlayerPicker();
       this.startCarry(team, dbp);
     };
 
-    // ---- the searchable 4000+ database list ----
+    // ---- 検索可能な 4000人超のデータベース一覧 ----
     const CAP = 150;
     let posFilter = "ALL";
     {
@@ -2385,7 +2382,7 @@ export class UI {
       close.onclick = () => this.closePlayerPicker();
 
       panel.append(title, search, posBar, note, list, close);
-      setFilter(posFilter);   // paint the list
+      setFilter(posFilter);   // 一覧を描画
       if (!phone) search.focus();
     }
   }
@@ -2395,10 +2392,11 @@ export class UI {
     this.hideTip();
   }
 
-  // クラブ編成: pick one of the 172 REAL clubs (from the master-league sheet) and
-  // rebuild this team's 13 as that club — the squad's best at each basketball
-  // slot, nearest-position fallback for roles the squad lacks (attributes.clubTeam).
-  // The team NAME becomes the club's; ランダム編成 restores the built-in name.
+  // クラブ編成: 172 の実クラブ（マスターリーグのシートから）のいずれかを選び、
+  // このチームの13人をそのクラブとして再構築する — スカッドの各バスケット
+  // スロットの最良、スカッドに欠けるロールは最も近いポジションでフォールバック
+  // （attributes.clubTeam）。チーム名はクラブのものになる; ランダム編成でビルト
+  // インの名前が復元される。
   private openClubPicker(team: number): void {
     this.closeRolePicker();
     this.hidePlayerCard();
@@ -2449,7 +2447,7 @@ export class UI {
 
     const pickClub = (idx: number): void => {
       this.closeClubPicker();
-      this.assignClub(team, idx);   // roster + name + kit + auto lineup/roles
+      this.assignClub(team, idx);   // ロスター + 名前 + ユニフォーム + 自動ラインナップ/ロール
       this.refreshEditors();
     };
 
@@ -2511,17 +2509,17 @@ export class UI {
     if (this.clubPicker) { this.clubPicker.remove(); this.clubPicker = null; }
   }
 
-  // Carry an incoming DB player on the cursor after the picker closes. A plain
-  // pointerdown on a roster row of his team drops him there (replacing that
-  // player); a pointerdown anywhere else, or Esc, cancels. No button is held —
-  // the picker's click already ended, so this is a click-to-place interaction.
+  // ピッカーが閉じた後、取り込む DB 選手をカーソルに運ぶ。彼のチームのロスター
+  // 行での単なる pointerdown で彼をそこにドロップ（その選手を置き換える）;
+  // それ以外の場所での pointerdown、または Esc でキャンセル。ボタンは押しっぱなし
+  // にしない — ピッカーのクリックは既に終わっているので、これはクリックで配置する操作。
   private startCarry(team: number, dbp: DbPlayer): void {
     this.cancelCarry();
     this.carry = { team, dbp };
     const color = colorOf(team);
 
-    // FIXED-width pill (flex): pos chip + a flexible name cell that ellipsis-clips
-    // + the swap glyph — so the label is the SAME width for a short or long name.
+    // 固定幅のピル（flex）: ポジションチップ + 省略記号でクリップする可変幅の
+    // 名前セル + 入れ替えの記号 — 名前が短くても長くてもラベルは同じ幅になる。
     const g = document.createElement("div");
     Object.assign(g.style, {
       position: "fixed", zIndex: "92", pointerEvents: "none",
@@ -2555,7 +2553,7 @@ export class UI {
     document.body.appendChild(hint);
     this.carryHint = hint;
 
-    let previewIdx = -1;   // roster slot currently previewed on the VS board (-1 = none)
+    let previewIdx = -1;   // 現在 VS ボード上でプレビュー中のロスタースロット（-1 = なし）
     const clearHl = () => {
       if (this.carryHl) {
         this.carryHl.style.border = "1px solid transparent";
@@ -2570,7 +2568,7 @@ export class UI {
       el.style.background = "rgba(90,140,255,0.22)";
       this.carryHl = el;
     };
-    // preview how team strength would change if dropped on the given slot
+    // 指定したスロットにドロップしたらチーム戦力がどう変わるかをプレビュー
     const preview = (idx: number): void => {
       if (idx === previewIdx) return;
       previewIdx = idx;
@@ -2588,17 +2586,17 @@ export class UI {
     const commit = (idx: number): void => {
       const nd = ROSTER[team][idx];
       applyDbPlayer(nd, dbp);
-      // a swapped-in player arrives WITH sensible default roles (prevents the
-      // "forgot to set a role" gap the user hit) — offence by axes, defence by
-      // ratings; choice order back to auto.
+      // 交代で入ってくる選手は妥当なデフォルトロール付きで到着する（ユーザーが
+      // ぶつかった「ロールの設定を忘れる」隙間を防ぐ）— オフェンスは軸で、守備は
+      // 能力値で; 選択順位は自動に戻す。
       nd.evalRole = this.bestOffRole(nd);
-      // pick his DEF role to FIT him and to fill a gap in his unit (teammates' roles
-      // left as they are — spread against what's already taken there)
+      // 彼の守備ロールは、彼に合いつつ彼のユニットの隙間を埋めるように選ぶ
+      // （チームメイトのロールはそのまま — そこで既に取られているものに対して散らす）
       const unit = idx < STARTERS ? ROSTER[team].slice(0, STARTERS) : ROSTER[team].slice(STARTERS);
       const takenDef = new Map<string, number>();
       for (const d of unit) if (d !== nd && d.defRole) takenDef.set(d.defRole, (takenDef.get(d.defRole) ?? 0) + 1);
       nd.defRole = this.pickDefRole(nd, takenDef);
-      this.assignRankFor(nd, team, idx);   // primary by ability (teammates untouched)
+      this.assignRankFor(nd, team, idx);   // 能力によるプライマリ（チームメイトは手を付けない）
       this.cancelCarry();
       this.refreshEditors();
     };
@@ -2606,12 +2604,12 @@ export class UI {
       const t = this.dropTargetAt(e.clientX, e.clientY);
       if (t && t.team === team) {
         e.preventDefault();
-        e.stopPropagation();   // beat the row's own long-press drag
-        // Touch has no hover, so the strength preview never got a chance to show.
-        // First tap on a slot PREVIEWS the change (highlight + ±N on the VS board);
-        // a second tap on the SAME slot confirms it. A tap on a different slot just
-        // moves the preview. Mouse still commits on the first click (its hover
-        // already previewed the change).
+        e.stopPropagation();   // 行自身の長押しドラッグに先んじる
+        // タッチにはホバーがないため、戦力プレビューが表示される機会がなかった。
+        // スロットへの最初のタップは変化をプレビューする（ハイライト + VS ボード上
+        // の ±N）; 同じスロットへの2度目のタップで確定する。別のスロットへの
+        // タップはプレビューを移動するだけ。マウスは依然として最初のクリックで
+        // 確定する（ホバーで既に変化をプレビュー済み）。
         if (e.pointerType !== "mouse" && previewIdx !== t.idx) {
           setHl(t.el);
           preview(t.idx);
@@ -2620,19 +2618,19 @@ export class UI {
         }
         commit(t.idx);
       } else {
-        this.cancelCarry();    // dropped away from any of his roster rows → cancel
+        this.cancelCarry();    // 彼のロスター行のいずれからも外れてドロップ → キャンセル
       }
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") this.cancelCarry(); };
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerdown", onDown, true);   // capture: run before row handlers
+    window.addEventListener("pointerdown", onDown, true);   // キャプチャ: 行のハンドラより前に実行
     window.addEventListener("keydown", onKey);
     this.carryCleanup = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
       clearHl();
-      if (previewIdx >= 0) { previewIdx = -1; this.clearVsPreview(); }   // drop the strength preview
+      if (previewIdx >= 0) { previewIdx = -1; this.clearVsPreview(); }   // 戦力プレビューを取り下げる
     };
   }
 
@@ -2643,14 +2641,14 @@ export class UI {
     this.carry = null;
   }
 
-  // The hover detail card: hexagon chart of the six digests + 特殊能力 chips.
+  // ホバー詳細カード: 6ダイジェストのヘックスチャート + 特殊能力チップ。
   private showPlayerCard(def: PlayerDef, team: number, anchor: HTMLElement): void {
     const color = colorOf(team);
     const card = this.playerCard;
     card.replaceChildren();
 
-    // name on its own line (full name; ellipsis only if it exceeds the card),
-    // meta beneath — so a long name isn't squeezed down to a couple of letters
+    // 名前は独立した行に（フルネーム; カードを超える場合のみ省略記号）、その下に
+    // メタ情報 — 長い名前が数文字に押し潰されないようにする
     const head = document.createElement("div");
     Object.assign(head.style, { display: "flex", flexDirection: "column", gap: "1px", marginBottom: "2px" } as Partial<CSSStyleDeclaration>);
     const nm = document.createElement("div");
@@ -2663,7 +2661,7 @@ export class UI {
     head.append(nm, meta);
     card.appendChild(head);
 
-    // coverable positions: the five chips with his lit up
+    // カバー可能ポジション: 5つのチップのうち彼の分が点灯
     const chipsRow = this.positionChips(def, color);
     chipsRow.style.margin = "1px 0 3px";
     card.appendChild(chipsRow);
@@ -2694,17 +2692,17 @@ export class UI {
     }
     card.appendChild(chips);
 
-    // float ABOVE the hovered row (its bottom edge just over the name), so the
-    // row itself — name, role pill, 詳 — is never covered and stays clickable.
-    // If there's no room above, flip below the row instead.
+    // ホバーした行の上に浮かせる（その下端が名前のすぐ上）ので、行自体 — 名前、
+    // ロールピル、詳 — は決して覆われずクリック可能なまま。上に余地がなければ
+    // 代わりに行の下に反転する。
     card.style.display = "block";
     const r = anchor.getBoundingClientRect();
     const cw = 260;
     const ch = card.offsetHeight || 320;
     let left = r.left + r.width / 2 - cw / 2;
     left = Math.max(8, Math.min(left, window.innerWidth - cw - 8));
-    // default: float above the row. Flip BELOW when it would go off the top of
-    // the screen OR overlap the VS (team-strength) board above the roster.
+    // デフォルト: 行の上に浮かせる。画面の上端からはみ出す場合、またはロスターの
+    // 上の VS（チーム戦力）ボードと重なる場合は下に反転する。
     let top = r.top - ch - 8;
     const vbBottom = this.vsBoard ? this.vsBoard.getBoundingClientRect().bottom : 0;
     if (top < 8 || top < vbBottom) top = Math.min(window.innerHeight - ch - 8, r.bottom + 8);
@@ -2716,8 +2714,8 @@ export class UI {
     this.playerCard.style.display = "none";
   }
 
-  // The hexagon (radar) chart: recessive grid rings + spokes, one data polygon
-  // in the team colour, axis labels and exact values in plain ink.
+  // ヘックス（レーダー）チャート: 控えめなグリッドのリング + スポーク、チーム
+  // カラーの1つのデータ多角形、軸ラベルと正確な値をプレーンなインクで。
   private drawHexChart(cv: HTMLCanvasElement, axes: number[], color: string): void {
     const ctx = cv.getContext("2d")!;
     const cx = cv.width / 2, cy = cv.height / 2 + 2, R = 60;
@@ -2726,7 +2724,7 @@ export class UI {
       return [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
     };
     ctx.clearRect(0, 0, cv.width, cv.height);
-    // grid: three rings + spokes, kept faint so the data reads first
+    // グリッド: 3つのリング + スポーク。データが先に読めるよう薄めに保つ
     ctx.strokeStyle = "rgba(255,255,255,0.13)";
     ctx.lineWidth = 1;
     for (const f of [1 / 3, 2 / 3, 1]) {
@@ -2741,8 +2739,8 @@ export class UI {
       const [x, y] = pt(i, R);
       ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y); ctx.stroke();
     }
-    // data polygon — the DB's ratings live in a compressed ~40..99 band, so
-    // that band is spread over the radius (exact values are printed below)
+    // データ多角形 — DB の能力値は圧縮された約 40..99 の帯域にあるため、その
+    // 帯域を半径いっぱいに広げる（正確な値は下に表示される）
     const rOf = (v: number) => R * Math.max(0.06, Math.min(1, (v - 30) / 69));
     ctx.beginPath();
     for (let i = 0; i <= 6; i++) {
@@ -2755,7 +2753,7 @@ export class UI {
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.stroke();
-    // labels + values in ink, never the series colour
+    // ラベル + 値はインクで。決してシリーズの色にはしない
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     for (let i = 0; i < 6; i++) {
@@ -2777,8 +2775,8 @@ export class UI {
     title.textContent = "FINAL";
 
     this.resultScore = document.createElement("div");
-    // font scales with viewport width so the two club short-names + score fit on
-    // ONE line at phone widths (≈17px) while staying big on desktop (32px cap).
+    // フォントはビューポート幅に合わせて拡縮し、2つのクラブ略称 + スコアが
+    // モバイル幅では1行に収まり（≈17px）、デスクトップでは大きいまま（32px 上限）。
     Object.assign(this.resultScore.style, {
       fontSize: "clamp(15px, 5.4vw, 32px)", fontWeight: "800", whiteSpace: "nowrap",
     } as Partial<CSSStyleDeclaration>);
@@ -2789,28 +2787,28 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
 
     this.resultStats = document.createElement("div");
-    // FIXED width = the full box-score table (name 128 + 10 columns + gaps ≈ 544),
-    // capped on small screens; so the modal keeps ONE size across all three tabs
-    // instead of shrinking on the narrower team-comparison view.
+    // 固定幅 = 完全なボックススコア表（名前 128 + 10 列 + gap ≈ 544）。小さい画面
+    // では頭打ち; こうしてモーダルは3つのタブすべてで1つのサイズを保ち、狭い
+    // チーム比較表示で縮まない。
     Object.assign(this.resultStats.style, {
       display: "flex", flexDirection: "column", gap: "12px", width: "min(560px, 90vw)",
     } as Partial<CSSStyleDeclaration>);
 
     const btnRow = document.createElement("div");
-    // gap/font/padding shrink with viewport so all three buttons stay on ONE row
-    // at phone widths (≈375px) instead of wrapping to two lines.
+    // gap/フォント/padding はビューポートに合わせて縮み、3つのボタンすべてが
+    // モバイル幅（≈375px）で2行に折り返さず1行に収まる。
     Object.assign(btnRow.style, {
       display: "flex", gap: "clamp(6px, 2vw, 10px)", flexWrap: "nowrap",
       justifyContent: "center", marginTop: "4px",
     } as Partial<CSSStyleDeclaration>);
     const btnFont = "clamp(12px, 3.4vw, 15px)";
 
-    // BACK → the very first screen (title: クラブ対戦 / ランダム対戦)
+    // BACK → 一番最初の画面（タイトル: クラブ対戦 / ランダム対戦）
     const back = this.button("← BACK");
     Object.assign(back.style, { fontSize: btnFont, padding: "9px clamp(11px, 4vw, 20px)", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
     back.onclick = () => { this.onBack(); this.setPhase("title"); };
 
-    // もう一試合 → replay the SAME matchup (rosters/clubs kept) — back to the editor
+    // もう一試合 → 同じマッチアップを再戦（ロスター/クラブを保持）— エディタへ戻る
     const rematch = this.button("もう一試合");
     Object.assign(rematch.style, {
       fontSize: btnFont, fontWeight: "800", padding: "9px clamp(12px, 4.2vw, 22px)", whiteSpace: "nowrap",
@@ -2818,7 +2816,7 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
     rematch.onclick = () => { this.onBack(); this.refreshEditors(); this.setPhase("pregame"); };
 
-    // チーム選択 → jump to the club-team selection wizard
+    // チーム選択 → クラブチーム選択ウィザードへ飛ぶ
     const pickTeams = this.button("チーム選択");
     Object.assign(pickTeams.style, { fontSize: btnFont, padding: "9px clamp(11px, 4vw, 20px)", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
     pickTeams.onclick = () => { this.onBack(); this.setPhase("title"); this.startClubMatchup(); };
@@ -2839,9 +2837,9 @@ export class UI {
     if (phase === "playing") this.refreshBoardNames();
   }
 
-  // The scoreboard is built once (before any club is chosen), so its team
-  // labels must be re-read whenever the match actually starts / clubs change:
-  // a picked club shows its 3-letter code, a random roster shows BLAZE / WAVE.
+  // スコアボードは一度だけ構築される（どのクラブも選ばれる前に）ため、そのチーム
+  // ラベルは試合が実際に始まる / クラブが変わるたびに読み直す必要がある:
+  // 選択されたクラブは3文字コードを、ランダムロスターは BLAZE / WAVE を表示する。
   private refreshBoardNames(): void {
     if (this.nameA) this.nameA.textContent = teamAbbr(0);
     if (this.nameB) this.nameB.textContent = teamAbbr(1);
@@ -2859,30 +2857,30 @@ export class UI {
       this.resultWinner.style.color = colorOf(w);
     }
 
-    // tabbed view: チームスタッツ / 青チーム / 赤チーム
+    // タブ表示: チームスタッツ / 青チーム / 赤チーム
     this.resultGame = game;
-    this.resultTab = "team";                 // default to the team comparison
+    this.resultTab = "team";                 // デフォルトはチーム比較
     this.resultStats.replaceChildren();
     this.resultStats.appendChild(this.resultTabBar());
     this.resultContent = document.createElement("div");
-    // a min-height that comfortably fits a 13-man box score, so the modal height
-    // stays put when switching to the shorter team-comparison tab too
+    // 13人のボックススコアが余裕で収まる min-height。こうして短いチーム比較タブに
+    // 切り替えてもモーダルの高さが動かない
     Object.assign(this.resultContent.style, { width: "100%", minHeight: "clamp(230px, 44vh, 360px)" } as Partial<CSSStyleDeclaration>);
     this.resultStats.appendChild(this.resultContent);
     this.renderResultTab();
     this.setPhase("result");
   }
 
-  // The three result tabs. Blue = team 1 (WAVE), red = team 0 (BLAZE); each tab
-  // is tinted its team colour so it reads as the blue / red team.
+  // 3つのリザルトタブ。青 = team 1（WAVE）、赤 = team 0（BLAZE）; 各タブはその
+  // チームカラーで色付けされ、青 / 赤チームとして読める。
   private resultTabBar(): HTMLDivElement {
     const bar = document.createElement("div");
     Object.assign(bar.style, {
       display: "flex", gap: "6px", justifyContent: "center", flexWrap: "wrap", marginBottom: "6px",
     } as Partial<CSSStyleDeclaration>);
-    // 3-letter English labels so the three tabs always fit ONE row (long club
-    // names wrapped to two). TOT = team totals/comparison; the team tabs use each
-    // side's 3-letter code (ARS, BAL, … / BLAZE→random keeps its short name).
+    // 3文字の英語ラベルにして、3つのタブが常に1行に収まるようにする（長いクラブ
+    // 名は2行に折り返していた）。TOT = チーム合計/比較; チームタブは各側の3文字
+    // コードを使う（ARS, BAL, … / BLAZE→ランダムは短い名前を保つ）。
     const tabs: { key: "team" | "blue" | "red"; label: string }[] = [
       { key: "team", label: "TOT" },          // 両チーム比較(チームスタッツ)
       { key: "blue", label: teamAbbr(1) },    // 青チーム
@@ -2914,7 +2912,7 @@ export class UI {
     else this.resultContent.appendChild(this.statsTable(this.resultGame, 0));
   }
 
-  // The box-score columns. FG / 3P / FT show makes ● of attempts ● ("3/8").
+  // ボックススコアの列。FG / 3P / FT は 成功 ● / 試投 ● を表示（「3/8」）。
   private static readonly BOX_COLS: { label: string; w: number; get: (s: import("./player").Stats) => string }[] = [
     { label: "MIN", w: 40, get: (s) => (s.min / 60).toFixed(1) },
     { label: "PTS", w: 34, get: (s) => String(s.pts) },
@@ -2954,7 +2952,7 @@ export class UI {
       const row = document.createElement("div");
       Object.assign(row.style, { display: "flex", gap: "4px", fontSize: "12px", margin: "1px 0" });
       const nm = this.stickyCell(`${pl.role} ${pl.name}`, UI.NAME_W);
-      nm.style.opacity = pl.idx < STARTERS ? "0.95" : "0.7"; // bench slightly dimmed
+      nm.style.opacity = pl.idx < STARTERS ? "0.95" : "0.7"; // ベンチは少し暗く
       row.appendChild(nm);
       for (const c of UI.BOX_COLS) row.appendChild(this.cell(c.get(pl.stats), c.w, "center"));
       table.appendChild(row);
@@ -2964,8 +2962,8 @@ export class UI {
     return wrap;
   }
 
-  // Team-vs-team comparison: totals side by side (team0 on the left, team1 on
-  // the right, the stat name between) so the two squads read against each other.
+  // チーム対チームの比較: 合計を左右に並べる（team0 が左、team1 が右、その間に
+  // スタッツ名）ので、2つのスカッドが互いに対比して読める。
   private teamCompare(game: Game): HTMLDivElement {
     type S = import("./player").Stats;
     const total = (t: number): S => {
@@ -2999,7 +2997,7 @@ export class UI {
     title.append(n0, n1);
     wrap.appendChild(title);
 
-    // per-quarter line score: 名前 | Q1 Q2 … | T
+    // クォーターごとのラインスコア: 名前 | Q1 Q2 … | T
     const nq = Math.max(game.qLine[0].length, game.qLine[1].length);
     if (nq > 0) {
       const ls = document.createElement("div");
@@ -3017,11 +3015,11 @@ export class UI {
         s.textContent = txt;
         return s;
       };
-      // header row: (blank) Q1 Q2 … T
+      // ヘッダー行: (空白) Q1 Q2 … T
       ls.appendChild(lsCell("", { dim: true, align: "left" }));
       for (let i = 0; i < nq; i++) ls.appendChild(lsCell(`Q${i + 1}`, { dim: true }));
       ls.appendChild(lsCell("T", { dim: true, bold: true }));
-      // one row per team
+      // チームごとに1行
       for (let t = 0; t < 2; t++) {
         ls.appendChild(lsCell(teamShort(t), { color: colorOf(t), bold: true, align: "left" }));
         for (let i = 0; i < nq; i++) ls.appendChild(lsCell(String(game.qLine[t][i] ?? "-"), { color: colorOf(t) }));
@@ -3048,22 +3046,22 @@ export class UI {
     return wrap;
   }
 
-  // ---- small builders ----------------------------------------------------
+  // ---- 小さなビルダー ----------------------------------------------------
 
   private cell(text: string, width: number, align: string = "left"): HTMLSpanElement {
     const el = document.createElement("span");
     Object.assign(el.style, {
       width: `${width}px`, flexShrink: "0", textAlign: align, display: "inline-block",
-      // keep every cell to ONE line; a too-long name is clipped with an ellipsis
+      // 各セルを1行に保つ; 長すぎる名前は省略記号でクリップされる
       whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
     } as Partial<CSSStyleDeclaration>);
     el.textContent = text;
     return el;
   }
 
-  // A left-frozen cell: it stays pinned while the stat columns scroll sideways,
-  // so you can always tell whose row it is. Opaque background so scrolled
-  // numbers don't show through, with a hairline edge to read as a frozen column.
+  // 左に固定されたセル: スタッツ列が横スクロールしても固定されたままなので、
+  // 常に誰の行か分かる。スクロールした数字が透けないよう不透明な背景に、
+  // 固定列と分かるよう髪の毛ほどの縁を付ける。
   private stickyCell(text: string, width: number): HTMLSpanElement {
     const el = this.cell(text, width);
     Object.assign(el.style, {
@@ -3107,61 +3105,61 @@ export class UI {
     });
   }
 
-  // Keep the ☰ on the top edge (aligned with the scoreboard) as long as the
-  // centred scoreboard doesn't reach it; drop it below the board only once its
-  // right edge would collide. Recomputed on build and on every resize.
+  // 中央寄せのスコアボードが届かない限り ☰ を上端（スコアボードと揃える）に
+  // 保つ; その右端が衝突するようになったときだけボードの下に落とす。構築時と
+  // リサイズのたびに再計算する。
   private positionMenu(): void {
     if (!this.menuBtn || !this.board) return;
     const boardW = this.board.getBoundingClientRect().width || 320;
     const boardRight = window.innerWidth / 2 + boardW / 2;
     const btnW = this.menuBtn.getBoundingClientRect().width || 44;
     const btnLeft = window.innerWidth - 14 - btnW;
-    const clears = btnLeft > boardRight + 12;   // 12px breathing room before they touch
+    const clears = btnLeft > boardRight + 12;   // 触れる前に 12px の余白
     this.menuBtn.style.top = clears ? "14px" : "92px";
-    // the dropdown hangs just under the button in whichever spot it landed
+    // ドロップダウンは、ボタンが落ち着いた位置のすぐ下にぶら下がる
     this.controls.style.top = clears ? "58px" : "132px";
-    // keep the camera hint on the same row as the ☰, on the left
+    // カメラのヒントを ☰ と同じ行の左側に保つ
     if (this.camHint) this.camHint.style.top = clears ? "14px" : "92px";
   }
 
-  // Reflect the current 体力バー position on the toggle button's label.
+  // 現在の体力バーの位置をトグルボタンのラベルに反映する。
   private refreshStaminaBtn(): void {
     if (!this.staminaBtn) return;
     this.staminaBtn.textContent = HUD_OPTS.staminaOn === "name"
       ? "体力: 名前の下" : "体力: アイコンの下";
   }
 
-  // Reflect the on-court name-tag on/off state on its toggle button.
+  // コート上の名前タグのオン/オフ状態をトグルボタンに反映する。
   private refreshNamesBtn(): void {
     if (!this.namesBtn) return;
     this.namesBtn.textContent = HUD_OPTS.showNames ? "選手名: 表示" : "選手名: 非表示";
   }
 
-  // Reflect the current player-model style on its toggle button.
+  // 現在の選手モデルのスタイルをトグルボタンに反映する。
   private refreshModelBtn(): void {
     if (!this.modelBtn) return;
     this.modelBtn.textContent = HUD_OPTS.model === "human" ? "モデル: 人型" : "モデル: どんぐり";
   }
 
-  // ---- bottom player bars (face icons per team, on-court ⇄ bench tabs) ----
+  // ---- 下部の選手バー（チームごとの顔アイコン、コート上 ⇄ ベンチのタブ） ----
 
   private buildPlayerBars(): void {
-    // flank the speed / RESTART row: team 0's icons grow leftward from just left
-    // of centre, team 1's grow rightward from just right of centre, leaving a
-    // fixed central gap for the controls — anchored to centre so the gap stays
-    // put no matter how many icons each side shows (on-court 5 vs bench 8).
-    const HALF_GAP = "130px";   // half the central gap reserved for the controls
+    // 速度 / RESTART の行を挟む: team 0 のアイコンは中央のすぐ左から左へ伸び、
+    // team 1 のアイコンは中央のすぐ右から右へ伸び、コントロール用に固定の中央
+    // 間隔を残す — 中央にアンカーされているので、各側が何個のアイコンを表示
+    // しても（コート上5 対 ベンチ8）その間隔は保たれる。
+    const HALF_GAP = "130px";   // コントロール用に確保した中央間隔の半分
     for (let t = 0; t < 2; t++) {
       const panel = document.createElement("div");
       Object.assign(panel.style, {
         position: "absolute", bottom: "16px",
         ...(t === 0 ? { right: `calc(50% + ${HALF_GAP})` } : { left: `calc(50% + ${HALF_GAP})` }),
         display: "flex", flexDirection: "column", gap: "5px",
-        alignItems: t === 0 ? "flex-end" : "flex-start",   // hug the centre
-        pointerEvents: "none",                              // icons don't block the camera drag
+        alignItems: t === 0 ? "flex-end" : "flex-start",   // 中央に密着
+        pointerEvents: "none",                              // アイコンはカメラのドラッグを妨げない
       } as Partial<CSSStyleDeclaration>);
 
-      // tab row: ON COURT / BENCH
+      // タブ行: ON COURT / BENCH
       const tabs = document.createElement("div");
       Object.assign(tabs.style, { display: "flex", gap: "4px", pointerEvents: "auto" } as Partial<CSSStyleDeclaration>);
       (["ON COURT", "BENCH"] as const).forEach((label, ti) => {
@@ -3179,9 +3177,9 @@ export class UI {
 
       const row = document.createElement("div");
       Object.assign(row.style, { display: "flex", gap: "6px", touchAction: "pan-x" } as Partial<CSSStyleDeclaration>);
-      row.classList.add("bball-hscroll");   // scrolling never shows a bar / adds height
-      // the bar is hidden, so give the mouse ways to slide the bench row:
-      // wheel scrolls it sideways, and press-drag pans it (touch swipes natively)
+      row.classList.add("bball-hscroll");   // スクロールしてもバーは表示されず / 高さも増えない
+      // バーは隠れているので、マウスでベンチ行をスライドする手段を与える:
+      // ホイールで横スクロール、押しながらのドラッグでパン（タッチはネイティブにスワイプ）
       row.onwheel = (e) => {
         if (row.scrollWidth <= row.clientWidth) return;
         row.scrollLeft += e.deltaY || e.deltaX;
@@ -3198,7 +3196,7 @@ export class UI {
       row.onpointercancel = () => { dragX = -1; };
       this.iconRows[t] = row;
 
-      // tabs on top, icon row beneath (both teams)
+      // 上にタブ、下にアイコン行（両チーム）
       panel.appendChild(tabs);
       panel.appendChild(row);
       this.iconPanels[t] = panel;
@@ -3206,19 +3204,19 @@ export class UI {
     }
   }
 
-  // A small face avatar: team-coloured disc, a simple generated head, and the
-  // jersey number, with the player's name beneath. No portrait art exists, so
-  // the face is drawn procedurally and the number/name identify the player.
+  // 小さな顔アバター: チームカラーの円盤、生成された簡単な頭部、そして背番号。
+  // その下に選手名。肖像画のアートは存在しないため、顔は手続き的に描かれ、
+  // 番号/名前が選手を識別する。
   private makeFaceIcon(player: import("./player").Player, posText: string): HTMLDivElement {
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {
-      position: "relative",   // so the position badge can overlay the (clipped) face
+      position: "relative",   // ポジションバッジが（クリップされた）顔に重ねられるように
       width: "48px", flex: "0 0 auto", display: "flex", flexDirection: "column",
       alignItems: "center", gap: "2px",
-      pointerEvents: "auto", cursor: "help",   // hover shows the player's box score
+      pointerEvents: "auto", cursor: "help",   // ホバーで選手のボックススコアを表示
     } as Partial<CSSStyleDeclaration>);
     wrap.onmouseenter = () => this.showStatTip(player, wrap);
-    wrap.onmouseleave = () => this.scheduleHideTip();   // grace to reach the tip's button
+    wrap.onmouseleave = () => this.scheduleHideTip();   // ツールチップのボタンに到達するための猶予
 
     const face = document.createElement("div");
     Object.assign(face.style, {
@@ -3234,9 +3232,9 @@ export class UI {
 
     wrap.appendChild(face);
 
-    // jersey number — bottom-right. Placed on WRAP (not the round, clipped face)
-    // so a 2-digit number can't be cut off at the circle's edge. The face is 46px
-    // tall (42 + 2px border), so top:32px sits it flush at the face's lower-right.
+    // 背番号 — 右下。WRAP に配置（丸くクリップされた顔ではなく）することで、
+    // 2桁の番号が円の端で切れないようにする。顔は 46px の高さ（42 + 2px の枠線）
+    // なので、top:32px で顔の右下にぴったり収まる。
     const num = document.createElement("div");
     num.textContent = String(player.idx + 1);
     Object.assign(num.style, {
@@ -3247,22 +3245,22 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
     wrap.appendChild(num);
 
-    // position badge — top-left. Placed on WRAP (not the round, clipped face) so
-    // the circle's overflow:hidden can't cut off the text, and nudged in a touch.
+    // ポジションバッジ — 左上。WRAP に配置（丸くクリップされた顔ではなく）する
+    // ことで、円の overflow:hidden がテキストを切り取らないようにし、少しだけ内側に寄せる。
     const pos = document.createElement("div");
     pos.textContent = posText;
     Object.assign(pos.style, {
       position: "absolute", left: "4px", top: "0", height: "13px",
       lineHeight: "13px", padding: "0 2px", fontSize: "8px", fontWeight: "800",
-      // fixed 2-character width so a single-letter C lines up with PG/SG/… (centred)
+      // 固定の2文字幅にして、1文字の C が PG/SG/… と揃うようにする（中央寄せ）
       minWidth: "16px", boxSizing: "border-box", textAlign: "center",
       color: "#fff", background: "rgba(13,16,22,0.9)",
       borderRadius: "4px", zIndex: "2",
     } as Partial<CSSStyleDeclaration>);
     wrap.appendChild(pos);
 
-    // stamina bar directly under the face — shown only in "icon" HUD mode
-    // (in "name" mode the gauge lives on the floating 3D name tag instead).
+    // 顔のすぐ下の体力バー — 「icon」HUD モードのときだけ表示（「name」モードでは
+    // ゲージは代わりに浮遊する3Dの名前タグ上にある）。
     const bar = document.createElement("div");
     Object.assign(bar.style, {
       width: "42px", height: "5px", borderRadius: "3px", overflow: "hidden",
@@ -3284,9 +3282,9 @@ export class UI {
     } as Partial<CSSStyleDeclaration>);
     wrap.appendChild(name);
 
-    // role pill under the name — shows the OFFENCE role while his team has the
-    // ball and the DEFENCE role while they don't. The text/colour are refreshed
-    // each frame by updateIconRoles(), keyed off possession.
+    // 名前の下のロールピル — 彼のチームがボールを持っている間はオフェンスロール、
+    // 持っていない間は守備ロールを表示する。テキスト/色は updateIconRoles() が
+    // ポゼッションをキーに毎フレーム更新する。
     const rolePill = document.createElement("div");
     Object.assign(rolePill.style, {
       width: "44px", fontSize: "8px", padding: "1px 0", textAlign: "center",
@@ -3298,22 +3296,22 @@ export class UI {
     return wrap;
   }
 
-  // Per-frame: show the OFFENCE role when this player's team has the ball, the
-  // DEFENCE role otherwise — team-tinted on offence, DEF_ROLE_C-tinted on defence.
+  // 毎フレーム: この選手のチームがボールを持っているときはオフェンスロール、
+  // それ以外は守備ロールを表示 — オフェンスはチームカラー、守備は DEF_ROLE_C の色。
   private updateIconRoles(game: Game): void {
     for (const [p, pill] of this.iconRole) {
       const def = ROSTER[p.team]?.[p.idx];
       if (!def) continue;
-      const onDef = p.team !== game.possession;   // his team is defending
+      const onDef = p.team !== game.possession;   // 彼のチームは守備中
       const code = onDef ? def.defRole : def.evalRole;
       const short = code
         ? ((onDef ? UI.DEF_ROLES[code]?.short : UI.EVAL_ROLES[code]?.short) ?? "?")
         : "-";
       const col = code
         ? ((onDef ? UI.DEF_GROUP_C[code] : UI.OFF_GROUP_C[code]) || "rgb(150,156,168)")
-        : "rgb(150,156,168)";   // grouped colour: offence warm (赤/黄/橙), defence cool (青/緑/シアン)
+        : "rgb(150,156,168)";   // グループ化された色: オフェンスは暖色（赤/黄/橙）、守備は寒色（青/緑/シアン）
       const key = (onDef ? "D" : "O") + short;
-      if (pill.dataset.k === key) continue;        // unchanged → skip the DOM writes
+      if (pill.dataset.k === key) continue;        // 変化なし → DOM への書き込みをスキップ
       pill.dataset.k = key;
       pill.textContent = short;
       pill.style.background = code ? col : "rgba(20,24,34,0.85)";
@@ -3327,71 +3325,70 @@ export class UI {
     if (!ctx) return;
     const W = canvas.width, H = canvas.height;
     const tc = TEAM_COLORS[player.team];
-    // team-tinted background disc
+    // チームカラーの背景円盤
     ctx.fillStyle = `rgb(${Math.round(tc.r * 120 + 25)},${Math.round(tc.g * 120 + 25)},${Math.round(tc.b * 120 + 25)})`;
     ctx.fillRect(0, 0, W, H);
-    // deterministic variety per player so faces aren't all identical — SHARED
-    // with the 3D head (entities.ts) via playerLook, so the model matches the icon
+    // 選手ごとに決定的な多様性を持たせ、顔が全て同一にならないようにする —
+    // playerLook 経由で3Dの頭部（entities.ts）と共有され、モデルがアイコンに一致する
     const look = playerLook(player.name);
     const skin = look.skinHex;
     const hair = look.hairHex;
     const style = look.style;   // 0短髪 1丸刈り 2アフロ 3フラットトップ 4ヘッドバンド 5ボブ 6前髪上げ 7モヒカン 8マンバン
-    // hair BEHIND the head — a full backing so the crown & sides are covered
-    // (not a balding top-cap). Drawn for all but モヒカン(7, drawn as a crest);
-    // 丸刈り(1) uses a backing only just larger than the head (a thin buzz).
+    // 頭の後ろの髪 — 頭頂と側面が覆われるようにする完全な下地（禿げた天冠では
+    // ない）。モヒカン(7、クレストとして描く)を除く全てで描画; 丸刈り(1)は頭より
+    // ほんの少し大きいだけの下地を使う（薄い刈り上げ）。
     if (style !== 7) {
       ctx.fillStyle = hair;
-      const hr = style === 2 ? 0.40 : (style === 5 || style === 10) ? 0.37 : style === 1 ? 0.315 : 0.335;   // afro biggest, bob/long fuller, buzz snug
+      const hr = style === 2 ? 0.40 : (style === 5 || style === 10) ? 0.37 : style === 1 ? 0.315 : 0.335;   // アフロが最大、ボブ/ロングはふっくら、刈り上げはぴったり
       ctx.beginPath(); ctx.arc(W / 2, H * (style === 2 ? 0.44 : 0.46), W * hr, 0, Math.PI * 2); ctx.fill();
-      if (style === 3) ctx.fillRect(W * 0.15, H * 0.14, W * 0.70, H * 0.32);   // flat-top block
-      if (style === 5) ctx.fillRect(W * 0.17, H * 0.46, W * 0.66, H * 0.22);   // bob — longer sides
-      if (style === 10) ctx.fillRect(W * 0.15, H * 0.46, W * 0.70, H * 0.30);  // long — sides down to shoulders
-      if (style === 8) { ctx.beginPath(); ctx.arc(W / 2, H * 0.26, W * 0.10, 0, Math.PI * 2); ctx.fill(); } // man-bun knot
+      if (style === 3) ctx.fillRect(W * 0.15, H * 0.14, W * 0.70, H * 0.32);   // フラットトップのブロック
+      if (style === 5) ctx.fillRect(W * 0.17, H * 0.46, W * 0.66, H * 0.22);   // ボブ — 長めの側面
+      if (style === 10) ctx.fillRect(W * 0.15, H * 0.46, W * 0.70, H * 0.30);  // ロング — 肩まで下りる側面
+      if (style === 8) { ctx.beginPath(); ctx.arc(W / 2, H * 0.26, W * 0.10, 0, Math.PI * 2); ctx.fill(); } // マンバンの結び目
     }
-    // head (skin) on top of the backing → hair frames the crown and sides
+    // 下地の上に頭部（肌）→ 髪が頭頂と側面を縁取る
     ctx.fillStyle = skin;
     ctx.beginPath(); ctx.arc(W / 2, H * 0.52, W * 0.30, 0, Math.PI * 2); ctx.fill();
-    // front hairline / bangs across the forehead (the FRONT reads distinct from
-    // the fuller back). Skipped for 前髪上げ(6, forehead exposed) and モヒカン(7).
+    // 額を横切る前髪の生え際 / 前髪（前面がふっくらした後面と区別して読める）。
+    // 前髪上げ(6、額が露出)とモヒカン(7)ではスキップ。
     if (style !== 6 && style !== 7) {
       ctx.fillStyle = hair;
       ctx.beginPath(); ctx.arc(W / 2, H * 0.45, W * 0.305, Math.PI * 1.03, Math.PI * 1.97); ctx.fill();
     }
-    // モヒカン(7) — a vertical crest strip down the centre of the head
+    // モヒカン(7) — 頭の中央を縦に走るクレストの帯
     if (style === 7) {
       ctx.fillStyle = hair;
       ctx.fillRect(W * 0.42, H * 0.12, W * 0.16, H * 0.42);
     }
-    // くせ毛長髪(11) / ドレッド(12) — locks hanging down the sides, framing the face
+    // くせ毛長髪(11) / ドレッド(12) — 側面に垂れ下がるロックで顔を縁取る
     if (style === 11 || style === 12) {
       ctx.fillStyle = hair;
-      const dense = style === 12;                      // dreads: more, thinner, longer
+      const dense = style === 12;                      // ドレッド: より多く、細く、長い
       const span = dense ? 5 : 3, gap = dense ? 0.072 : 0.105;
       const wid = dense ? 0.024 : 0.036, len = dense ? 0.34 : 0.26;
       for (let i = -span; i <= span; i++) {
-        if (i === 0) continue;                         // leave the face centre clear
+        if (i === 0) continue;                         // 顔の中央は空けておく
         const x = W / 2 + i * W * gap - W * wid / 2;
         ctx.fillRect(x, H * 0.46, W * wid, H * (len + (Math.abs(i) % 2) * 0.05));
       }
     }
-    // headband (style 4) — team colour across the forehead
+    // ヘッドバンド（スタイル 4）— 額を横切るチームカラー
     if (style === 4) {
       ctx.fillStyle = `rgb(${Math.round(tc.r * 255)},${Math.round(tc.g * 255)},${Math.round(tc.b * 255)})`;
       ctx.fillRect(W * 0.20, H * 0.40, W * 0.60, H * 0.07);
     }
-    // eyes
+    // 目
     ctx.fillStyle = "#26211c";
     ctx.beginPath(); ctx.arc(W * 0.41, H * 0.52, 1.7, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(W * 0.59, H * 0.52, 1.7, 0, Math.PI * 2); ctx.fill();
-    // mouth
+    // 口
     ctx.strokeStyle = "rgba(80,40,30,0.8)"; ctx.lineWidth = 1.4;
     ctx.beginPath(); ctx.arc(W / 2, H * 0.60, W * 0.10, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
   }
 
-  // Responsive layout. On a phone-width screen both teams' face icons meet at the
-  // centre-bottom in one row (shrunk to fit — see refreshPlayerBars); on a wide
-  // screen they flank the centre. The controls live in the top hamburger either
-  // way, so they don't move.
+  // レスポンシブレイアウト。モバイル幅の画面では両チームの顔アイコンが中央下部で
+  // 1行に集まる（収まるよう縮小 — refreshPlayerBars 参照）; 広い画面では中央を
+  // 挟む。コントロールはどちらの場合も上部のハンバーガーにあるので、動かない。
   private applyLayout(): void {
     const mode = window.innerWidth < 640 ? "phone" : "desktop";
     if (mode === this.layoutMode) return;
@@ -3399,9 +3396,9 @@ export class UI {
     const [p0, p1] = this.iconPanels;
     const [r0, r1] = this.iconRows;
     if (mode === "phone") {
-      // ONE row: the two teams meet at the centre-bottom. Per-team sizing (fit
-      // the on-court 5 by shrinking / scroll the full-size bench) is done every
-      // frame in refreshPlayerBars, since it depends on the active tab.
+      // 1行: 2チームが中央下部で集まる。チームごとのサイズ調整（コート上の5人を
+      // 縮小して収める / フルサイズのベンチをスクロール）は、アクティブなタブに
+      // 依存するため refreshPlayerBars で毎フレーム行う。
       if (p0) Object.assign(p0.style, { right: "50%", left: "auto", bottom: "6px", transformOrigin: "bottom right", alignItems: "flex-end", maxWidth: "" });
       if (p1) Object.assign(p1.style, { left: "50%", right: "auto", bottom: "6px", transformOrigin: "bottom left", alignItems: "flex-start", maxWidth: "" });
       for (const r of [r0, r1]) if (r) Object.assign(r.style, { overflowY: "hidden", paddingBottom: "" } as Partial<CSSStyleDeclaration>);
@@ -3417,31 +3414,31 @@ export class UI {
 
   private refreshPlayerBars(game: Game): void {
     for (let t = 0; t < 2; t++) {
-      // highlight the active tab
+      // アクティブなタブをハイライト
       this.iconTabs[t].forEach((b, ti) => {
         const active = (ti === 1) === this.showBench[t];
         b.style.background = active ? colorOf(t) : "rgba(20,24,34,0.85)";
         b.style.opacity = active ? "1" : "0.7";
       });
-      // which players to show: the current on-court five, or the eight on the bench
+      // どの選手を表示するか: 現在コート上の5人、またはベンチの8人
       const onCourt = game.players.filter((p) => p.team === t);
       const set = new Set(onCourt);
       const list = this.showBench[t] ? game.roster[t].filter((p) => !set.has(p)) : onCourt;
-      // phone: ONE row, two teams side by side. Icons are ALWAYS full size — the
-      // row just scrolls horizontally (swipe) within the team's half when the
-      // icons don't all fit. Never scaled.
+      // モバイル: 1行、2チームを左右に。アイコンは常にフルサイズ — アイコンが
+      // 全て収まらないとき、行はチームの半分の中で横スクロール（スワイプ）する
+      // だけ。決して拡縮しない。
       const rw = this.iconRows[t];
       const pn = this.iconPanels[t];
       if (rw && pn) {
         if (this.layoutMode === "phone") {
-          // ONE icon size for both tabs: whatever lets the on-court FIVE fill
-          // the team's half (48px icons + 6px gaps → 264px natural)
+          // 両タブで1つのアイコンサイズ: コート上の5人がチームの半分を満たす
+          // 値（48px アイコン + 6px の gap → 自然幅 264px）
           const natural5 = 5 * 48 + 4 * 6;
           const s = Math.min(1, (window.innerWidth * 0.49) / natural5);
           pn.style.transform = `scale(${s})`;
           if (this.showBench[t]) {
-            // BENCH: same-size icons that SLIDE — the scroll window is sized in
-            // pre-scale units so it still shows exactly the half width
+            // ベンチ: 同サイズのアイコンがスライドする — スクロールウィンドウは
+            // スケール前の単位でサイズ指定され、依然ちょうど半分の幅を表示する
             Object.assign(rw.style, {
               maxWidth: `${Math.round((window.innerWidth * 0.49) / s)}px`,
               overflowX: "auto", pointerEvents: "auto",
@@ -3454,14 +3451,16 @@ export class UI {
           Object.assign(rw.style, { maxWidth: "", overflowX: "visible", pointerEvents: "" });
         }
       }
-      // the badge shows the FIELD position (which slot he plays) for the on-court
-      // five; the bench (no field spot) shows each man's natural role instead.
+      // バッジは、コート上の5人には守っているフィールドのポジション（どのスロット
+      // でプレーするか）を表示する; ベンチ（フィールドのスポットなし）は代わりに
+      // 各人の本来のロールを表示する。
       const SLOT_POS = ["PG", "SG", "SF", "PF", "C"];
       const posOf = (p: import("./player").Player) =>
         this.showBench[t] ? p.role : (SLOT_POS[p.slot] ?? p.role);
-      // rebuild only when the shown set (or a name / tab / 評価ロール / slot) changes —
-      // names are in the key so a tip-off applyRoster rename rebuilds at once, and
-      // slot so a substitution that changes who plays a position updates the badge
+      // 表示するセット（または 名前 / タブ / 評価ロール / スロット）が変わったときだけ
+      // 再構築する — 名前がキーに含まれるので、ティップオフの applyRoster による
+      // 改名で即座に再構築され、スロットも含まれるので、ポジションを守る者を変える
+      // 交代でバッジが更新される
       const key = `${this.showBench[t] ? "B" : "C"}:`
         + list.map((p) => {
           const d = ROSTER[t]?.[p.idx];
@@ -3470,19 +3469,19 @@ export class UI {
       if (key === this.iconKey[t]) continue;
       this.iconKey[t] = key;
       const row = this.iconRows[t];
-      this.hideTip();   // a hovered icon may be getting replaced — drop its tip
+      this.hideTip();   // ホバー中のアイコンが差し替えられる可能性 — そのツールチップを取り下げる
       row.replaceChildren();
       for (const p of list) {
         const el = this.makeFaceIcon(p, posOf(p));
-        this.iconEl.set(p, el);   // remember it so stat pops can anchor above it
+        this.iconEl.set(p, el);   // スタッツのポップがその上にアンカーできるよう覚えておく
         row.appendChild(el);
       }
     }
   }
 
-  // Live-update the face-icon stamina bars (only meaningful in "icon" HUD mode;
-  // the bars are hidden otherwise). Keyed by player, so it tracks whichever icon
-  // element is currently on screen for him.
+  // 顔アイコンの体力バーをライブ更新する（「icon」HUD モードでのみ意味がある;
+  // それ以外ではバーは隠れている）。選手をキーにするので、彼のために現在画面上に
+  // あるどのアイコン要素でも追跡する。
   private updateIconStamina(game: Game): void {
     const show = HUD_OPTS.staminaOn === "icon";
     for (const roster of game.roster) {
@@ -3499,8 +3498,8 @@ export class UI {
     }
   }
 
-  // Floating "＋" badges: compare each player's box score to last frame and pop a
-  // badge over his icon for anything he just earned (score/assist/rebound/etc.).
+  // 浮遊する「＋」バッジ: 各選手のボックススコアを前フレームと比較し、彼が今
+  // 記録したもの（得点/アシスト/リバウンド/等）についてアイコン上にバッジをポップする。
   private updateStatPops(game: Game): void {
     if (this.phase !== "playing") return;
     for (const roster of game.roster) {
@@ -3512,7 +3511,7 @@ export class UI {
           const cur = p.stats[s.key];
           const d = cur - snap![i];
           if (d > 0) this.popStat(p, s.label, d, s.color, stack++);
-          snap![i] = cur;   // re-baseline (also absorbs a restart's reset to 0)
+          snap![i] = cur;   // ベースラインを取り直す（リスタートの 0 へのリセットも吸収する）
         });
       }
     }
@@ -3521,10 +3520,10 @@ export class UI {
   private popStat(player: import("./player").Player, label: string, delta: number,
                   color: string, stack: number): void {
     const icon = this.iconEl.get(player);
-    if (!icon || !icon.isConnected) return;   // only when the icon is actually on screen
+    if (!icon || !icon.isConnected) return;   // アイコンが実際に画面上にあるときだけ
     const hb = this.hud.getBoundingClientRect();
     const r = icon.getBoundingClientRect();
-    if (r.width === 0) return;                 // hidden / not laid out
+    if (r.width === 0) return;                 // 隠れている / レイアウトされていない
     const badge = document.createElement("div");
     badge.textContent = `${label}+${delta}`;
     Object.assign(badge.style, {
@@ -3535,7 +3534,7 @@ export class UI {
       zIndex: "45", opacity: "1", transition: "opacity 1.1s ease-out, transform 1.1s ease-out",
     } as Partial<CSSStyleDeclaration>);
     this.hud.appendChild(badge);
-    requestAnimationFrame(() => {   // next frame → animate up and fade, then remove
+    requestAnimationFrame(() => {   // 次フレーム → 上へアニメーションしてフェード、その後除去
       badge.style.opacity = "0";
       badge.style.transform = "translate(-50%,-32px)";
     });
@@ -3546,9 +3545,9 @@ export class UI {
     if (this.phase === "playing" && game.state === "final") this.showResult(game);
 
     this.applyLayout();
-    // only while actually playing: during the pregame screen the Players still
-    // carry the PREVIOUS draw's names (applyRoster runs at tip-off), so icons
-    // built then would show stale names
+    // 実際にプレー中のときだけ: 試合前画面の間、Player は依然として前回の抽選の
+    // 名前を持っている（applyRoster はティップオフで走る）ため、そのとき構築した
+    // アイコンは古い名前を表示してしまう
     if (this.phase === "playing") {
       this.refreshPlayerBars(game);
       this.updateIconStamina(game);
@@ -3564,16 +3563,16 @@ export class UI {
     this.quarter.textContent = game.state === "final" ? "FINAL" : `Q${game.quarter}`;
     const scLeft = Math.max(0, game.shotClock);
     this.shot.textContent = String(Math.ceil(scLeft));
-    // flashy countdown in the last 3 seconds: the box swells and PUNCHES on each
-    // tick, glows, and shifts red → hot yellow as it runs out. Only while the
-    // clock is actually running (not frozen on a dead ball).
+    // 残り3秒の派手なカウントダウン: ボックスは各ティックで膨らんでパンチし、
+    // 光り、なくなるにつれ赤 → 熱い黄へ移る。クロックが実際に動いている間だけ
+    // （デッドボールで止まっているときではない）。
     const frozen = game.mode === "tipoff" || game.mode === "freethrow"
       || game.mode === "pause" || game.mode === "subs" || game.mode === "finale";
     const box = this.shotBox;
     if (scLeft > 0 && scLeft <= 3 && !frozen) {
-      const frac = scLeft - Math.floor(scLeft);                 // 1→0 within each second
-      const pop = 1 + 0.55 * frac;                              // punch right after each tick
-      const heat = Math.min(1, Math.max(0, (3 - scLeft) / 2.5)); // 0 at 3s .. 1 near 0
+      const frac = scLeft - Math.floor(scLeft);                 // 各秒の中で 1→0
+      const pop = 1 + 0.55 * frac;                              // 各ティックの直後にパンチ
+      const heat = Math.min(1, Math.max(0, (3 - scLeft) / 2.5)); // 3秒で 0 .. 0付近で 1
       box.style.transform = `translateX(-50%) scale(${(1.15 + 0.4 * heat) * pop})`;
       box.style.fontSize = "20px";
       box.style.fontWeight = "900";
@@ -3592,17 +3591,17 @@ export class UI {
     if (game.lastEvent) {
       const ev = game.lastEvent;
       const c = TEAM_COLORS[ev.team];
-      // rebuild the banner only when the event changes, so it doesn't churn the
-      // DOM every frame while a banner is up
+      // イベントが変わったときだけバナーを再構築し、バナーが出ている間に毎フレーム
+      // DOM をかき回さないようにする
       const key = `${ev.text}|${ev.scorer ?? ""}|${ev.assist ?? ""}`;
       if (key !== this.bannerKey) {
         this.bannerKey = key;
         this.banner.replaceChildren();
         const main = document.createElement("div");
-        main.style.whiteSpace = "pre-line";   // honour "\n" so long calls can wrap
+        main.style.whiteSpace = "pre-line";   // 「\n」を尊重し、長いコールが折り返せるようにする
         main.textContent = ev.text;
         this.banner.appendChild(main);
-        // on a made basket, credit who scored (and who assisted) underneath
+        // シュート成功時、下に誰が得点したか（と誰がアシストしたか）を記す
         if (ev.scorer) {
           const sc = document.createElement("div");
           Object.assign(sc.style, { fontSize: "clamp(16px,3.4vw,26px)", fontWeight: "700", letterSpacing: "1px", marginTop: "8px" });
@@ -3623,17 +3622,17 @@ export class UI {
       this.bannerKey = "";
     }
 
-    // substitution feed: one chip per swap, at most 5. HOME's chips are shown
-    // first; while ANY home chip is still live the AWAY chips are hidden (and held
-    // in game.ts) — so the feed plays all HOME subs, clears, then AWAY's from the
-    // first.
+    // 交代フィード: 交代1つにつきチップ1枚、最大5枚。ホームのチップが先に表示
+    // される; ホームのチップがどれか1枚でもまだ生きている間、アウェイのチップは
+    // 隠される（game.ts で保持される）— こうしてフィードはホームの交代を全て
+    // 再生し、クリアしてから、アウェイのものを最初から再生する。
     this.subFeed.replaceChildren();
     const showTeam = game.subEvents.some((e) => e.team === 0) ? 0 : 1;
     const shownSubs = game.subEvents.filter((e) => e.team === showTeam).slice(-5);
     for (let si = 0; si < shownSubs.length; si++) {
       const e = shownSubs[si];
       const color = colorOf(e.team);
-      const op = Math.min(1, e.ttl / 0.8);   // each chip fades on its own timer
+      const op = Math.min(1, e.ttl / 0.8);   // 各チップは自身のタイマーでフェードする
       const chip = document.createElement("div");
       Object.assign(chip.style, {
         background: "rgba(12,15,22,0.86)", border: `1px solid ${color}`,
@@ -3642,7 +3641,7 @@ export class UI {
         boxShadow: "0 6px 20px rgba(0,0,0,0.45)", maxWidth: "94vw",
       } as Partial<CSSStyleDeclaration>);
       const title = document.createElement("div");
-      // responsive: full size on a wide view, shrinks as the window narrows
+      // レスポンシブ: 広い画面ではフルサイズ、ウィンドウが狭まると縮小
       Object.assign(title.style, { fontSize: "clamp(9px,1.7vw,13px)", opacity: "0.7", letterSpacing: "3px", fontWeight: "700" });
       title.textContent = "SUBSTITUTION";
       const line = document.createElement("div");
@@ -3651,8 +3650,8 @@ export class UI {
         textShadow: "0 3px 12px rgba(0,0,0,0.5)", whiteSpace: "nowrap",
         display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
       });
-      // each player NAME sits in a FIXED-width slot, so the chip is the SAME width
-      // whatever the names' lengths are (overflow clipped with an …).
+      // 各選手の名前は固定幅のスロットに収まるので、名前の長さが何であれチップは
+      // 同じ幅になる（あふれた分は … でクリップ）。
       const nameSlot = (name: string): HTMLSpanElement => {
         const s = document.createElement("span");
         Object.assign(s.style, {

@@ -1,9 +1,9 @@
-// AUTO-GENERATED from 最新　WE2010マスターリーグ.xlsx sheet「FP修正」 — do not edit by hand.
-// Entry: [name, role(PG/SG/SF/PF/C — converted from the soccer position + height),
-//         heightCm, ratings(25 values in the Attributes key order: OFF..TWK, 精神=DG列),
-//         abilityMask(bit i = ABILITY_META[i], ☆/〇 both count),
+// 最新　WE2010マスターリーグ.xlsx のシート「FP修正」から自動生成 — 手で編集しないこと。
+// エントリ: [name, role（PG/SG/SF/PF/C — サッカーのポジション＋身長から変換）,
+//         heightCm, ratings（Attributes のキー順の25値: OFF..TWK、精神=DG列）,
+//         abilityMask（bit i = ABILITY_META[i]、☆/〇 は両方カウント）,
 //         extras[安定度, 逆手精度, 逆手頻度],
-//         hand("R"|"L" — 利き足を利き手として読み替え)]
+//         hand（"R"|"L" — 利き足を利き手として読み替え）]
 export type DbPlayer = [string, string, number, number[], number, number[], string];
 export const PLAYER_DB: DbPlayer[] = [
   ["クリスティアーノ・ロナウド","SF",184,[95,65,84,77,88,90,85,83,94,95,84,84,87,91,86,95,83,91,85,90,89,91,74,72,92],1098979,[5,7,5],"R"],

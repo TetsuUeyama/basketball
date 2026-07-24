@@ -6,7 +6,8 @@ import { RIM, THREE_DIST, LANE_W } from "../config";
 import { rate } from "../attributes";
 import { clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";
 import { deepThreeOK } from "../eval";
-import { laneBlock } from "../resolution/pass-risk";
+import { laneBlock } from "../reaction/pass-risk";
+import { tightlyTrapped, trapReliever, trapReliefSpot } from "../core/reads";
 import type { Game } from "../game";
 
 // オフボール全員の駆動: スポット確保、リムへのカット、ギブ&ゴー、オープンスポットへの
@@ -20,9 +21,9 @@ export function updateOffBallMotion(game: Game, dt: number, team: number, exclud
 
     // トラップ救済(最優先): ハンドラーがダブルチーム → 味方1人がスポットを離れてボールへ
     // フラッシュし、トラップの逆側に安全なアウトレットを作る。他は間合いを保つ。
-    if (game.handler && game.handler !== p && game.tightlyTrapped(game.handler)
-        && p === game.trapReliever(team)) {
-      const t = game.trapReliefSpot(game.handler);
+    if (game.handler && game.handler !== p && tightlyTrapped(game, game.handler)
+        && p === trapReliever(game, team)) {
+      const t = trapReliefSpot(game, game.handler);
       moveToward2D(p.pos, t.x, t.z, p.accelToward(dt, t.x, t.z, 1.2) * dt);
       spacingNudge(game, dt, p, 1.6);
       game.clampCourt(p.pos);
@@ -280,7 +281,7 @@ function clearDriveLane(game: Game, dt: number, p: Player): boolean {
   const rim = game.attackFloor(h.team);
   const dx = rim.x - h.pos.x, dz = rim.z - h.pos.z;
   const len = Math.hypot(dx, dz) || 1;
-  const ux = dx / len, uz = dz / len;              // handler → rim
+  const ux = dx / len, uz = dz / len;              // ハンドラー→リム
   const rx = p.pos.x - h.pos.x, rz = p.pos.z - h.pos.z;
   const along = rx * ux + rz * uz;                 // ハンドラーの前方距離
   if (along < 0.3 || along > 5.5) return false;    // 後方 or 遠すぎ

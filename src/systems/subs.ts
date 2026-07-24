@@ -1,11 +1,13 @@
-// 交代の「判断」ロジック（誰を交代させるか）。方式A: Game を受け取る関数群。実際の
-// 入れ替え(substitute)・歩行アニメ(subWalkers/updateSubs)・withSubs は Game 側に残す。
-// game.ts から分離（workPlan.md 参照）。
+// 交代の判断・実行ロジック一式。方式A: game を受け取る関数群。要否判断
+// (subDesire/matchupSubs/planSubs)に加え、実際の入れ替え(substitute)・歩行アニメ
+// (subWalkers/updateSubs)・凍結ゲート(withSubs)もここへ集約（エントリ307で Game 残置
+// から移設）。game.ts から分離（workPlan.md 参照）。
 import { Player } from "../player";
 import { QUARTERS } from "../config";
 import { STARTERS, rate, scoringPower } from "../attributes";
-import { clamp } from "../util";
-import { roleFit, overallOf } from "./lineups";
+import { clamp, dist2DTo, moveToward2D, rand } from "../util";
+import { roleFit, overallOf, refreshChoiceRanks } from "./lineups";
+import { benchSeat } from "../core/bench";
 import type { Game } from "../game";
 
 // この選手がどれだけ交代を必要とするか: 疲れた脚、不調(TO過多で結果なし)、
@@ -70,7 +72,7 @@ export function matchupSubs(game: Game, team: number, exclude: Player | null): v
           const d = defRating(b);
           if (d > bestD) { bestD = d; best = b; }
         }
-        if (best) { game.substitute(ourDef, best); ourDef.matchupHoldT = 45; return; }
+        if (best) { substitute(game, ourDef, best); ourDef.matchupHoldT = 45; return; }
       }
     }
   }
@@ -91,7 +93,7 @@ export function matchupSubs(game: Game, team: number, exclude: Player | null): v
         const hs = handleScore(b);
         if (hs > bestH) { bestH = hs; best = b; }
       }
-      if (best) { game.substitute(ourPG, best); ourPG.matchupHoldT = 45; return; }
+      if (best) { substitute(game, ourPG, best); ourPG.matchupHoldT = 45; return; }
     }
   }
 }
@@ -123,7 +125,7 @@ export function planSubs(game: Game, exclude: Player | null): boolean {
         if (score > bestScore) { bestScore = score; best = b; }
       }
       if (best) {
-        game.substitute(out, best);
+        substitute(game, out, best);
         bench.splice(bench.indexOf(best), 1);
       }
     }
@@ -150,9 +152,120 @@ export function planSubs(game: Game, exclude: Player | null): boolean {
           const bad = oc.fatigue + (1 - overallOf(oc) / 99);   // 最も疲れ/弱い者から
           if (bad > worst) { worst = bad; target = oc; }
         }
-        if (target) game.substitute(target, starter);
+        if (target) substitute(game, target, starter);
       }
     }
   }
   return game.subWalkers.length > 0;
+}
+
+// 帳簿上の入れ替え: 交代選手が即座にコート枠を引き継ぐ(マンマッチ、出場時計、
+// フィード登録)。ただし物理的にはベンチから走って入る必要があり —
+// 休む選手は自席へ歩いて退く。
+export function substitute(game: Game, out: Player, sub: Player): void {
+  const i = game.players.indexOf(out);
+  if (i < 0) return;
+  const cx = out.pos.x, cz = out.pos.z;   // 引き継がれるコート上の位置
+  sub.slot = out.slot;
+  sub.spotIdx = out.slot;
+  sub.stintT = 0;
+  sub.cutting = false;
+  sub.screening = false;
+  sub.beatenT = sub.powerT = sub.stalledT = sub.jukeT = sub.comboN = sub.reactT = sub.coolT = sub.landT = 0;
+  out.lean = 0;        // 退く選手はベンチへの歩行のため体を起こす
+  sub.resetFacing();   // コート上の体はヨーを持たない — ベンチでの視線をクリア
+  sub.stand();         // ベンチから立ち上がって走り込む
+  game.players[i] = sub;
+  const seat = benchSeat(game, out);
+  game.subWalkers.push({ p: sub, tx: cx, tz: cz });     // 自席から走って入る
+  game.subWalkers.push({ p: out, tx: seat.x, tz: seat.z }); // 自席へ歩いて退く
+  game.subsMade++;
+  game.subEvents.push({
+    inNum: sub.idx + 1, inName: sub.name,
+    outNum: out.idx + 1, outName: out.name,
+    team: out.team, ttl: 1.8,
+  });
+  // コート上のユニットが変わった → 選択順(自動ユーセージ)を再導出し、入る選手が
+  // 能力順の序列に収まるようにする
+  refreshChoiceRanks(game, out.team);
+}
+
+// 入れ替え本体: プレーは凍結、各歩行者が目的地へ移動し、交代チップは画面に残り、
+// 全員が(安全タイムアウト付きで)配置に着いたら保留中の再開が走る。
+export function updateSubs(game: Game, dt: number): void {
+  game.subT += dt;
+  // 注: ここで交代チップは保持されない — 通常どおり経過する(update() のフィード
+  // ループが HOME→AWAY の順で走る)。プレー再開は全チップが消えてから(下の再開
+  // ゲート参照)なので、ライブプレー中にチップが残ることはない。
+  game.ball.pos.y = Math.max(0.12, game.ball.pos.y - 3 * dt);   // 床へ落ち着く
+
+  const timedOut = game.subT >= 9;   // 安全上限: 歩行/フィードで試合を止めない
+  let done = true;
+  for (const w of game.subWalkers) {
+    if (!timedOut && dist2DTo(w.p.pos, w.tx, w.tz) > 0.25) {
+      done = false;
+      // 単純なジョグ、accelSpeed ではない: 退場者はもう `players` にいないため
+      // 実測 curSpd が更新されず、accelSpeed だと ~0 で固まる — 両歩行者が
+      // 同じ一定ペースで一緒に動く
+      const jog = w.p.runSpeed * 0.85 * (1 - w.p.fatigue * 0.2);
+      moveToward2D(w.p.pos, w.tx, w.tz, jog * dt);
+      // 向かう先を向く(でないとベンチへ後ろ向きに走る)。脚/腕のサイクルを回して
+      // 硬直したまま滑らないようにする
+      w.p.faceToward(w.tx, w.tz);
+      w.p.twistToward(w.tx, w.tz, dt);   // プレーで残ったツイストをほどく
+      w.p.curSpd = jog;
+      w.p.updateLegs(dt);
+      w.p.runArms();
+    } else {
+      w.p.pos.set(w.tx, 0, w.tz);
+    }
+  }
+  // 入る選手と出る選手が同じ線上で位置を交換 — 歩く体を押し離し、
+  // すり抜けずに互いを(そして立っている誰かを)避けて流れるようにする
+  const MIN = 0.62;
+  const bodies = new Set<Player>(game.players);
+  for (const w of game.subWalkers) bodies.add(w.p);
+  const all = [...bodies];
+  for (let i = 0; i < all.length; i++) {
+    for (let j = i + 1; j < all.length; j++) {
+      const a = all[i], b = all[j];
+      let dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
+      let d = Math.hypot(dx, dz);
+      if (d >= MIN) continue;
+      if (d < 1e-4) { dx = rand(-1, 1); dz = rand(-1, 1); d = Math.hypot(dx, dz) || 1; }
+      const push = (MIN - d) / 2;
+      const nx = dx / d, nz = dz / d;
+      a.pos.x -= nx * push; a.pos.z -= nz * push;
+      b.pos.x += nx * push; b.pos.z += nz * push;
+    }
+  }
+  for (const w of game.subWalkers) w.p.sync(); // 退場者は `players` を離れた — ここで sync
+  // 再開は歩行者が配置に着き、かつ交代フィード(HOME→AWAY)が完全に流れ切って
+  // 消えてから — アウェイのチップがボールがライブになる前に消え、再開へ残らない
+  // ようにする。timedOut はハード上限。
+  if ((done && game.subEvents.length === 0) || timedOut) {
+    for (const w of game.subWalkers) {
+      w.p.pos.set(w.tx, 0, w.tz);
+      // 不変条件: ベンチのヨーを持ったままコート上に立つ者はいない — 歩行フェーズが
+      // 選手をライブプレーへ戻す時に必ず強制する
+      if (game.onCourt(w.p)) w.p.resetFacing();
+      else w.p.sit();   // ベンチに着いた者は座り直す
+      w.p.sync();
+    }
+    game.subWalkers = [];
+    const next = game.subNext;
+    game.subNext = null;
+    if (next) next();
+  }
+}
+
+// デッドボール時: 交代が必要な者がいれば "subs" ボールモードでプレーを凍結し
+// 入場/退場の入れ替えを実行。`next`(インバウンド等)は全歩行者が自分の位置に
+// 着いてから初めて走る。交代がなければプレーはそのまま続行。
+export function withSubs(game: Game, next: () => void, exclude: Player | null = null): void {
+  if (!planSubs(game, exclude)) { next(); return; }
+  game.subNext = next;
+  game.subT = 0;
+  game.handler = null;               // 入れ替え中は誰もボールを扱わない
+  game.ballMode = "subs";
 }

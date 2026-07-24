@@ -13,20 +13,19 @@ import { UI } from "./ui";
 import { TEAM_NAMES, TEAM_COLORS } from "./config";
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
-// NOTE: preserveDrawingBuffer is intentionally OFF — keeping the WebGL drawing
-// buffer around between frames disables the browser's compositor optimisations
-// and, with antialiasing, makes mobile GPUs occasionally show a stale/uncleared
-// frame (a flicker / weak flash). It's only needed for canvas screenshots, which
-// this app doesn't do. Re-enable only if a screenshot feature is added.
+// NOTE: preserveDrawingBuffer は意図的にOFF — WebGLの描画バッファをフレーム間で
+// 保持するとブラウザのコンポジタ最適化が無効になり、アンチエイリアスと相まって
+// モバイルGPUがときどき古い/クリアされていないフレーム(ちらつき / 弱いフラッシュ)を
+// 表示する。これはキャンバスのスクリーンショットにだけ必要で、このアプリはそれを
+// しない。スクリーンショット機能を追加する場合のみ再度有効にすること。
 const engine = new Engine(canvas, true, { stencil: true });
 
 const scene = new Scene(engine);
 scene.clearColor = new Color4(0.04, 0.05, 0.07, 1);
 
-// lighting. The sky hemisphere lights up-facing surfaces; groundColor is the
-// AMBIENT that reaches DOWN-facing surfaces (the nook under the head, the
-// undersides of the shoes) — kept low it leaves those faces near-black, so it's
-// lifted here so no surface goes fully dark.
+// ライティング。空のヘミスフィアは上向きの面を照らす。groundColor は下向きの面
+// (頭の下のくぼみ、シューズの裏側)に届くアンビエント — 低いままだとそれらの面が
+// ほぼ黒になるので、ここで持ち上げてどの面も完全に暗くならないようにする。
 const hemi = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
 hemi.intensity = 0.8;
 hemi.groundColor = new Color3(0.42, 0.4, 0.38);
@@ -35,9 +34,8 @@ const sun = new DirectionalLight("sun", new Vector3(-0.4, -1, 0.3), scene);
 sun.position = new Vector3(8, 18, -6);
 sun.intensity = 0.9;
 
-// a soft FILL light from the low front (no shadows) so faces turned away from
-// the sun — and any hand-built model face whose normal points off-axis — still
-// catch some light instead of reading as unlit.
+// 低い前方からの柔らかいフィルライト(シャドウなし)。太陽から背けた面 — と、法線が
+// 軸から外れた手作りモデルの面 — も、無照明に見えず多少の光を受けるようにする。
 const fill = new DirectionalLight("fill", new Vector3(0.3, 0.35, -1), scene);
 fill.intensity = 0.35;
 
@@ -45,7 +43,7 @@ const camera = new BroadcastCamera(scene, canvas);
 
 const hoops = buildCourt(scene);
 
-// soft shadows for the players and ball
+// 選手とボール用の柔らかいシャドウ
 const shadow = new ShadowGenerator(1024, sun);
 shadow.useBlurExponentialShadowMap = true;
 shadow.blurScale = 2;
@@ -54,18 +52,18 @@ const game = new Game(scene);
 game.attachHoops(hoops);
 for (let t = 0; t < 2; t++) {
   for (const p of game.allPlayers(t)) {
-    // includeDescendants=false: cast from the body meshes only, NOT their new
-    // children (hair/eyes) — otherwise the hair dome throws a shadow onto the
-    // shoulders/neck (the "shoulders lost light" report).
+    // includeDescendants=false: 体のメッシュだけからシャドウを落とし、その新しい子
+    // (髪/目)からは落とさない — さもないと髪のドームが肩/首に影を落とす
+    // (「肩が光を失った」という報告)。
     for (const m of p.meshes) shadow.addShadowCaster(m, false);
   }
 }
 shadow.addShadowCaster(game.ball.mesh);
 
 const ui = new UI();
-ui.onRestart = () => game.reset();                       // restart the current game
-ui.onBack = () => game.reset();                          // result → back to a clean pre-game
-ui.onSetupLineups = () => optimizeLineups(game);         // opponent-aware default five when a matchup is first set
+ui.onRestart = () => game.reset();                       // 現在の試合を再スタート
+ui.onBack = () => game.reset();                          // 結果 → きれいな試合前へ戻る
+ui.onSetupLineups = () => optimizeLineups(game);         // マッチアップ確定時、相手を考慮したデフォルト5人
 ui.onModelToggle = () => game.applyModelAll();           // 人型 ⇄ どんぐり体形を全員へ即時反映
 ui.onUniformToggle = () => {                             // ホーム ⇄ アウェイのユニフォームを全員へ即時反映
   game.applyUniforms();
@@ -77,11 +75,11 @@ ui.onShowcaseTeam = (team) => {
   else camera.showcaseTeam(game.allPlayers(team).slice(0, 5));
 };
 
-// ---- dedicated 3D uniform preview (club selection) ------------------------
-// A SEPARATE scene holds just two player models (home / away) on a clean dark
-// background — NO court, floor or other players. Each is framed by its own
-// viewport camera and shown FIXED (one player, no cycling). Rendered INSTEAD of
-// the main scene while the club wizard is open.
+// ---- 専用の3Dユニフォームプレビュー(クラブ選択) -------------------------
+// 別個のシーンが、きれいな暗い背景の上に2体の選手モデル(ホーム / アウェイ)だけを
+// 持つ — コート、フロア、他の選手はなし。各モデルは自分のビューポートカメラで
+// フレーミングされ、固定表示される(1選手、切り替えなし)。クラブウィザードが開いている
+// 間はメインシーンの代わりにこれをレンダリングする。
 let previewScene: Scene | null = null;
 let previewPlayers: [Player, Player] | null = null;
 let previewCams: [UniversalCamera, UniversalCamera] | null = null;
@@ -92,20 +90,20 @@ function rectToViewport(r: DOMRect): Viewport {
   const x = (r.left - cr.left) / cr.width;
   const w = r.width / cr.width;
   const h = r.height / cr.height;
-  const y = 1 - (r.top - cr.top + r.height) / cr.height;   // Babylon viewport: origin bottom-left
+  const y = 1 - (r.top - cr.top + r.height) / cr.height;   // Babylonのビューポート: 原点は左下
   return new Viewport(x, y, w, h);
 }
 function buildPreviewScene(): void {
   const ps = new Scene(engine);
-  // The canvas CLEAR colour must be DARK (matching the UI overlay): otherwise a
-  // light clear bleeds through the rounded corners of the selection sheet. The
-  // LIGHT backdrop the kit needs to stand out is instead a plane BEHIND the
-  // players — so only the two windows are light, never the sheet corners.
+  // キャンバスのクリア色は暗色でなければならない(UIオーバーレイに合わせる): さもないと
+  // 明るいクリアが選択シートの丸い角から透けて出る。キットが引き立つのに必要な明るい
+  // 背景は、代わりに選手の後ろに置いた平面にする — こうすれば明るいのは2つの窓だけで、
+  // シートの角は決して明るくならない。
   ps.clearColor = new Color4(0.031, 0.039, 0.059, 1);
   const backdrop = MeshBuilder.CreatePlane("pv_bg", { width: 40, height: 18 }, ps);
   backdrop.position.set(3, 5, -4);
   const bgMat = new StandardMaterial("pv_bgmat", ps);
-  bgMat.emissiveColor = new Color3(0.80, 0.83, 0.88);   // uniform light, ignores lighting
+  bgMat.emissiveColor = new Color3(0.80, 0.83, 0.88);   // 均一な明るさ、ライティングを無視
   bgMat.disableLighting = true;
   bgMat.backFaceCulling = false;
   backdrop.material = bgMat;
@@ -114,9 +112,9 @@ function buildPreviewScene(): void {
   ph.groundColor = new Color3(0.45, 0.43, 0.4);
   const pd = new DirectionalLight("pv_dir", new Vector3(0.25, -0.5, -1), ps);
   pd.intensity = 0.7;
-  // one model per side, stood a few metres apart; each faces +Z (forward) so a
-  // camera on the +Z side sees the FRONT of the jersey. These are generic models
-  // (uniform preview only), so their floating name tags are hidden.
+  // 片側1体ずつ、数メートル離して立たせる。各モデルは +Z(forward)を向くので、+Z側の
+  // カメラはジャージの前面を見る。これらは汎用モデル(ユニフォームプレビュー専用)なので、
+  // 浮かぶネームタグは非表示にする。
   const home = new Player(ps, 0, 0, ROSTER[0][0]);
   const away = new Player(ps, 1, 0, ROSTER[1][0]);
   home.setNameTagVisible(false);
@@ -134,33 +132,33 @@ function buildPreviewScene(): void {
   previewCams = [camL, camR];
 }
 ui.onUniformPreview = (cfg) => {
-  if (!cfg) { previewActive = false; return; }   // stop → the main scene renders again
+  if (!cfg) { previewActive = false; return; }   // 停止 → メインシーンを再びレンダリング
   if (!previewScene) buildPreviewScene();
   previewCams![0].viewport = rectToViewport(cfg.left);
   previewCams![1].viewport = rectToViewport(cfg.right);
-  previewPlayers![0].applyUniform();             // reflect the currently-chosen kits
+  previewPlayers![0].applyUniform();             // 現在選択中のキットを反映
   previewPlayers![1].applyUniform();
   previewActive = true;
 };
 
-// ---- pregame player-introduction camera tour ------------------------------
-// After TIP OFF, before the game runs: the camera visits each STARTER (RED 5
-// then BLUE 5) in a slightly-wide close-up filmed from the side his face
-// renders, then each team's BENCH in ONE pulled-back cut that frames the whole
-// row at once — and finally cuts back to the broadcast wide for the tip-off.
-// A click/tap on the court skips to the next shot.
+// ---- 試合前の選手紹介カメラツアー -----------------------------------------
+// ティップオフ後、試合が走る前: カメラは各先発(RED 5人、続いてBLUE 5人)を、その
+// 選手の顔がレンダリングされる側から撮った少し引いたクローズアップで巡り、その後
+// 各チームのベンチを、列全体を一度に収める引きの1カットで映す — そして最後に
+// ティップオフのため放送のワイドへ切り戻す。コートをクリック/タップすると次の
+// ショットへスキップする。
 type IntroShot = { kind: "player"; p: ReturnType<typeof game.allPlayers>[number] }
   | { kind: "bench"; team: number };
 let introQueue: IntroShot[] = [];
 let introT = 0;
-const HOLD_PLAYER = 0.9;   // seconds per starter close-up
-const HOLD_BENCH = 2.0;    // the single whole-bench cut lingers a touch longer
+const HOLD_PLAYER = 0.9;   // 先発1人のクローズアップあたりの秒数
+const HOLD_BENCH = 2.0;    // ベンチ全体の1カットは少しだけ長めに留める
 const holdOf = (s: IntroShot): number => (s.kind === "player" ? HOLD_PLAYER : HOLD_BENCH);
 
-// ---- intro caption board ---------------------------------------------------
-// During the tour the floating 3D name tags are hidden; this DOM lower-third
-// carries the caption instead — POSITION + NAME for the framed starter, and
-// ONE combined board listing all eight bench players on the bench cut.
+// ---- イントロ字幕ボード ----------------------------------------------------
+// ツアー中は浮かぶ3Dネームタグを非表示にする。代わりにこのDOMの下部字幕が
+// キャプションを担う — フレーミング中の先発はポジション + 名前、ベンチのカットでは
+// 8人のベンチ選手全員を1つにまとめたボードで表示する。
 const introBoard = document.createElement("div");
 Object.assign(introBoard.style, {
   position: "fixed", left: "50%", bottom: "14%", transform: "translateX(-50%)",
@@ -196,10 +194,10 @@ function updateIntroBoard(s: IntroShot | null): void {
   introShown = s;
   if (!s) {
     introBoard.style.display = "none";
-    setNameTags(true);           // the tour is over — floating tags come back
+    setNameTags(true);           // ツアー終了 — 浮かぶタグが戻る
     return;
   }
-  if (wasIdle) setNameTags(false);   // tour begins — the board carries the names
+  if (wasIdle) setNameTags(false);   // ツアー開始 — ボードが名前を担う
   introBoard.style.display = "block";
   introBoard.replaceChildren();
   if (s.kind === "player") {
@@ -220,8 +218,8 @@ function updateIntroBoard(s: IntroShot | null): void {
     Object.assign(nm.style, {
       fontSize: "clamp(20px,5vw,28px)", fontWeight: "900",
       textShadow: "0 2px 6px rgba(0,0,0,0.7)",
-      // FIXED width so the board is the SAME size for every player (short names
-      // centre in the slot, long names clip with an …).
+      // 幅を固定し、ボードがどの選手でも同じサイズになるようにする(短い名前は
+      // スロット内で中央寄せ、長い名前は … で切り詰める)。
       whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
       width: "min(64vw, 360px)", textAlign: "center",
     } as Partial<CSSStyleDeclaration>);
@@ -248,7 +246,7 @@ function updateIntroBoard(s: IntroShot | null): void {
       nm.textContent = p.name;
       Object.assign(nm.style, {
         fontSize: "clamp(13px,3vw,16px)", fontWeight: "700",
-        // FIXED width so every bench row's name column is identical (… clips overflow)
+        // 幅を固定し、ベンチ各行の名前列を同一にする(あふれた分は … で切り詰め)
         whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
         width: "min(32vw, 150px)",
       } as Partial<CSSStyleDeclaration>);
@@ -259,11 +257,10 @@ function updateIntroBoard(s: IntroShot | null): void {
   }
 }
 
-// The camera wants the subject's FACE side — but another body standing in that
-// line (the OPPOSING CENTRE faces him 1.4 m away at the tip-off circle) would
-// sit right in front of the lens. Swing the camera around the subject —
-// straight-on first, then ±31°, then ±54° — and take the first angle whose
-// camera ray has no other player within 0.65 m of it.
+// カメラは被写体の顔側を狙いたい — だがその線上に立つ別の体(ティップオフサークルで
+// 1.4m先から相対する相手センター)がレンズの真ん前に来てしまう。被写体の周りで
+// カメラを振る — まず正面、次に±31°、次に±54° — そして、そのカメラのレイの0.65m以内に
+// 他の選手がいない最初の角度を採る。
 function introDir(p: ReturnType<typeof game.allPlayers>[number]): { x: number; z: number } {
   const f = p.faceDirWorld();
   const others = [...game.allPlayers(0), ...game.allPlayers(1)];
@@ -275,18 +272,18 @@ function introDir(p: ReturnType<typeof game.allPlayers>[number]): { x: number; z
     const blocked = others.some((q) => {
       if (q === p) return false;
       const rx = q.pos.x - p.pos.x, rz = q.pos.z - p.pos.z;
-      const t = rx * d.x + rz * d.z;                 // along the camera ray
-      if (t < 0.4 || t > 4.4) return false;          // not between subject and lens
-      return Math.abs(rx * d.z - rz * d.x) < 0.65;   // too close to the ray = かぶり
+      const t = rx * d.x + rz * d.z;                 // カメラのレイに沿った成分
+      if (t < 0.4 || t > 4.4) return false;          // 被写体とレンズの間にいない
+      return Math.abs(rx * d.z - rz * d.x) < 0.65;   // レイに近すぎる = かぶり
     });
     if (!blocked) return d;
   }
-  return f;   // everyone is crowded in — accept the straight-on shot
+  return f;   // 全員が密集している — 正面のショットで妥協する
 }
 
 ui.onStart = () => {
   game.applyRoster();
-  game.reset();            // players take their tip-off spots / bench seats
+  game.reset();            // 選手はティップオフの位置 / ベンチの座席につく
   introQueue = [];
   for (let t = 0; t < 2; t++) {
     for (const p of game.allPlayers(t).slice(0, 5)) introQueue.push({ kind: "player", p });
@@ -296,7 +293,7 @@ ui.onStart = () => {
 };
 
 canvas.addEventListener("pointerdown", () => {
-  // during the intro a tap advances to the next shot immediately
+  // イントロ中はタップで即座に次のショットへ進む
   if (introQueue.length > 0) {
     introQueue.shift();
     if (introQueue.length > 0) introT = holdOf(introQueue[0]);
@@ -304,14 +301,14 @@ canvas.addEventListener("pointerdown", () => {
 });
 
 engine.runRenderLoop(() => {
-  // clamp dt so a stalled/refocused tab can't make the sim jump
+  // dt をクランプし、停止/再フォーカスされたタブがシムを飛躍させないようにする
   const dt = Math.min(engine.getDeltaTime() / 1000, 0.05);
-  // only advance the sim while a game is being played (frozen on pre-game/result)
+  // 試合がプレー中の間だけシムを進める(試合前/結果では凍結)
   if (ui.playing) {
     if (introQueue.length > 0) {
-      // the game holds its breath while the camera tours the players — but the
-      // meshes still have to FOLLOW the logical reset state (game.update isn't
-      // running, so nothing else syncs bodies to their tip-off spots/seats)
+      // カメラが選手を巡る間、試合は息を止める — だがメッシュはやはり論理的な
+      // リセット状態に追従しなければならない(game.update が走っていないので、他に
+      // 体をティップオフ位置/座席に同期させるものがない)
       introT -= dt;
       if (introT <= 0) {
         introQueue.shift();
@@ -328,35 +325,34 @@ engine.runRenderLoop(() => {
         camera.endIntro();
       }
     } else {
-      updateIntroBoard(null);   // no-op unless the tour just finished
+      updateIntroBoard(null);   // ツアーが終わった直後でなければ何もしない
       camera.endIntro();
-      // run `speed` integer sub-steps so fast-forward stays numerically stable
+      // `speed` 個の整数サブステップを走らせ、早送りが数値的に安定するようにする
       for (let i = 0; i < ui.speed; i++) game.update(dt);
     }
   } else if (introQueue.length > 0) {
-    // BACK to the pregame mid-tour: abandon the intro and free the camera
+    // ツアーの途中で試合前へ戻る: イントロを中止してカメラを解放する
     introQueue = [];
     updateIntroBoard(null);
     camera.endIntro();
   }
   ui.update(game);
   camera.update(dt, game.ball.pos.x, game.ball.pos.z, game.ball.pos.y, game.camFollowBall);
-  // while the club wizard's uniform preview is up, render ONLY the dedicated
-  // preview scene (isolated players, no court); otherwise the main scene.
+  // クラブウィザードのユニフォームプレビューが出ている間は、専用のプレビューシーン
+  // (孤立した選手、コートなし)だけをレンダリングする。それ以外はメインシーン。
   if (previewActive && previewScene) previewScene.render();
   else scene.render();
 });
 
 window.addEventListener("resize", () => engine.resize());
 
-// ---- keep the screen awake (mobile) ----------------------------------------
-// This is a SPECTATOR sim — the viewer just watches, so without periodic touches
-// a phone dims and locks the screen mid-game. A Screen Wake Lock holds the
-// display on while the page is visible. The OS auto-releases the lock whenever
-// the tab is hidden, so we re-request it on every return to visibility. On some
-// browsers request() rejects until there's been a user gesture, so we also retry
-// on the first pointer down. Needs a secure context (https / localhost); where
-// the API is unavailable this simply no-ops (nothing else changes).
+// ---- 画面を起こしたままにする(モバイル) -----------------------------------
+// これは観戦シム — 視聴者はただ見るだけなので、定期的なタッチがないとスマホは試合中に
+// 画面を暗くしロックする。Screen Wake Lock はページが表示されている間ディスプレイを
+// 点けたままにする。OSはタブが隠れるたびにロックを自動解放するので、可視状態に戻る
+// たびに再要求する。一部のブラウザではユーザー操作があるまで request() が拒否される
+// ので、最初のポインタダウンでも再試行する。セキュアコンテキスト(https / localhost)が
+// 必要。APIが利用できない環境ではこれは単に何もしない(他は何も変わらない)。
 type WakeSentinel = { release: () => Promise<void>; addEventListener: (t: "release", cb: () => void) => void };
 let wakeLock: WakeSentinel | null = null;
 async function requestWakeLock(): Promise<void> {
@@ -366,7 +362,7 @@ async function requestWakeLock(): Promise<void> {
     wakeLock = await wl.request("screen");
     wakeLock.addEventListener("release", () => { wakeLock = null; });
   } catch {
-    wakeLock = null;   // no gesture yet / unsupported — a tap or visibility change retries
+    wakeLock = null;   // まだ操作なし / 非対応 — タップか可視状態の変化で再試行する
   }
 }
 void requestWakeLock();

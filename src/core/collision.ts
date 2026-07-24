@@ -6,11 +6,11 @@ import { clamp, dist2D, rand } from "../util";
 import { rate } from "../attributes";
 import type { Game } from "../game";
 
-  // Bodies can't overlap: push any two players who collide apart, splitting the
-  // correction by "hold" weight so it reads as jostling for position rather than
-  // one player phasing through another. Run after all movement each frame.
+  // 体は重なれない: 衝突した2選手を押し離す。補正を「踏ん張り」の重みで分配するので、
+  // 一方が他方をすり抜けるのでなく、位置取りの押し合いとして見える。毎フレーム、全ての
+  // 移動の後に実行する。
 export function resolveCollisions(game: Game, ): void {
-    const MIN = 0.62; // ~2x capsule radius
+    const MIN = 0.62; // カプセル半径の約2倍
     for (let iter = 0; iter < 2; iter++) {
       for (let i = 0; i < game.players.length; i++) {
         for (let j = i + 1; j < game.players.length; j++) {
@@ -22,15 +22,15 @@ export function resolveCollisions(game: Game, ): void {
           const overlap = MIN - d;
           const nx = dx / d, nz = dz / d;
           const wa = holdWeight(game, a), wb = holdWeight(game, b);
-          // square the hold weights so a real strength gap shows: the stronger
-          // man barely gives ground while the weaker one is shoved back (and a
-          // strong post player bulls a weak defender backwards)
+          // 踏ん張りの重みを2乗して、本当の強さの差が出るようにする: 強い者はほとんど
+          // 押されず、弱い者は押し戻される（そして強いポストプレイヤーは弱い守備者を
+          // 後ろへ押し込む）
           const wa2 = wa * wa, wb2 = wb * wb;
           const total = wa2 + wb2;
           a.pos.x -= nx * overlap * (wb2 / total); a.pos.z -= nz * overlap * (wb2 / total);
           b.pos.x += nx * overlap * (wa2 / total); b.pos.z += nz * overlap * (wa2 / total);
 
-          // mid-air collision: the stronger body knocks the other away
+          // 空中での衝突: 強い体が相手を弾き飛ばす
           if (a.airborne && b.airborne) {
             const diff = rate(a.attr.balance) - rate(b.attr.balance);
             const knock = Math.abs(diff) * 0.6;
@@ -40,30 +40,30 @@ export function resolveCollisions(game: Game, ): void {
         }
       }
     }
-    // keep everyone in bounds — except an inbounder, who stands out of bounds;
-    // during a substitution/walk-off exchange, when players legitimately cross
-    // the sideline; and during dead-ball pauses (nobody moves, and the quarter
-    // break holds everyone gathered at the bench, outside the court)
+    // 全員をコート内に保つ — ただしスローインする者はアウトオブバウンズに立つので除く。
+    // 交代／引き上げの入れ替え中、選手が正当にサイドラインを越えるときも除く。そして
+    // デッドボールのポーズ中も（誰も動かず、クォーター休憩は全員をコート外のベンチに
+    // 集めたまま保つ）
     if (game.ballMode === "subs" || game.ballMode === "pause"
-        || game.ballMode === "finale") return;   // losers walk off to the bench
-    // the inbounder stands out of bounds to throw, and stays there through the
-    // throw's flight (he steps in only once his follow-through is done) — so
-    // don't yank him onto the court. Normal in-bounds passers are unaffected.
+        || game.ballMode === "finale") return;   // 敗者はベンチへ歩いて引き上げる
+    // スローインする者は投げるためにアウトオブバウンズに立ち、投げたボールが飛ぶ間も
+    // そこに留まる（フォロースルーが終わって初めてコート内へ踏み込む）— なので彼を
+    // コート内へ引き戻さない。通常のコート内のパサーは影響を受けない。
     const skip = game.ballMode === "inbound" ? game.handler
       : game.ballMode === "pass" ? game.passer : null;
     for (const p of game.players) if (p !== skip) game.clampCourt(p.pos);
   }
 
-  // How hard a player holds their ground in a collision (higher = shoves more).
-  // ボディバランス wins the body battle: a strong post player backs his man down
-  // and is pushed around less; a weak one yields ground.
+  // 衝突時に選手がどれだけ踏ん張るか（高いほど押しが強い）。
+  // ボディバランスが体の勝負を制する: 強いポストプレイヤーはマークを押し込み、
+  // 押されにくい。弱い者は地面を明け渡す。
 export function holdWeight(game: Game, p: Player): number {
-    let w = 0.5 + rate(p.attr.balance) * 0.78;                // ~0.6 (weak) .. ~1.28 (strong)
+    let w = 0.5 + rate(p.attr.balance) * 0.78;                // ~0.6（弱い）.. ~1.28（強い）
     if (p === game.handler) {
-      w += 0.5 + (p.has("post") ? 0.3 : 0);                   // protects the ball / posts up
-      if (p.keepShieldT > 0) w += 1.3;                        // braced keeper: a wide base the trap can't budge
+      w += 0.5 + (p.has("post") ? 0.3 : 0);                   // ボールを守る／ポストアップする
+      if (p.keepShieldT > 0) w += 1.3;                        // 踏ん張るキーパー: トラップでも動かせない広いスタンス
     }
-    else if (p.screening) w += 0.6;                           // a set screen holds firm
-    else if (p.team === 1 - game.possession) w += 0.25;       // defenders hold position
+    else if (p.screening) w += 0.6;                           // セットしたスクリーンはしっかり踏ん張る
+    else if (p.team === 1 - game.possession) w += 0.25;       // 守備者は位置を保つ
     return w;
   }

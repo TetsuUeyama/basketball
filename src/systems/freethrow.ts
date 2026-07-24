@@ -8,6 +8,7 @@ import { rate } from "../attributes";
 import { clamp, chance, rand, dist2D } from "../util";
 import { swishNet } from "../core/visuals";
 import { benchCheer } from "../core/bench";
+import { withSubs } from "./subs";
 import type { Game } from "../game";
 
 export class FreeThrowSystem {
@@ -142,7 +143,7 @@ export class FreeThrowSystem {
       const conceding = 1 - this.team;
       g.setEvent("GOOD", this.team);
       g.handler = null;
-      g.pauseThen(1.1, () => g.withSubs(() => g.inbound.start(conceding)));
+      g.pauseThen(1.1, () => withSubs(g, () => g.inbound.start(conceding)));
     } else {
       g.possession = this.team;       // ミス: ライブリバウンド
       g.setEvent(this.missKind === "air" ? "AIR BALL" : "MISS", this.team);

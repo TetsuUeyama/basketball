@@ -11,17 +11,17 @@ import { hoopIndex } from "../court";
 import { poseHands } from "./poses";
 import type { Game } from "../game";
 
-  // Kick off the net swish + rim/board flash on the rim `team` just scored on.
+  // `team` が今得点したリムで、ネットスウィッシュ＋リム／ボードのフラッシュを開始する。
 export function swishNet(game: Game, team: number): void {
     const i = hoopIndex(game.attackSign(team));
-    game.netSwish[i] = 1.1;         // longer, so the celebration reads clearly
+    game.netSwish[i] = 1.1;         // 長めにして、セレブレーションがはっきり見えるように
     game.swishTeam[i] = team;
   }
 
-  // One frame of the net-swish + rim/backboard flash on a make (visual only;
-  // skipped in the headless harness where no hoops are attached). The rim and
-  // backboard flash bright in the SCORING team's colour so it's obvious who
-  // scored, and the net snaps down hard and springs back.
+  // 得点時のネットスウィッシュ＋リム／バックボードのフラッシュの1フレーム（描画のみ。
+  // フープが取り付けられていないヘッドレスハーネスではスキップ）。リムとバックボードは
+  // 得点したチームの色で明るく光り、誰が得点したかがはっきり分かる。ネットは勢いよく
+  // 下へ弾んで跳ね返る。
 export function tickSwish(game: Game, dt: number): void {
     if (!game.hoops) return;
     const DUR = 1.1;
@@ -31,19 +31,19 @@ export function tickSwish(game: Game, dt: number): void {
       const net = game.hoops.nets[i], rim = game.hoops.rimMats[i], board = game.hoops.boardMats[i];
       const c = TEAM_COLORS[game.swishTeam[i]];
       if (game.netSwish[i] > 0) {
-        const e = DUR - game.netSwish[i];                 // seconds elapsed
-        const damp = Math.exp(-e * 5);                    // brightness decay
-        // net snaps down hard and springs back with a decaying wobble
+        const e = DUR - game.netSwish[i];                 // 経過秒数
+        const damp = Math.exp(-e * 5);                    // 明るさの減衰
+        // ネットは勢いよく下へ弾み、減衰する揺れとともに跳ね返る
         const spring = Math.exp(-e * 6);
         net.scaling.y = 1 + 0.9 * spring;
         const sway = Math.sin(e * 24) * 0.25 * spring;
         net.scaling.x = 1 + sway;
         net.scaling.z = 1 - sway;
-        // strong flash: rim & backboard glow the scoring team's colour, pulsing
+        // 強いフラッシュ: リムとバックボードが得点チームの色で脈打つように光る
         const pulse = damp * (0.6 + 0.4 * Math.abs(Math.sin(e * 18)));
         rim.emissiveColor.set(0.3 + c.r * 1.3 * pulse, 0.12 + c.g * 1.3 * pulse, c.b * 1.3 * pulse);
         board.emissiveColor.set(c.r * pulse, c.g * pulse, c.b * pulse);
-      } else {                                          // settle back to rest
+      } else {                                          // 静止状態へ戻す
         net.scaling.set(1, 1, 1);
         rim.emissiveColor.set(0.3, 0.12, 0.0);
         board.emissiveColor.set(0, 0, 0);
@@ -51,32 +51,31 @@ export function tickSwish(game: Game, dt: number): void {
     }
   }
 
-  // On-court players turn to face the play: the ball-handler and shooter square
-  // up to the basket they attack, and everyone else (defenders keeping eyes on
-  // the ball, off-ball attackers reading it) turns toward the ball. Eased so
-  // bodies track rather than snap. Skipped during substitutions, where players
-  // walk to set spots. Bench players aim their own gaze in benchIdle.
+  // コート上の選手はプレイの方を向く: ハンドラーとシューターは攻めるバスケットへ正対し、
+  // それ以外の全員（ボールから目を離さない守備者、それを読むオフボールの攻撃者）は
+  // ボールの方を向く。スナップでなく体が追従するようイージングする。交代中はスキップし、
+  // 選手は所定の位置へ歩く。ベンチ選手は benchIdle で各自の視線を向ける。
 export function updateFacing(game: Game, dt: number): void {
     if (game.ballMode === "subs" || game.ballMode === "finale") return;
     const b = game.ball.pos;
     for (const p of game.players) {
-      // the PASSER delivers a two-handed pass CHEST-ON: snap his upper body to the
-      // receiver NOW (the pass is too quick for an eased turn), feet left where
-      // they are. Done BEFORE the airborne skip so a JUMP pass out of a double-team
-      // (trapKickOut leaves the floor) still turns chest-on to the receiver.
+      // パサーは両手のパスを胸を正対させて出す: 上体を今すぐレシーバーへスナップさせ
+      // （パスはイージングした回転には速すぎる）、足はその場に残す。airborne スキップの
+      // 前に行うので、ダブルチームからのジャンプパス（trapKickOut は床を離れる）でも
+      // 胸をレシーバーへ正対させる。
       if (game.ballMode === "pass" && p === game.passer && game.passTo) {
         if (game.noLookPass) {
-          // ノールック: he does NOT square up to the target — the legs hold and only
-          // a slight torso hint turns that way, so the ball whips out from the side/
-          // behind without facing it (the different, no-look release motion).
+          // ノールック: ターゲットへ正対しない — 脚はそのままで、胴体をわずかに
+          // その方向へ向けるだけ。だからボールは正対せずに横／背後から鋭く出る
+          // （通常とは異なる、ノールックのリリース動作）。
           p.twistToward(game.passTo.pos.x, game.passTo.pos.z, dt, 0.4, 6);
         } else {
           p.faceChestToward(game.passTo.pos.x, game.passTo.pos.z);
         }
         continue;
       }
-      // TURN-AND-PASS wind-up: the target was behind his front-to-side arc, so he
-      // pivots his body toward it before the release (the ball is still in hand).
+      // ターンパスのウィンドアップ: ターゲットが前方から側方の弧の外（背後）にいたので、
+      // リリース前に体をそちらへ回す（ボールはまだ手にある）。
       if (game.pendingPassTo && game.pendingPassTurn && p === game.handler) {
         const t = game.pendingPassTo;
         const rt = 2.2 + (rate(p.attr.agility) * 0.6 + rate(p.attr.offense) * 0.4) * 6;
@@ -85,101 +84,98 @@ export function updateFacing(game: Game, dt: number): void {
         p.lookToward(t.pos.x, t.pos.z, dt, rt * 1.6);
         continue;
       }
-      // OFF THE FLOOR he can't re-orient: a jumper (shooter, contester, tip) holds
-      // whatever way he was facing at take-off until he lands — no mid-air turns.
+      // 床を離れていると向きを変えられない: 跳んでいる者（シューター、コンテスト、タップ）は
+      // 着地するまで踏み切り時の向きを保つ — 空中での回転はない。
       if (p.airborne) continue;
-      // the RECEIVER squares his chest to the INCOMING ball to take it in both
-      // hands — the same chest-on snap the passer makes, so a ball arriving from
-      // behind turns him around (the torso covers what it can, the feet turn the
-      // excess; his run to the catch point is untouched — legs keep travelling).
-      // Inside ~0.5 m the bearing to the ball swings wildly frame-to-frame, so
-      // hold the last orientation for the actual catch instant.
+      // レシーバーは向かってくるボールへ胸を正対させ、両手で受ける — パサーと同じ
+      // 胸を正対させるスナップ。だから背後から来るボールは彼を振り向かせる（胴体で
+      // まかなえる分をまかない、足で残りを回す。キャッチ地点への走りには手を触れない
+      // — 脚は進み続ける）。約0.5m以内ではボールへの方位がフレームごとに激しく振れるので、
+      // 実際にキャッチする瞬間は直前の向きを保つ。
       if (game.ballMode === "pass" && p === game.passTo) {
         if (dist2D(p.pos, b) > 0.5) p.faceChestToward(b.x, b.z);
         continue;
       }
-      // corralling the catch (gatherT): he TWISTS his upper body to shield the ball,
-      // turning his chest away from the nearest defender (the ball rides to the far
-      // hip in updateLive). Squares back up as it settles. If there's no defender to
-      // shield from, just hold the catch posture.
+      // キャッチをまとめている間(gatherT): 上体をひねってボールを隠し、胸を最も近い
+      // 守備者から背けるように向ける（updateLive でボールは遠い側の腰へ移る）。収まると
+      // 正対へ戻る。隠す相手の守備者がいなければ、キャッチの姿勢を保つだけ。
       if (p === game.handler && p.gatherT > 0 && p.catchIntent === "shield") {
         const nd = game.nearestDefender(p);
         if (nd) {
-          // PRESSURED: only the UPPER BODY turns to shield — the chest twists away
-          // from the defender while the HEAD keeps facing the play (the rim), so it
-          // reads as "protecting with the body", not the whole figure spinning.
-          // lookToward at a fixed world point counter-rotates the head vs the chest.
+          // プレッシャー下: 上体だけが回って隠す — 胸は守備者から背けてひねり、頭は
+          // プレイ（リム）の方を向いたままにする。だから全身が回転するのでなく
+          // 「体で守っている」ように見える。固定したワールド座標点への lookToward が
+          // 頭を胸に対して逆回転させる。
           const shieldX = p.pos.x + (p.pos.x - nd.pos.x), shieldZ = p.pos.z + (p.pos.z - nd.pos.z);
           const rt = 2.2 + (rate(p.attr.agility) * 0.6 + rate(p.attr.offense) * 0.4) * 6;
-          p.twistToward(shieldX, shieldZ, dt, undefined, rt * 1.25);   // chest shields
+          p.twistToward(shieldX, shieldZ, dt, undefined, rt * 1.25);   // 胸で守る
           const rim = game.attackFloor(p.team);
-          p.lookToward(rim.x, rim.z, dt, rt);                          // face stays on the play
+          p.lookToward(rim.x, rim.z, dt, rt);                          // 顔はプレイに向けたまま
         }
         continue;
       }
-      // an OPEN catch (shoot / drive intent) squares up to the basket instead of
-      // holding the passer-facing catch posture — it falls through to the normal
-      // handler aim (attackFloor) below, ready to rise or go.
-      // KEEP-DRIBBLE SHIELD: a marked poor handler turns SIDE-ON to wall the ball
-      // off — chest perpendicular to the defender, angled to the rim side, so his
-      // body sits between the man and the ball (carried on the far hip). His head
-      // still tracks the floor/rim so he can find the help pass.
+      // オープンなキャッチ（シュート／ドライブの意図）は、パサーに正対したキャッチ
+      // 姿勢を保つのでなくバスケットへ正対する — 下の通常のハンドラーの向き
+      // (attackFloor) に流れ込み、上がるか行くかの構えになる。
+      // ドリブル維持のシールド: マークされた下手なハンドラーは横向きになってボールを
+      // 壁で守る — 胸を守備者に対して直角に、リム側へ角度をつけるので、体が守備者と
+      // ボール（遠い側の腰で運ぶ）の間に入る。頭は依然としてフロア／リムを追い、
+      // ヘルプのパスを見つけられるようにする。
       if (p === game.handler && p.keepShieldT > 0) {
         const od = game.onBallDefender(p);
         if (od) {
           const rimF = game.attackFloor(p.team);
-          const dx = od.pos.x - p.pos.x, dz = od.pos.z - p.pos.z;   // toward the defender
-          let px = -dz, pz = dx;                                    // perpendicular (side-on)
-          if (px * (rimF.x - p.pos.x) + pz * (rimF.z - p.pos.z) < 0) { px = dz; pz = -dx; } // pick the rim side
+          const dx = od.pos.x - p.pos.x, dz = od.pos.z - p.pos.z;   // 守備者へ向かって
+          let px = -dz, pz = dx;                                    // 直角（横向き）
+          if (px * (rimF.x - p.pos.x) + pz * (rimF.z - p.pos.z) < 0) { px = dz; pz = -dx; } // リム側を選ぶ
           const sx = p.pos.x + px, sz = p.pos.z + pz;
           const shieldRate = 2.2 + rate(p.attr.agility) * 5;
-          p.faceSmooth(sx, sz, shieldRate * dt);                    // legs/hips turn side-on
-          p.twistToward(sx, sz, dt, undefined, shieldRate * 1.2);   // chest walls the ball off
-          p.lookToward(rimF.x, rimF.z, dt, shieldRate * 1.6);       // eyes up on the floor/rim
+          p.faceSmooth(sx, sz, shieldRate * dt);                    // 脚／腰を横向きにする
+          p.twistToward(sx, sz, dt, undefined, shieldRate * 1.2);   // 胸でボールを壁のように守る
+          p.lookToward(rimF.x, rimF.z, dt, shieldRate * 1.6);       // 目はフロア／リムに向ける
           continue;
         }
       }
       const aim = (p === game.handler || p === game.shooter) ? game.attackFloor(p.team) : b;
-      // Lower body: while running, the legs face the direction of TRAVEL and the
-      // torso twists toward the play (twistToward) — receiving on the move,
-      // shadowing a driver in stride. EXCEPT when moving away from the aim
-      // (a backpedal): then the legs hold their square-up so the player retreats
-      // chest-on (which is also what triggers the backpedal arm pose). Standing
-      // still, the whole body squares to the aim and the twist unwinds.
+      // 下半身: 走っている間、脚は進行方向を向き、胴体はプレイの方へひねる(twistToward)
+      // — 動きながら受ける、ドライブする相手にストライドで付く。ただし目標から遠ざかる
+      // （バックペダル）ときは除く: そのとき脚は正対を保ち、選手は胸を向けたまま後退する
+      // （これがバックペダルの腕ポーズも誘発する）。静止していると全身が目標へ正対し、
+      // ひねりがほどける。
       let lx = aim.x, lz = aim.z;
       const spd = Math.hypot(p.velX, p.velZ);
-      // a FINISHER in his gather squares his legs to the rim (aim = the hoop) so
-      // the dunk/layup faces the basket instead of taking off angled — which is
-      // what read as a frequent "back dunk" (the body wasn't turned to the rim).
+      // ギャザー中のフィニッシャーは脚をリムへ正対させる（aim = フープ）ので、
+      // ダンク／レイアップが角度をつけて踏み切るのでなくバスケットへ正対する —
+      // これが頻発する「バックダンク」に見えていた原因（体がリムへ向いていなかった）。
       const finishing = p === game.shooter && game.shooterFinishing
         && dist2DTo(p.pos, aim.x, aim.z) < 3.2;
       if (spd > 1.5 && !finishing) {
         const ax = aim.x - p.pos.x, az = aim.z - p.pos.z;
         const al = Math.hypot(ax, az);
-        // Moving toward the aim → legs face travel. Moving AWAY (a retreat) a
-        // slow contain-shuffle stays chest-on (keep facing the aim, backpedal) —
-        // BUT a committed SPRINT away (chasing a loose ball, or a beaten defender
-        // sprinting back to recover) turns and RUNS: face the travel direction so
-        // he doesn't moon-walk. faceSmooth eases it, so the turn is gradual.
+        // 目標へ向かって動く → 脚は進行方向を向く。遠ざかる（後退）とき、遅い
+        // コンテインシャッフルは胸を向けたまま（目標へ正対を保ちバックペダル）—
+        // ただし本気のスプリントで遠ざかる（ルーズボールを追う、または抜かれた守備者が
+        // 戻ろうとスプリントする）ときは向きを変えて走る: 進行方向を向き、後ろ歩き
+        // にならないようにする。faceSmooth がイージングするので、回転は緩やか。
         const committed = spd > p.runSpeed * 0.72;
         if (al > 0.05 && ((p.velX * ax + p.velZ * az) / (spd * al) > -0.26 || committed)) {
           lx = p.pos.x + p.velX;
           lz = p.pos.z + p.velZ;
         }
       }
-      // How fast he can WHIP his body around to a new direction — no instant
-      // spins. Driven by クイックネス(敏捷性) plus his role skill: a DEFENDER turns
-      // on 敏捷性 + ディフェンス (staying with his man), an attacker on オフェンス +
-      // 敏捷性. Low ratings turn slowly (a beat to change direction), elite ones
-      // snap around — but never instantly.
+      // 新しい方向へどれだけ速く体をひねって振れるか — 瞬間的な回転はない。
+      // クイックネス(敏捷性)に加えてロール能力で決まる: 守備者は敏捷性 + ディフェンス
+      // でひねり（マークに付き続ける）、攻撃者はオフェンス + 敏捷性で。低い値は
+      // ゆっくり回り（方向転換に一拍かかる）、エリートは素早く振れる — ただし
+      // 決して瞬時ではない。
       const offense = p.team === game.possession;
       const quick = rate(p.attr.agility);
       const skill = offense ? rate(p.attr.offense) : rate(p.attr.defense);
-      const turnRate = 2.2 + (quick * 0.6 + skill * 0.4) * 6;   // ~2.2 (slow) .. ~8.2 (quick) rad/s
-      p.faceSmooth(lx, lz, turnRate * dt);                       // lower body (legs/hips)
-      p.twistToward(aim.x, aim.z, dt, undefined, turnRate * 1.25); // upper body (chest), a touch quicker
-      // the HEAD tracks the thing worth watching (the ball, or the rim he attacks)
-      // ON TOP of the chest — so he never runs/turns without his face on the play
+      const turnRate = 2.2 + (quick * 0.6 + skill * 0.4) * 6;   // ~2.2（遅い）.. ~8.2（速い）rad/s
+      p.faceSmooth(lx, lz, turnRate * dt);                       // 下半身（脚／腰）
+      p.twistToward(aim.x, aim.z, dt, undefined, turnRate * 1.25); // 上半身（胸）、少し速め
+      // 頭は注視すべきもの（ボール、または攻めるリム）を、胸の動きの上に重ねて追う
+      // — だから彼は顔をプレイに向けずに走ったり回ったりすることは決してない
       p.lookToward(aim.x, aim.z, dt, turnRate * 1.6);
     }
   }

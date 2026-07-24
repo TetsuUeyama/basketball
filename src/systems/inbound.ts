@@ -6,7 +6,7 @@ import { Vector3 } from "@babylonjs/core";
 import { Player } from "../player";
 import { COURT, RIM, SHOT_CLOCK, SHOT_CLOCK_PARTIAL, teamShort } from "../config";
 import { clamp, rand, dist2DTo, moveToward2D } from "../util";
-import { runDefenseDuringDeadish } from "../core/defense";
+import { runDefenseDuringDeadish } from "../action/defense";
 import type { Game } from "../game";
 
 export class InboundSystem {

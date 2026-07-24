@@ -4004,3 +4004,56 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - **コードは1文字も変更なし**を機械検証: バックアップ(scratchpad/game.before.ts)と新版から block/line コメントを除去して比較 → 完全一致(node スクリプト)。cSpell 警告も英語コメント由来(offence/defence/bigs/frontcourt 等)は全消え、残るは import パス/変数名(freethrow/liveball/gameflow/deadball/playmaking/opps/Mult 等)のみ。
 - 検証: tsc✓ / vite build✓(13.82s) / headless 40試合 27.3(コメントのみ変更=ロジック不変のためRNG分散、min14/max37)。
 - 対象: フィールド宣言のインラインコメント、メソッドの JSDoc/ブロックコメント、区切りコメント(// ---- ... ----)全て。バスケ用語・能力値名(D精度/反応/精神/ロング等)や NBA ルール参照は原義を保って翻訳。
+
+## 2026-07-24 (306) game.ts分割 継続: トラップ状況判断(cognition reads)を core/reads.ts へ
+
+- 守備プレッシャー/トラップの読み取り4関数を core/reads.ts(73行)へ関数化(game引数): doubleTeamed/tightlyTrapped/trapReliever/trapReliefSpot。純粋な幾何計算の状況判断(cognition層)。逐語移動+this→game。
+- game.ts 内に他の呼び出し元なし(trapReliever→doubleTeamed の内部呼びは reads 内で直接呼びに)。外部呼び出し元のみ更新: passing.ts(doubleTeamed×4)、offense.ts(doubleTeamed×2)、offball.ts(tightlyTrapped/trapReliever/trapReliefSpot)。各 import 追加。
+- 循環なし: reads は type Game + player/config/util のみ import。passing/offense/offball が reads を import(既に game.ts が import 済みのモジュール群、新規循環なし)。game.ts は reads を import せず(呼び出し元が居ないため純減)。
+- 検証: tsc✓ / vite build✓(19.49s) / headless 40試合 28.9(基準28-30内、min15/max42)。逐語移動でロジック不変。
+- 行数: game.ts 1209→1145(−64)。reads.ts 73新規。累計 6744→1145(約83%減)。
+- 構成(core): defense-schemes, defense, passing, offball, offense, shooting, poses, looseball, liveball, gameflow, visuals, deadball, collision, bench, **reads**。
+- ⚠️ この変更は未コミット(前回のコミット 74f32e3 の上に積む)。
+
+## 2026-07-24 (307) game.ts分割 継続: 交代実行(substitute/updateSubs/withSubs)を systems/subs.ts へ集約
+
+- **方針変更**: これら3関数は従来「Game のアニメ/状態内部と密結合」として意図的に Game 残置と規定していた(エントリ292のメモ)。だが分割パターン(game引数の関数モジュール)が全15 core+6 systems で確立した今、subs.ts に既にある要否判断(subDesire/matchupSubs/planSubs)と同居させる方が凝集度が高いと判断し、集約へ方針転換。
+- substitute(game,out,sub)/updateSubs(game,dt)/withSubs(game,next,exclude) を subs.ts へ関数化。逐語移動+this→game。benchSeat(core/bench)/refreshChoiceRanks(lineups) を subs.ts が import。内部の game.substitute×4 は同モジュール直接呼びに。
+- 循環検証: subs→bench/lineups は一方向(bench/lineups は subs を import せず)。withSubs 呼び出し元(deadball×2/gameflow/shooting/freethrow)は subs を import するが subs はそれらを import せず=循環なし。game↔subs は型のみ。
+- 呼び出し更新: game.ts switch updateSubs(this,dt)、外部の game.withSubs→withSubs(game,)(deadball/gameflow/shooting)、g.withSubs→withSubs(g,)(freethrow)、各 import 追加。game.ts の不要化 import 除去(benchSeat/planSubs/dist2DTo — 全て移動関数内のみで使用と確認)。
+- 検証: tsc✓ / vite build✓(16.48s) / headless 40試合 28.8(基準28-30内、交代は毎試合実行され移設ロジックを検証)。逐語移動でロジック不変。
+- 行数: game.ts 1145→1026(−119)。subs.ts 160→271(+111)。累計 6744→1026(約85%減)。
+- 構成(systems): subs(交代の判断+実行を集約), screen, tipoff, inbound, freethrow, lineups。
+- ⚠️ 未コミット(74f32e3 の上に reads.ts=エントリ306 と本エントリを積む)。
+
+## 2026-07-24 (308) フォルダ再編: action/（選手のアクション）と reaction/（リアクション判定）を新設
+
+- ユーザー方針: アクション=起点となるプレー(パス/シュート/ドライブ/ドリブル)、リアクション=それへの応答(パスカット・キャッチ・ブロック跳躍・スティール・リバウンド)。攻守の軸ではない。**浅い定義**で実装(reaction/=反応の判定層のみ集約、実行トリガは発動モジュールに同居のまま)を承認。
+- **src/action/**(7): offense, shooting, passing, liveball, offball, defense, defense-schemes ← core/ から git mv。選手の発動アクション(行動AI)。全て game 第一引数の関数モジュールで様式統一。
+- **src/reaction/**(5): shot-outcome, contest-block, pass-risk, foul, rebound ← 旧 resolution/ を改称(git mv)。「アクションの効果=判定ルール」=リアクションの成否判定。
+- 残置: core/(gameflow, deadball, visuals, collision, bench, poses, reads, looseball)=エンジン/進行/描画/共有/認知/物理、systems/(subs,screen,tipoff,inbound,freethrow,lineups)=管理/フェーズ、objects(player,ball,court,player-*)、eval.ts。screen(class)は様式統一のため systems 残置。
+- import 更新: 全 src の相対 import を現レイアウトから機械再計算する Node スクリプト(scratchpad/normalize-imports.cjs、basename一意性を利用)で 9ファイル・23 specifier を書き換え。手作業ゼロ。移動ファイルの `./deadball→../core/deadball`・`../resolution/X→../reaction/X`、game.ts の `./core/shooting→./action/shooting` 等。
+- 挙動不変(ファイル移動+import のみ、ロジック改変なし)。git はリネーム(R/RM)として認識。
+- 検証: tsc✓ / vite build✓(24.40s) / headless 40試合 29.5(基準28-30内)。
+- 浅い定義の帰結(既知): ブロック跳躍(contestJump/tryBlock/swat=shooting)・スティール(strips=defense)・キャッチ/迎撃(passing)・ルーズ確保(looseball) 等の反応「実行」コードは発動モジュール側に同居のまま。game.ts の contestLeap/steal/crashBoards も循環回避で Game 残置。深い分割は将来の任意課題。
+- ⚠️ 未コミット(74f32e3 の上に reads.ts〈306〉/subs集約〈307〉/本フォルダ再編〈308〉)。
+
+## 2026-07-24 (309) 全ソースの英語コメントを日本語化（36ファイル・約2600行）
+
+- ユーザー指示「全てのコメントを日本語に変更」。game.ts 以外の全 src の英語コメント(スキャンで約2618行/36ファイル)を日本語化。最大は player.ts(603)・ui.ts(538)・action/offense(302)。
+- **並列サブエージェント7体**で分担翻訳(player.ts専任 / ui.ts専任 / action(offense/shooting/defense) / core+liveball / main・attributes・config・util・court・camera / player-*アニメ+lineups / club・db系+残余)。各エージェントに「コメントのみ・コード1文字も変えない」「能力値名(D精度/反応/精神 等)・識別子・数値・データ配列維持」「用語集で表記統一」を厳命。
+- **コード不変を機械検証**: src 全体をバックアップ(scratchpad/src-before・47ts)し、翻訳後に「コメント除去後コードの完全一致」を全ファイル比較 → **47/47 一致・差分0**。エージェントはコメントのみ変更。
+- 残余4行(defense「0=ロール..1=スター」/player-react「傾き量」/lineups「適格な選手のみ」/ui「試合前VSボード/ロスター再評価」)を手動翻訳。残る英語10行は全て翻訳対象外(eslint/三連スラッシュ・ディレクティブ、数式 dot()/cross()、リテラルラベル FOUL/SHOOTING FOUL、識別子参照、擬陽性1)。
+- 検証: コード完全一致47/47 / tsc✓ / vite build✓ / headless 40試合(27-30基準内)。コメントのみ変更=挙動不変。
+- ⚠️ 未コミット(74f32e3 の上に 306/307/308/本309)。
+
+## 2026-07-24 (310) シュート種別の明示化 A（ShotType + SHOT_PARAMS、挙動等価）
+
+- ユーザー方針「Aの後B前提」。action/shooting.ts に距離ベースの種別を明示導入。
+- **ShotType = "dunk" | "layup" | "midrange" | "three"** を定義。`jumperType(dHoop)`（THREE_DIST 境界でミドル/3P）と、種別ごとの実行パラメータ表 `SHOT_PARAMS`（points / liveLabel / apex(h,far) / dur(far,evaded)）を追加。
+- releaseShot は `jumperType` で種別確定→表から points/dur/apex を取得。finishAtRim は rimFinishOutcome の dunk で "dunk"/"layup" 確定→表から dur/apex/label。散っていた isThree/dunk のブールを名前付き種別に置換。
+- **挙動等価**: 従来の式・定数を種別テーブルにそのまま移設(mid=far0で 0.85/(1.6+bank*1.2)、three は far スケール、dunk/layup は 0.45/0.55+evaded・0.25/0.7、label "DUNK!"/"LAYUP")。make% は resolution/shot-outcome のまま(isThree 分岐＝type と等価)。
+- **設計判断(ユーザーQ回答)**: フリースローは独立フェーズ(systems/freethrow)として ShotType に含めず分離。ブザービーターは距離種別でなく横断的修飾(buzzer フラグ、no-windup＋精度ペナルティ)として非種別扱い。
+- B の土台: mid と three を別エントリにし、各種別を独立にカーブ/頻度調整できる状態にした。
+- 検証: tsc✓ / vite build✓(14.55s) / headless 40試合 28.3・30.0(基準28-30内、式保持で挙動等価)。
+- ⚠️ 未コミット(74f32e3 の上に 306/307/308/309/本310)。

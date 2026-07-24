@@ -5,10 +5,11 @@ import { COURT, PASS_SPEED, MAX_PASS, SHOT_CLOCK } from "../config";
 import { rate } from "../attributes";
 import { clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";
 import { twWeight, effShootRange, reactionLag } from "../eval";
-import { laneVetoed, passRisk, evalInterception, longBallRead } from "../resolution/pass-risk";
+import { laneVetoed, passRisk, evalInterception, longBallRead } from "../reaction/pass-risk";
 import { runDefenseDuringDeadish } from "./defense";
 import { updateOffBallMotion, bestOpenSpot } from "./offball";
-import { turnover } from "./deadball";
+import { turnover } from "../core/deadball";
+import { doubleTeamed } from "../core/reads";
 import type { Game } from "../game";
 
 // 投げるべき味方を選び、投げてよいか判定する。カバーされた受け手には投げない。
@@ -48,7 +49,7 @@ export function chooseReceiver(game: Game, h: Player): Player | null {
     // 守備が張り付いた受け手は的でない(守備へのパスに見える)
     if (open < 1.4 && !atRimCutter && game.shotClock > 2) continue;
     // ダブルチームへは絶対に戻さない(トラップループを再開させる)
-    if ((game.doubleTeamed(p) || p.trappedT > 0) && !atRimCutter && game.shotClock > 2) continue;
+    if ((doubleTeamed(game, p) || p.trappedT > 0) && !atRimCutter && game.shotClock > 2) continue;
     const progress = 1 / (1 + dist2D(p.pos, rimFloor)); // リムに近いほど良い
     // vision: 低い攻判断は各選択肢の良さを見誤る
     let value = open + progress * 3 + rand(-1, 1) * (1 - rate(h.attr.offense)) * 0.8;
@@ -136,7 +137,7 @@ export function passToReceiver(
       && (laneVetoed(game.oppTeam(h), h, target)
         || passRisk(game.oppTeam(h), h, target) > 0.3
         || (!target.cutting && game.nearestDefenderDist(target) < 1.0)
-        || (!target.cutting && (game.doubleTeamed(target) || target.trappedT > 0)))) {
+        || (!target.cutting && (doubleTeamed(game, target) || target.trappedT > 0)))) {
     return false;
   }
 
@@ -174,7 +175,7 @@ export function passToReceiver(
   // 手放したばかり: ~1.6s は真っ直ぐ返さない(2人ピンポン防止)。本当のリムカットは解除。
   h.justPassedT = 1.6;
   // ダブルチームからの脱出: 即座に戻さず(ギブ&ゴーで罠へ戻らない)、オープンスペースへ。
-  if (game.doubleTeamed(h)) {
+  if (doubleTeamed(game, h)) {
     h.justPassedT = 3.0;
     h.cutting = false;
     h.offTimer = rand(0.8, 1.6);
@@ -314,7 +315,7 @@ export function updatePass(game: Game, dt: number): void {
       }
     }
     // 4対3で受けた: 味方がダブルチーム中=守備手薄。逡巡せず即攻める。
-    if (game.teamPlayers(receiver.team).some((m) => m !== receiver && game.doubleTeamed(m))) {
+    if (game.teamPlayers(receiver.team).some((m) => m !== receiver && doubleTeamed(game, m))) {
       receiver.decisionT = Math.min(receiver.decisionT, 0.08 + gather * 0.5);
     }
     if (gather > 0.02) {
@@ -333,7 +334,7 @@ export function updatePass(game: Game, dt: number): void {
     if (passer) {
       const openAtCatch = game.nearestDefenderDist(receiver);
       const vision = rate(passer.attr.passAcc) * 0.6 + rate(passer.attr.offense) * 0.4;
-      const zip = rate(passer.attr.passSpd);   // 0 (lob) .. 1 (bullet)
+      const zip = rate(passer.attr.passSpd);   // 0（ロブ）.. 1（弾丸）
       receiver.setupBonus = clamp((vision - 0.4) * 0.36
         + clamp(openAtCatch - 1.3, 0, 2) * 0.05
         + zip * 0.10, 0, 0.28) * game.passQ;

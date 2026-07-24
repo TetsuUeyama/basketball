@@ -9,23 +9,23 @@ import { makeHandlerRing, type Hoops } from "./court";
 import {
   COURT, RIM, PASS_SPEED, SHOT_CLOCK, QUARTER_TIME, QUARTERS, teamShort,
 } from "./config";
-import { clamp, dist2D, dist2DTo, moveToward2D, chance, rand } from "./util";
+import { clamp, dist2D, moveToward2D, chance, rand } from "./util";
 import { reactionLag } from "./eval";
 import { FreeThrowSystem } from "./systems/freethrow";
 import { TipoffSystem } from "./systems/tipoff";
 import { InboundSystem } from "./systems/inbound";
 import { ScreenSystem } from "./systems/screen";
-import { planSubs } from "./systems/subs";
+import { updateSubs } from "./systems/subs";
 import { refreshChoiceRanks } from "./systems/lineups";
-import { updatePass } from "./core/passing";
-import { updateCharge, updateShot } from "./core/shooting";
+import { updatePass } from "./action/passing";
+import { updateCharge, updateShot } from "./action/shooting";
 import { updateLoose, stepBallFreeFlight } from "./core/looseball";
-import { updateLive } from "./core/liveball";
+import { updateLive } from "./action/liveball";
 import { endQuarter, updateFinale } from "./core/gameflow";
 import { syncAll, updateFacing, tickSwish } from "./core/visuals";
 import { shotClockViolation } from "./core/deadball";
 import { resolveCollisions } from "./core/collision";
-import { benchSeat, seatOnBench, updateBenchCheer } from "./core/bench";
+import { seatOnBench, updateBenchCheer } from "./core/bench";
 import { ROSTER, ROSTER_SIZE, STARTERS, TACTICS, rate, AbilityKey } from "./attributes";
 
 export type BallMode = "held" | "charge" | "pass" | "shot" | "loose" | "inbound" | "tipoff" | "freethrow" | "pause" | "subs" | "finale";
@@ -237,125 +237,6 @@ export class Game {
 
   onCourt(p: Player): boolean {
     return this.players.includes(p);
-  }
-
-  /** ロスター番号ごとに一意の固定ベンチ席。両ベンチは同じサイドライン(-X、実際の
-   *  ベンチ側)を共有。各チームの列は自陣ベースライン(奥)から始まりミッドコート
-   *  方向へ埋まるので、2つのベンチは中央で明確な隙間を空けて出会い、誰が交代して
-   *  も決して重ならない。 */
-
-  // デッドボール時: 交代が必要な者がいれば "subs" ボールモードでプレーを凍結し
-  // 入場/退場の入れ替えを実行。`next`(インバウンド等)は全歩行者が自分の位置に
-  // 着いてから初めて走る。交代がなければプレーはそのまま続行。
-  withSubs(next: () => void, exclude: Player | null = null): void {
-    if (!planSubs(this, exclude)) { next(); return; }
-    this.subNext = next;
-    this.subT = 0;
-    this.handler = null;               // 入れ替え中は誰もボールを扱わない
-    this.ballMode = "subs";
-  }
-
-  // 帳簿上の入れ替え: 交代選手が即座にコート枠を引き継ぐ(マンマッチ、出場時計、
-  // フィード登録)。ただし物理的にはベンチから走って入る必要があり —
-  // 休む選手は自席へ歩いて退く。
-  substitute(out: Player, sub: Player): void {
-    const i = this.players.indexOf(out);
-    if (i < 0) return;
-    const cx = out.pos.x, cz = out.pos.z;   // 引き継がれるコート上の位置
-    sub.slot = out.slot;
-    sub.spotIdx = out.slot;
-    sub.stintT = 0;
-    sub.cutting = false;
-    sub.screening = false;
-    sub.beatenT = sub.powerT = sub.stalledT = sub.jukeT = sub.comboN = sub.reactT = sub.coolT = sub.landT = 0;
-    out.lean = 0;        // 退く選手はベンチへの歩行のため体を起こす
-    sub.resetFacing();   // コート上の体はヨーを持たない — ベンチでの視線をクリア
-    sub.stand();         // ベンチから立ち上がって走り込む
-    this.players[i] = sub;
-    const seat = benchSeat(this, out);
-    this.subWalkers.push({ p: sub, tx: cx, tz: cz });     // 自席から走って入る
-    this.subWalkers.push({ p: out, tx: seat.x, tz: seat.z }); // 自席へ歩いて退く
-    this.subsMade++;
-    this.subEvents.push({
-      inNum: sub.idx + 1, inName: sub.name,
-      outNum: out.idx + 1, outName: out.name,
-      team: out.team, ttl: 1.8,
-    });
-    // コート上のユニットが変わった → 選択順(自動ユーセージ)を再導出し、入る選手が
-    // 能力順の序列に収まるようにする
-    refreshChoiceRanks(this, out.team);
-  }
-
-  /** 得点したチームのベンチ歓声を開始する。`amp`(0..1)で大きさを調整 —
-   *  ダンクやスリーはベンチ全員を立たせて跳ねさせる。 */
-
-  // 入れ替え本体: プレーは凍結、各歩行者が目的地へ移動し、交代チップは画面に残り、
-  // 全員が(安全タイムアウト付きで)配置に着いたら保留中の再開が走る。
-  private updateSubs(dt: number): void {
-    this.subT += dt;
-    // 注: ここで交代チップは保持されない — 通常どおり経過する(update() のフィード
-    // ループが HOME→AWAY の順で走る)。プレー再開は全チップが消えてから(下の再開
-    // ゲート参照)なので、ライブプレー中にチップが残ることはない。
-    this.ball.pos.y = Math.max(0.12, this.ball.pos.y - 3 * dt);   // 床へ落ち着く
-
-    const timedOut = this.subT >= 9;   // 安全上限: 歩行/フィードで試合を止めない
-    let done = true;
-    for (const w of this.subWalkers) {
-      if (!timedOut && dist2DTo(w.p.pos, w.tx, w.tz) > 0.25) {
-        done = false;
-        // 単純なジョグ、accelSpeed ではない: 退場者はもう `players` にいないため
-        // 実測 curSpd が更新されず、accelSpeed だと ~0 で固まる — 両歩行者が
-        // 同じ一定ペースで一緒に動く
-        const jog = w.p.runSpeed * 0.85 * (1 - w.p.fatigue * 0.2);
-        moveToward2D(w.p.pos, w.tx, w.tz, jog * dt);
-        // 向かう先を向く(でないとベンチへ後ろ向きに走る)。脚/腕のサイクルを回して
-        // 硬直したまま滑らないようにする
-        w.p.faceToward(w.tx, w.tz);
-        w.p.twistToward(w.tx, w.tz, dt);   // プレーで残ったツイストをほどく
-        w.p.curSpd = jog;
-        w.p.updateLegs(dt);
-        w.p.runArms();
-      } else {
-        w.p.pos.set(w.tx, 0, w.tz);
-      }
-    }
-    // 入る選手と出る選手が同じ線上で位置を交換 — 歩く体を押し離し、
-    // すり抜けずに互いを(そして立っている誰かを)避けて流れるようにする
-    const MIN = 0.62;
-    const bodies = new Set<Player>(this.players);
-    for (const w of this.subWalkers) bodies.add(w.p);
-    const all = [...bodies];
-    for (let i = 0; i < all.length; i++) {
-      for (let j = i + 1; j < all.length; j++) {
-        const a = all[i], b = all[j];
-        let dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
-        let d = Math.hypot(dx, dz);
-        if (d >= MIN) continue;
-        if (d < 1e-4) { dx = rand(-1, 1); dz = rand(-1, 1); d = Math.hypot(dx, dz) || 1; }
-        const push = (MIN - d) / 2;
-        const nx = dx / d, nz = dz / d;
-        a.pos.x -= nx * push; a.pos.z -= nz * push;
-        b.pos.x += nx * push; b.pos.z += nz * push;
-      }
-    }
-    for (const w of this.subWalkers) w.p.sync(); // 退場者は `players` を離れた — ここで sync
-    // 再開は歩行者が配置に着き、かつ交代フィード(HOME→AWAY)が完全に流れ切って
-    // 消えてから — アウェイのチップがボールがライブになる前に消え、再開へ残らない
-    // ようにする。timedOut はハード上限。
-    if ((done && this.subEvents.length === 0) || timedOut) {
-      for (const w of this.subWalkers) {
-        w.p.pos.set(w.tx, 0, w.tz);
-        // 不変条件: ベンチのヨーを持ったままコート上に立つ者はいない — 歩行フェーズが
-        // 選手をライブプレーへ戻す時に必ず強制する
-        if (this.onCourt(w.p)) w.p.resetFacing();
-        else w.p.sit();   // ベンチに着いた者は座り直す
-        w.p.sync();
-      }
-      this.subWalkers = [];
-      const next = this.subNext;
-      this.subNext = null;
-      if (next) next();
-    }
   }
 
   // ---- ヘルパ ------------------------------------------------------------
@@ -698,7 +579,7 @@ export class Game {
       case "tipoff": this.tipoff.update(dt); break;
       case "freethrow": this.ft.update(dt); break;
       case "pause": this.updatePause(dt); break;
-      case "subs": this.updateSubs(dt); break;
+      case "subs": updateSubs(this, dt); break;
       case "finale": updateFinale(this, dt); break;
     }
 
@@ -765,70 +646,6 @@ export class Game {
   // リズム — どれだけ頻繁に手元にあるか — は D精度。
   ballInHand(h: Player): boolean {
     return Math.abs(Math.cos(Math.PI * h.dribblePhase)) > 0.5;
-  }
-
-  // 明らかに上位の得点オプションで、オープンで、そこそこ安全なパスで届く味方 —
-  // 「エースへ回す」読み。
-  // 2人以上の守備者が 2.0m 以内に寄る — 本物のダブルチーム。トラップされた選手へ
-  // 出すのは、攻撃側が逃れようとしているトラップを再開するだけ。
-  doubleTeamed(p: Player): boolean {
-    let n = 0;
-    for (const d of this.teamPlayers(1 - p.team)) if (dist2D(d.pos, p.pos) < 2.0) { if (++n >= 2) return true; }
-    return false;
-  }
-
-  // 本物のタイトなトラップ(2守備者が密着、≤1.7m) — doubleTeamed() の 2.0m
-  // 「ここへ出すな」ヒューリスティックよりずっと厳格。後者は密集したハーフコートでは
-  // 単なる混雑(オンボールの選手+ヘルプ守備者)。トラップ救済を発動するために使い、
-  // サポート役が本物のトラップの時だけハンドラーを助ける — ヘルパーが近づく度では
-  // ない(それだとフロアのスペーシングが壊れる)。
-  tightlyTrapped(p: Player): boolean {
-    let n = 0;
-    for (const d of this.teamPlayers(1 - p.team)) if (dist2D(d.pos, p.pos) < 1.7) { if (++n >= 2) return true; }
-    return false;
-  }
-
-  // トラップ救済 — スペーシングを崩してトラップされたボールハンドラーに安全で近い
-  // 逃がし所を与える唯一の味方。自身がトラップされていない最良の近くのプレイメーカー
-  // が選ばれるので、(ポストのビッグでなく)ガードが助けに落ちてくる。
-  // 毎フレーム再計算。位置が保たれる間は安定。該当者がいなければ null。
-  trapReliever(team: number): Player | null {
-    const h = this.handler;
-    if (!h) return null;
-    let best: Player | null = null, bestScore = -Infinity;
-    for (const p of this.teamPlayers(team)) {
-      if (p === h || p.rooted || p.screening) continue;
-      if (this.doubleTeamed(p) || p.trappedT > 0) continue;   // 別のトラップされた選手は送らない
-      const dd = dist2D(p.pos, h.pos);
-      if (dd > 11) continue;                                   // 逃がし所になるには遠すぎる
-      const score = p.playmaking * 2.5 - dd * 0.55;           // 近くのボールハンドラーが理想
-      if (score > bestScore) { bestScore = score; best = p; }
-    }
-    return best;
-  }
-
-  // 救済役がフラッシュする先: 2人のトラッパーから離れた側のオープンな床、
-  // ハンドラーから短く安全なパス、受けやすい角度のため中央寄りに寄せる —
-  // そしてフロントコート/インバウンズ内に保つ。
-  trapReliefSpot(h: Player): Vector3 {
-    const opps = this.teamPlayers(1 - h.team)
-      .map((d) => ({ d, dd: dist2D(d.pos, h.pos) }))
-      .sort((a, b) => a.dd - b.dd).slice(0, 2);
-    let tx = 0, tz = 0;
-    for (const o of opps) { tx += o.d.pos.x - h.pos.x; tz += o.d.pos.z - h.pos.z; }
-    const tl = Math.hypot(tx, tz) || 1;
-    tx /= tl; tz /= tl;                                        // 単位ベクトル: ハンドラー→トラップの重心
-    const reach = 4.3;
-    let sx = h.pos.x - tx * reach;
-    let sz = h.pos.z - tz * reach;
-    sx += (0 - sx) * 0.18;                                     // 中央寄りにバイアス
-    sx = clamp(sx, -(COURT.halfW - 1), COURT.halfW - 1);
-    sz = clamp(sz, -(COURT.halfL - 1), COURT.halfL - 1);
-    if (this.frontT) {                                        // ハーフウェイを越えて下がらない
-      const s = this.attackSign(h.team);
-      if (sz * s < 1.0) sz = 1.0 * s;
-    }
-    return new Vector3(sx, 0, sz);
   }
 
   // 現在のボールハンドラーに割り当てられた守備者(番号でのマンツーマン)。

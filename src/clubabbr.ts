@@ -1,9 +1,9 @@
-// 3-letter scoreboard codes, one per club (keyed by the exact club name in
-// clubdb). Shown on the score bug in place of BLAZE / WAVE once a club is picked.
-// Codes follow the club's common Latin abbreviation where one exists; where two
-// clubs would collide only across DIFFERENT leagues (never both on-screen at
-// once) the duplicate is tolerated, but same-league codes are kept distinct.
-// Any code can be tweaked here without touching the rest of the app.
+// 3文字のスコアボード用コード。1クラブに1つ（clubdb の正確なクラブ名をキーとする）。
+// クラブが選ばれると、スコア表示の BLAZE / WAVE の代わりに表示される。
+// コードは、存在すればそのクラブの一般的なラテン文字の略称に従う。2クラブの衝突が
+// 異なるリーグ間だけ（両者が同時に画面に出ることはない）の場合は重複を許容するが、
+// 同一リーグ内のコードは区別する。
+// 各コードはアプリの他部分に触れずここで調整できる。
 export const CLUB_ABBR: Record<string, string> = {
   // ---- イングランド ----
   "アーセナル": "ARS",

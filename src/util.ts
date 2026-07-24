@@ -5,7 +5,7 @@ export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 export const rand = (a: number, b: number) => a + Math.random() * (b - a);
 export const chance = (p: number) => Math.random() < p;
 
-/** Horizontal (XZ-plane) distance between two points. */
+/** 2点間の水平（XZ平面）距離。 */
 export function dist2D(a: Vector3, b: Vector3): number {
   const dx = a.x - b.x;
   const dz = a.z - b.z;
@@ -16,7 +16,7 @@ export function dist2DTo(a: Vector3, x: number, z: number): number {
   return Math.hypot(a.x - x, a.z - z);
 }
 
-/** Move `cur` toward `(tx,tz)` by at most `maxStep`, in the XZ plane. Mutates cur. */
+/** `cur` を `(tx,tz)` へ、XZ平面上で最大 `maxStep` だけ動かす。cur を変更する。 */
 export function moveToward2D(cur: Vector3, tx: number, tz: number, maxStep: number): void {
   const dx = tx - cur.x;
   const dz = tz - cur.z;
@@ -30,9 +30,9 @@ export function moveToward2D(cur: Vector3, tx: number, tz: number, maxStep: numb
   cur.z += (dz / d) * maxStep;
 }
 
-// Procedural face look per roster slot — SHARED by the HUD face icon (2D canvas)
-// and the 3D player head, so the on-court player matches his icon. Seeded by the
-// roster index so it's deterministic and identical on both sides.
+// ロスタースロットごとの手続き的な顔の見た目 — HUDの顔アイコン（2Dキャンバス）と
+// 3D選手の頭で共有し、コート上の選手がアイコンと一致するようにする。ロスターインデックス
+// をシードにするため決定的で、両者で同一になる。
 const SKIN_HEX = ["#f7ddbe", "#f2cfa8", "#e6b48c", "#cf9a6a", "#b7824e", "#a9713f", "#8a5a2b", "#5e3a1e"];
 const HAIR_HEX = ["#0e0e0e", "#20140a", "#3a2413", "#5a3a1c", "#7a5230", "#111820", "#4a4a4a", "#9a9a9a",
                   "#9a4a1e", "#c9a24b", "#e0c98a"];   // 黒〜茶〜白髪(グレー)〜赤毛〜金〜プラチナ
@@ -46,9 +46,9 @@ export type PlayerLook = {
   skin: { r: number; g: number; b: number }; hair: { r: number; g: number; b: number };
   style: number;
 };
-// FNV-1a hash of a string → a stable 32-bit seed. The look is keyed by the
-// PLAYER'S NAME (their data), not their roster slot — so the same player always
-// looks the same and different players differ, regardless of team or lineup order.
+// 文字列のFNV-1aハッシュ → 安定した32bitシード。見た目は選手のロスタースロットではなく
+// 選手の名前（その選手のデータ）をキーにする — そのため同じ選手は常に同じ見た目になり、
+// 別の選手は別の見た目になる。チームやラインナップの並び順に依存しない。
 function hashName(s: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -58,8 +58,8 @@ function hashName(s: string): number {
   return h >>> 0;
 }
 
-// Hand-picked hairstyles for well-known players (roughly matching their real
-// look); everyone else gets a deterministic-random style from their name hash.
+// 有名選手向けに手選びした髪型（実際の見た目におおむね合わせる）。それ以外は
+// 名前ハッシュから決定的ランダムな髪型を割り当てる。
 // Style key: 0短髪 1丸刈り 2アフロ 3フラットトップ 4ヘッドバンド 5ロング(サイド長め)
 //            6前髪上げ(生え際後退) 7モヒカン 8マンバン 9センター分け(前髪おろし) 10ロング(肩まで)
 //            11くせ毛長髪 12ドレッド。名は playerdb と完全一致が必要。
@@ -96,14 +96,14 @@ const HAIR_STYLE_OVERRIDE: Record<string, number> = {
   "バロテッリ": 7,
 };
 
-// Relative frequency of each hairstyle among RANDOM (non-overridden) players.
-// Most are equal (1.0); the "extreme" looks are rarer so they don't dominate —
-// mohawk especially (it was landing on too many players). Index = style number.
+// ランダム（オーバーライドされない）選手の間での各髪型の相対頻度。
+// 大半は同じ(1.0)。“極端な”見た目は多くなりすぎないよう稀にする —
+// 特にモヒカン(多くの選手に付きすぎていた)。インデックス = 髪型番号。
 //        0    1    2    3    4    5    6     7(モヒカン) 8(マンバン) 9    10   11(くせ毛) 12(ドレッド)
 const STYLE_WEIGHT = [1, 1, 1, 1, 1, 1, 1, 0.15, 0.55, 1, 1, 0.8, 0.4];
 
-// Deterministic weighted pick from a hash (stable per player, unlike weightedPick
-// which uses Math.random). Maps the hash to [0,total) and walks the cumulative sum.
+// ハッシュからの決定的な重み付き抽選（Math.randomを使うweightedPickと違い、選手ごとに
+// 安定）。ハッシュを[0,total)へ写し、累積和をたどる。
 function pickWeightedStyle(h: number): number {
   let total = 0;
   for (const w of STYLE_WEIGHT) total += w;
@@ -115,22 +115,22 @@ function pickWeightedStyle(h: number): number {
   return STYLE_WEIGHT.length - 1;
 }
 
-// Per-player hair-COLOUR overrides (name → hex); everyone else derives colour
-// from the name hash. Keep the name identical to playerdb.
+// 選手ごとの髪の色オーバーライド(名前 → hex)。それ以外は名前ハッシュから色を導出する。
+// 名前は playerdb と完全一致させること。
 const HAIR_COLOR_OVERRIDE: Record<string, string> = {
-  "マルセロ": "#0e0e0e",                    // black dreads
+  "マルセロ": "#0e0e0e",                    // 黒髪のドレッド
   "クリスティアーノ・ロナウド": "#0e0e0e",  // 黒髪(金髪ではなく)
 };
 
 export function playerLook(name: string): PlayerLook {
   const h = hashName(name);
   const skinHex = SKIN_HEX[h % SKIN_HEX.length];
-  const hairHex = HAIR_COLOR_OVERRIDE[name] ?? HAIR_HEX[(h >>> 3) % HAIR_HEX.length];   // unsigned shift (>> could go negative → undefined)
-  const style = HAIR_STYLE_OVERRIDE[name] ?? pickWeightedStyle(h);   // famous → fitting; others → weighted-random
+  const hairHex = HAIR_COLOR_OVERRIDE[name] ?? HAIR_HEX[(h >>> 3) % HAIR_HEX.length];   // 符号なしシフト(>>だと負になり得る → undefined)
+  const style = HAIR_STYLE_OVERRIDE[name] ?? pickWeightedStyle(h);   // 有名選手 → 似合うもの / それ以外 → 重み付きランダム
   return { skinHex, hairHex, skin: hexRGB(skinHex), hair: hexRGB(hairHex), style };
 }
 
-/** Pick a weighted-random index from a list of weights (all >= 0). */
+/** 重みリスト(すべて >= 0)から重み付きランダムなインデックスを選ぶ。 */
 export function weightedPick(weights: number[]): number {
   let total = 0;
   for (const w of weights) total += w;

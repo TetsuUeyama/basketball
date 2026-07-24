@@ -1,20 +1,20 @@
-// Per-club "flag" designs, hand-authored to resemble each club's traditional
-// colours + pattern (NOT the uniform kit breakdown). Rendered procedurally as a
-// CSS gradient — no image assets. Keyed by the exact club name in clubdb.
+// クラブ別の「フラッグ」デザイン。各クラブの伝統的なカラー＋パターンに似せて手作業で
+// 作成（ユニフォームのキット構成とは別物）。CSS グラデーションとして手続き的に描画し、
+// 画像アセットは使わない。clubdb の正確なクラブ名をキーとする。
 //
-// Each value is [pattern, ...hexColours]:
-//   "."  solid (colour[0])
-//   "v"  vertical stripes / left-right split (even bands, N colours)
-//   "h"  horizontal bands (even, N colours)
-//   "s"  horizontal centre sash: base[0] with a middle band[1]
-//   "b"  vertical centre band: base[0] sides with a middle band[1]
-//   "d"  diagonal sash: base[0] with a diagonal band[1]
-//   "dh" diagonal halves: colour[0] / colour[1] split corner-to-corner
-//   "q"  quartered: 2×2 alternating colour[0]/colour[1]
-//   "o"  hoops: repeating horizontal band[0]/band[1]
-//   "c"  cross: a vertical+horizontal band[1] over base[0]
-// Patterns/colours are deliberately spread so same-coloured clubs don't all look
-// alike. Any design can be corrected here without touching the rest of the app.
+// 各値は [pattern, ...hexColours]:
+//   "."  単色（colour[0]）
+//   "v"  縦縞 / 左右分割（均等な帯、N色）
+//   "h"  横帯（均等、N色）
+//   "s"  中央の横サッシュ: base[0] に中央の帯[1]
+//   "b"  中央の縦帯: base[0] を両サイド、中央に帯[1]
+//   "d"  斜めサッシュ: base[0] に斜めの帯[1]
+//   "dh" 斜め二分割: colour[0] / colour[1] を対角で分割
+//   "q"  4分割: 2×2 で colour[0]/colour[1] を交互
+//   "o"  フープ（横輪）: 横帯[0]/帯[1] の繰り返し
+//   "c"  クロス: base[0] の上に縦＋横の帯[1]
+// パターン/カラーは意図的に散らし、同系色のクラブが皆同じに見えないようにしている。
+// 各デザインはアプリの他部分に触れずここで修正できる。
 export const CLUB_FLAGS: Record<string, string[]> = {
   // ---- イングランド ----
   "アーセナル": ["s", "e01414", "f2f2f2"],

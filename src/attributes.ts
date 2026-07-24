@@ -3,9 +3,9 @@ import { PLAYER_DB, DbPlayer } from "./playerdb";
 import { CLUBS } from "./clubdb";
 
 // ---------------------------------------------------------------------------
-// Player attributes. All ratings are 0..100. The 25-item schema follows the
-// user's spec (see workPlan.md): every rating below is wired into game.ts.
-// Height lives on PlayerDef (metres), not here.
+// 選手の能力値。すべての能力値は 0..100。25項目のスキーマはユーザーの仕様に従う
+// (workPlan.md 参照): 以下の各能力値は game.ts に配線されている。
+// 身長は PlayerDef 側(メートル)にあり、ここにはない。
 // ---------------------------------------------------------------------------
 export interface Attributes {
   offense: number;      // オフェンス — オフェンス時の判断・反応の速さ・視野の広さ
@@ -35,8 +35,8 @@ export interface Attributes {
   teamwork: number;     // 連携 — チーム戦術の遂行度
 }
 
-// Column metadata for the roster editor: short label + full explanation.
-// Order here = column order in the pre-game editor.
+// ロスターエディタ用の列メタデータ: 短いラベル + 詳しい説明。
+// ここでの順序 = 試合前エディタの列順。
 export const ATTR_META: { key: keyof Attributes; label: string; name: string; tip: string }[] = [
   { key: "offense", label: "OFF", name: "オフェンス",
     tip: "オフェンス時の判断・反応の速さ・視野の広さ。高いほど次の行動の判断が速く、良いパスコース／空いた味方を見つけやすい。" },
@@ -91,8 +91,8 @@ export const ATTR_META: { key: keyof Attributes; label: string; name: string; ti
 ];
 
 // ---------------------------------------------------------------------------
-// Special abilities (特殊能力) — boolean per player. Each one biases a specific
-// behaviour in game.ts; a player either has it or doesn't.
+// 特殊能力 — 選手ごとの真偽値。それぞれが game.ts の特定の挙動にバイアスをかける。
+// 選手はそれを持っているか持っていないかのどちらか。
 // ---------------------------------------------------------------------------
 export type AbilityKey =
   | "driver" | "keepDribble" | "positioning" | "leakOut" | "general"
@@ -127,10 +127,10 @@ export const ABILITY_META: { key: AbilityKey; label: string; tip: string }[] = [
 export interface PlayerDef {
   name: string;
   role: string;       // PG / SG / SF / PF / C
-  height: number;     // metres — 身長。リバウンド・ブロック・ゴール下の届く高さに影響
+  height: number;     // メートル — 身長。リバウンド・ブロック・ゴール下の届く高さに影響
   attr: Attributes;
   abilities?: AbilityKey[]; // 特殊能力 — 持っているものだけ列挙
-  priority?: number;  // explicit offensive priority 0..1 (overrides the role/skill default)
+  priority?: number;  // 明示的なオフェンス優先度 0..1 (ロール/スキルのデフォルトを上書き)
   // オフェンスロール: ハンドラー/エース/スポットアップ等。OVR/チーム戦力バーの評価
   // 重みに加え、OFF_ROLE_ACTION 経由で**試合中の攻撃時の挙動**（何をするか＝打つ/
   // 捌く/スポット待ち/ポスト等）と ROLE_BEHAVIOR 経由の仮想特能/優先度/プレイメイキ
@@ -149,41 +149,41 @@ export interface PlayerDef {
 }
 
 // ---------------------------------------------------------------------------
-// Team tactics (0..1 each). These bias every player's individual judgement and
-// the team's defensive positioning. How faithfully an individual follows the
-// plan is his 連携 (teamwork) rating.
+// チーム戦術(各0..1)。これらは各選手の個々の判断とチームの守備ポジショニングに
+// バイアスをかける。個人がその方針にどれだけ忠実に従うかは、その選手の連携
+// (teamwork)能力値による。
 // ---------------------------------------------------------------------------
 export interface Tactics {
   offense: {
-    pace: number;         // low = work the clock, high = shoot early / push
-    threeBias: number;    // preference for three-point shots
-    driveBias: number;    // preference for attacking the rim
-    ballMovement: number; // pass-and-move vs isolation
+    pace: number;         // 低 = クロックを使う, 高 = 早めに打つ / プッシュする
+    threeBias: number;    // 3Pシュートへの志向
+    driveBias: number;    // リムへのアタック志向
+    ballMovement: number; // パス&ムーブ vs アイソレーション
   };
   defense: {
-    pressure: number;     // tight on-ball pressure (closer, gambles more)
-    help: number;         // how much off-ball defenders sag to protect the paint
-    zone: number;         // 0 = always man, 1 = always a half-court zone (2-3/3-2)
-    press: number;        // 0 = never, 1 = full-court press the bring-up every time
-    deny: number;         // 0..1 — late in the shot clock, DENY the shot (crawl in
-                          // on-ball + deny outlets) to force a shot-clock violation.
-                          // Risk: the overplay is beatable → gives up rim finishes.
+    pressure: number;     // オンボールのタイトなプレッシャー(詰める、ギャンブルが多い)
+    help: number;         // オフボールの守備がペイント保護のためどれだけ絞るか
+    zone: number;         // 0 = 常にマン, 1 = 常にハーフコートゾーン (2-3/3-2)
+    press: number;        // 0 = しない, 1 = 毎回ボール運びをフルコートプレスする
+    deny: number;         // 0..1 — ショットクロック終盤にシュートをDENYする(オンボールに
+                          // 這い寄る + アウトレットを封じる)ことでショットクロック違反を強いる。
+                          // リスク: オーバープレイは破られやすい → リムのフィニッシュを許す。
   };
 }
 
-// Indexed by team. Two distinct identities so the tactical effect is visible.
+// チームでインデックスする。戦術の効果が見えるよう、2つの明確に異なる個性。
 export const TACTICS: Tactics[] = [
-  // Team 0 — BLAZE: deliberate, attack inside, conservative help defence; packs
-  // the paint with a 2-3 zone a fair amount, rarely presses
+  // Team 0 — BLAZE: じっくり、内を攻める、保守的なヘルプディフェンス。2-3ゾーンで
+  // ペイントをそれなりに固め、めったにプレスしない
   { offense: { pace: 0.35, threeBias: 0.30, driveBias: 0.65, ballMovement: 0.55 },
     defense: { pressure: 0.40, help: 0.70, zone: 0.35, press: 0.10, deny: 0.25 } },
-  // Team 1 — WAVE: fast pace, three-happy, aggressive; gets up and presses,
-  // mostly man in the half court
+  // Team 1 — WAVE: 速いペース、3P好き、アグレッシブ。詰めてプレスし、
+  // ハーフコートではほぼマン
   { offense: { pace: 0.80, threeBias: 0.75, driveBias: 0.45, ballMovement: 0.65 },
     defense: { pressure: 0.80, help: 0.40, zone: 0.12, press: 0.40, deny: 0.35 } },
 ];
 
-/** Map a 0..100 rating to a 0..1 factor. */
+/** 0..100 の能力値を 0..1 の係数へ写す。 */
 export const rate = (r: number): number => clamp(r, 0, 100) / 100;
 
 // ---------------------------------------------------------------------------
@@ -281,10 +281,10 @@ export function scoringPower(a: Attributes): number {
 }
 
 // ---------------------------------------------------------------------------
-// Role-based offensive identity. `scoreBase` is how much of a scoring option the
-// position usually is (the go-to scorers are the wings/2-guard); `playmaking` is
-// how much the position brings the ball up and sets others up (the point guard).
-// A player's individual ratings then nudge these per person.
+// ポジションに基づくオフェンスの個性。`scoreBase` はそのポジションが通常どれだけ
+// 得点オプションかを表す(頼れるスコアラーはウイング/2ガード)。`playmaking` はその
+// ポジションがどれだけボールを運び味方をお膳立てするか(ポイントガード)。
+// この後、選手個々の能力値が人ごとにこれらを微調整する。
 // ---------------------------------------------------------------------------
 const ROLE_OFFENSE: Record<string, { scoreBase: number; playmaking: number }> = {
   PG: { scoreBase: 0.55, playmaking: 1.00 },
@@ -297,24 +297,24 @@ export function roleOffense(role: string): { scoreBase: number; playmaking: numb
   return ROLE_OFFENSE[role] ?? { scoreBase: 0.6, playmaking: 0.4 };
 }
 
-// A player's scoring-option weight (0..1). An explicit `priority` on the def
-// wins (so it can be set in the pre-game editor); otherwise it's derived from
-// the position baseline nudged by the player's scoring ratings.
+// 選手の得点オプションとしての重み(0..1)。def 上の明示的な `priority` が優先される
+// (試合前エディタで設定できるように)。それ以外はポジションのベースラインを選手の
+// 得点能力値で微調整して導出する。
 export function computeOffPriority(def: PlayerDef): number {
-  // an explicit choice rank (1..5) is the strongest signal — it IS the usage
-  // the user (or the auto-ranker) set. game.ts re-derives this per on-court unit
-  // in refreshChoiceRanks; this covers the standalone/preview case.
+  // 明示的な選択順位(1..5)が最も強いシグナル — それこそがユーザー(または自動ランカー)が
+  // 設定した使用率そのもの。game.ts は refreshChoiceRanks でコート上のユニットごとに
+  // これを再導出する。ここは単独/プレビューのケースをカバーする。
   if (def.choiceRank) return usageFromRank(def.choiceRank);
   if (def.priority !== undefined) return clamp(def.priority, 0, 1);
   const ro = roleOffense(def.role);
   const a = def.attr;
   const scoringSkill = (rate(a.aggression) + rate(a.threeAcc) + rate(a.midAcc)) / 3;
   let base = ro.scoreBase * 0.65 + scoringSkill * 0.35;
-  if (def.abilities?.includes("striker")) base += 0.12;  // ストライカー: the go-to guy
+  if (def.abilities?.includes("striker")) base += 0.12;  // ストライカー: 頼れる中心選手
   return clamp(base, 0, 1);
 }
 
-// Shorthand to keep the roster table readable — args follow ATTR_META order.
+// ロスターテーブルを読みやすく保つための短縮関数 — 引数は ATTR_META の順に従う。
 const A = (
   offense: number, defense: number, balance: number, stamina: number,
   speed: number, accel: number, reaction: number, agility: number,
@@ -333,14 +333,14 @@ const MIN = A(10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10
 const MAX = A(99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99);
 
 // ---------------------------------------------------------------------------
-// Random matchup from the imported WE2010 player database: every game draws a
-// fresh 13-man roster per team (no player appears twice in the same game).
-// The existing PlayerDef objects are mutated in place — Player.attr holds a
-// live reference to def.attr, so per-field assignment updates entities too.
+// インポートした WE2010 選手データベースからのランダムなマッチアップ: 毎試合、チーム
+// ごとに新しい13人ロスターを引く(同じ試合に同じ選手が二度出ることはない)。
+// 既存の PlayerDef オブジェクトはその場で書き換える — Player.attr は def.attr への
+// ライブ参照を保持するので、フィールドごとの代入でエンティティも更新される。
 // ---------------------------------------------------------------------------
-// Build a fresh, standalone PlayerDef from a database entry (its own natural
-// position, height, ratings, abilities, hand). Used by the pre-game player
-// picker to preview any of the 4000+ players without touching a roster slot.
+// データベースのエントリから、新しい独立した PlayerDef を構築する(その選手本来の
+// ポジション、身長、能力値、特殊能力、利き手)。試合前の選手ピッカーが、ロスタースロットに
+// 触れずに4000人超の任意の選手をプレビューするのに使う。
 export function makeDefFromDb(p: DbPlayer): PlayerDef {
   const [name, role, hcm, ratings, mask, extras, hand] = p;
   const attr = {} as Attributes;
@@ -353,9 +353,9 @@ export function makeDefFromDb(p: DbPlayer): PlayerDef {
   };
 }
 
-// Copy a database entry INTO an existing roster slot, in place. Per-field attr
-// assignment is deliberate: Player.attr holds a live reference to def.attr, so
-// mutating fields (not replacing the object) updates the on-court entity too.
+// データベースのエントリを既存のロスタースロットへ、その場でコピーする。フィールド
+// ごとの attr 代入は意図的: Player.attr は def.attr へのライブ参照を保持するので、
+// オブジェクトを差し替えるのではなくフィールドを書き換えるとコート上のエンティティも更新される。
 export function applyDbPlayer(def: PlayerDef, p: DbPlayer): void {
   const src = makeDefFromDb(p);
   def.name = src.name;
@@ -368,14 +368,13 @@ export function applyDbPlayer(def: PlayerDef, p: DbPlayer): void {
   def.future = src.future;
 }
 
-// Draw a fresh 13-man roster for ONE team from the database, avoiding anyone
-// already on the OTHER team so the two line-ups never share a player.
+// データベースから1チーム分の新しい13人ロスターを引く。相手チームにすでにいる選手を
+// 避けることで、2つのラインナップが選手を共有することはない。
 export function randomizeTeam(team: number): void {
   const pools: Record<string, DbPlayer[]> = { PG: [], SG: [], SF: [], PF: [], C: [] };
   for (const p of PLAYER_DB) pools[p[1]]?.push(p);
   const used = new Set<DbPlayer>();
-  // reserve the other team's current players (matched by name) so we never
-  // duplicate them into this team
+  // 相手チームの現在の選手(名前で照合)を予約しておき、このチームへ重複させないようにする
   const otherNames = new Set(ROSTER[1 - team].map((p) => p.name));
   for (const p of PLAYER_DB) if (otherNames.has(p[0])) used.add(p);
   const draw = (role: string): DbPlayer => {
@@ -391,21 +390,21 @@ export function randomizeTeam(team: number): void {
   const roles = ["PG", "SG", "SF", "PF", "C", ...BENCH_ROLES];
   for (let i = 0; i < ROSTER_SIZE; i++) {
     applyDbPlayer(ROSTER[team][i], draw(roles[i]));
-    ROSTER[team][i].role = roles[i];   // pin to the slot's position (a fallback draw may differ)
+    ROSTER[team][i].role = roles[i];   // スロットのポジションに固定(フォールバック抽選だと異なり得る)
   }
 }
 
 export function randomizeRosters(): void {
   randomizeTeam(0);
-  randomizeTeam(1);   // team 1 avoids team 0's fresh draw → no shared players
+  randomizeTeam(1);   // team 1 は team 0 の新規抽選を避ける → 共有選手なし
 }
 
-// ---- club reproduction ----------------------------------------------------
-// Build ONE team's 13-man roster from a REAL club's squad (clubdb, extracted
-// from the same master-league sheet). Each slot takes the best remaining squad
-// member whose converted role matches; a role the squad lacks falls back to
-// the NEAREST basketball position (PF↔C, SG↔SF …) — e.g. a club with no
-// converted PF plays a second CB there, like a twin-towers line-up.
+// ---- クラブ再現 ------------------------------------------------------------
+// 実在クラブのスカッド(clubdb。同じマスターリーグのシートから抽出)から1チーム分の
+// 13人ロスターを構築する。各スロットには、変換後のロールが一致する残りのスカッド
+// メンバーの中で最良の者を入れる。スカッドに欠けるロールは最も近いバスケの
+// ポジション(PF↔C, SG↔SF …)へフォールバックする — 例えば変換後のPFがいないクラブは
+// そこに2人目のCBを置く。ツインタワーのラインナップのように。
 const ROLE_FALLBACK: Record<string, string[]> = {
   PG: ["SG", "SF", "PF", "C"],
   SG: ["SF", "PG", "PF", "C"],
@@ -413,10 +412,10 @@ const ROLE_FALLBACK: Record<string, string[]> = {
   PF: ["C", "SF", "SG", "PG"],
   C:  ["PF", "SF", "SG", "PG"],
 };
-// What each basketball slot VALUES (indices into the 25-rating array, ATTR_META
-// order). A flat 25-average buries a spiky star under a do-everything role
-// player (メッシ losing the SG spot to ダニエウ・アウベス), so the slot value is
-// half overall, half the slot's key attributes.
+// 各バスケスロットが重視するもの(25能力値配列へのインデックス、ATTR_META順)。
+// 単純な25項目平均だと、尖ったスターが何でもこなすロールプレイヤーに埋もれてしまう
+// (メッシがSGの座をダニエウ・アウベスに奪われる)ので、スロット値は半分が総合、
+// 半分がそのスロットの主要能力値。
 const ROLE_KEY_ATTRS: Record<string, number[]> = {
   PG: [10, 11, 0, 21, 7],        // P精度 P速度 オフェンス 技術 敏捷性
   SG: [14, 12, 0, 4, 7, 21],     // S精度 L精度 オフェンス 速度 敏捷性 技術
@@ -454,23 +453,23 @@ export function clubTeam(team: number, clubIdx: number): void {
   const roles = ["PG", "SG", "SF", "PF", "C", ...BENCH_ROLES];
   for (let i = 0; i < ROSTER_SIZE; i++) {
     applyDbPlayer(ROSTER[team][i], pick(roles[i]));
-    ROSTER[team][i].role = roles[i];   // he plays the slot's position
+    ROSTER[team][i].role = roles[i];   // その選手はスロットのポジションでプレーする
   }
 }
 
-// NBA-style 13-man roster indexed [team][idx]: idx 0..4 = starters
-// (PG, SG, SF, PF, C), idx 5..12 = the 8-man bench (a full second unit
-// PG/SG/SF/PF/C plus a third guard, wing and big).
-// NOTE: test setup — RED (BLAZE) is every attribute at the floor, BLUE (WAVE)
-// at the ceiling, so the effect of attributes is obvious. Re-tune for a real game.
+// [team][idx] でインデックスするNBA式の13人ロスター: idx 0..4 = 先発
+// (PG, SG, SF, PF, C)、idx 5..12 = 8人のベンチ(完全なセカンドユニット
+// PG/SG/SF/PF/C に加えて3人目のガード、ウイング、ビッグ)。
+// NOTE: テスト設定 — RED (BLAZE) は全能力値が下限、BLUE (WAVE) が上限なので、
+// 能力値の効果が明白になる。実際のゲーム向けには再調整すること。
 export const STARTERS = 5;
 export const ROSTER_SIZE = 13;
 
-// Players who are eligible at MORE than their listed position. Key = name (must
-// match playerdb exactly). Value = ADDITIONAL positions beyond their own role.
-// Everyone else can play ONLY their own role — a player is NEVER put in a
-// position that isn't in his eligible set (no adjacency, no ability substitution).
-// Add an entry here to make a player multi-position (e.g. a SF who also plays SG).
+// 記載ポジション以外でも起用可能な選手。キー = 名前(playerdb と完全一致が必要)。
+// 値 = 自分のロールに加えて起用できる追加ポジション。
+// それ以外の全員は自分のロールでのみプレーできる — 選手は自分の適性セットにない
+// ポジションには決して置かれない(隣接ポジション不可、特能による代替も不可)。
+// 選手をマルチポジションにするにはここにエントリを追加する(例: SGもこなすSF)。
 export const EXTRA_POSITIONS: Record<string, string[]> = {
   "クリスティアーノ・ロナウド": ["SG"],   // SF に加えて SG も可
 };
@@ -480,7 +479,7 @@ const mk = (name: string, role: string, height: number, attr: Attributes): Playe
   ({ name, role, height, attr });
 
 export const ROSTER: PlayerDef[][] = [
-  [ // Team 0 — BLAZE (RED) — minimum everything
+  [ // Team 0 — BLAZE (RED) — すべて最小値
     mk("Vega",  "PG", 1.85, { ...MIN }),
     mk("Knox",  "SG", 1.85, { ...MIN }),
     mk("Reed",  "SF", 1.85, { ...MIN }),
@@ -489,7 +488,7 @@ export const ROSTER: PlayerDef[][] = [
     ...["Cole", "Duke", "Finn", "Gray", "Hale", "Iker", "Judd", "Kane"]
       .map((n, i) => mk(n, BENCH_ROLES[i], 1.85, { ...MIN })),
   ],
-  [ // Team 1 — WAVE (BLUE) — maximum everything
+  [ // Team 1 — WAVE (BLUE) — すべて最大値
     mk("Ito",    "PG", 2.10, { ...MAX }),
     mk("Lang",   "SG", 2.10, { ...MAX }),
     mk("Cruz",   "SF", 2.10, { ...MAX }),
