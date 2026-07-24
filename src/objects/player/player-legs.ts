@@ -20,6 +20,9 @@ declare module "./player" {
   }
 }
 
+/** `height` メートルの、`dur` 秒続くジャンプを開始する。任意の (leapX,leapZ) は
+ *  飛行全体に分散する水平の踏み込み — 正面にないシュートへの斜めのジャンプ
+ *  （高さは低いが、ブロックするために横へ届く）。 */
 Player.prototype.jump = function(height: number, dur: number, leapX = 0, leapZ = 0): void {
     // 前回の着地からまだバランスを立て直している最中——まだ跳べない
     if (this.landT > 0) return;

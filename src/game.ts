@@ -4,6 +4,8 @@ import { Ball } from "./objects/ball";
 import "./objects/player/player-move";    // Player.prototype に移動/物理/クエリ/状態を注入
 import "./objects/player/player-query";
 import "./objects/player/player-state";
+import "./objects/player/player-visual";
+import "./objects/player/player-roster";
 import "./objects/player/player-arms";    // Player.prototype にアニメを注入
 import "./objects/player/player-facing";
 import "./objects/player/player-legs";

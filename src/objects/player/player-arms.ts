@@ -41,6 +41,7 @@ Player.prototype.bendElbow = function(node: TransformNode, amount: number): void
     }
 };
 
+/** 両腕を脇に垂らし、肘を少し曲げる（既定ポーズ）。 */
 Player.prototype.handsRest = function(): void {
     this.armPivotL.rotationQuaternion = Quaternion.Identity();
     this.armPivotR.rotationQuaternion = Quaternion.Identity();
@@ -50,6 +51,12 @@ Player.prototype.handsRest = function(): void {
     this.bendElbow(this.elbowR, 0.28);
 };
 
+// ボールをハンドリングしていない選手の腕。前へ走るとストライドに合わせて前後に
+// 振る（同じ側の脚と逆位相、肘は曲げたまま） — どんぐりのボディも振るが、
+// 半分ほどの振り幅（ずんぐりしたペンギンの腕）。バックペダル（胸の向きに逆らって
+// 動く — 後退する守備者）ではバランスポーズに切り替わる: 両腕を低く少し前へ出し、
+// 足に合わせてはためく。歩行/静止では休める。poseHands()が全員にこれを呼び、
+// その後でボールの腕を上書きする。
 Player.prototype.runArms = function(): void {
     const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
     if (frac < 0.16) { this.backArms = false; this.handsRest(); return; }
@@ -81,6 +88,8 @@ Player.prototype.runArms = function(): void {
     this.bendElbow(this.elbowR, carry);
 };
 
+/** 右手（または両手）を伸ばして手のひらが `world` — ボール — に合うようにする。
+ *  肘が伸びて手のひらが狙った点に実際に届く。 */
 Player.prototype.reach = function(world: Vector3, both = false): void {
     this.aimArm(this.armPivotR, world);
     this.elbowR.rotation.set(0, 0, 0);
@@ -88,6 +97,10 @@ Player.prototype.reach = function(world: Vector3, both = false): void {
     else { this.armPivotL.rotationQuaternion = Quaternion.Identity(); this.bendElbow(this.elbowL, 0.28); }
 };
 
+/** ディグ(掻き出し): 片手で伸ばし、上半身をボールへ回転させて先行する肩が横切り、
+ *  手がボールへ大きく伸びる。反対の腕はバランスのため後ろへ振れる。守備者が
+ *  はたき出したルーズボールを突くのに使う — 両手でつかむのではなく、
+ *  思い切った踏み込み。 */
 Player.prototype.digReach = function(world: Vector3): void {
     // 胴の可動域でキャップしつつ胸をボールへツイスト——これが先行する肩を
     // 前に出し、手をより遠くへ届かせる
@@ -116,6 +129,10 @@ Player.prototype.digReach = function(world: Vector3): void {
     this.bendElbow(backElbow, 0.5);
 };
 
+/** 両手のホールド: 手のひらがボールを両側から包む — ボールの両側に片手ずつ、
+ *  ボール1個分の幅を空けて — 両腕が同じ点を狙う（手のひらがボール越しに触れる）
+ *  のではなく。キャッチとギャザーに使い、ボールが手の間に収まり腕とともに
+ *  動くようにする。 */
 Player.prototype.holdBallHands = function(world: Vector3, sep = 0.16): void {
     const dx = world.x - this.pos.x, dz = world.z - this.pos.z;
     const l = Math.hypot(dx, dz) || 1;
@@ -150,6 +167,8 @@ Player.prototype.holdBallHands = function(world: Vector3, sep = 0.16): void {
     this.elbowL.rotation.z = inward;
 };
 
+/** ボールがある側と同じ側の手でドリブル/保持する — 左腰へ運んだボールは右腕を
+ *  体を横切って（越えて）伸ばすのではなく左手で持つ、そしてその逆も。 */
 Player.prototype.reachDribble = function(world: Vector3, useRight: boolean, rate = 0): void {
     const near = useRight ? this.armPivotR : this.armPivotL;
     const nearElbow = useRight ? this.elbowR : this.elbowL;
@@ -163,6 +182,8 @@ Player.prototype.reachDribble = function(world: Vector3, useRight: boolean, rate
     this.bendElbow(farElbow, 0.28);
 };
 
+/** 両腕を大きく広げる — 左右のドライブを壁で防ぐアクティブな手。`rate` (rad/s)が
+ *  切り替えをレート制限する。0は即座に切り替える（ベンチ/非守備用途）。 */
 Player.prototype.armsWide = function(rate = 0): void {
     this.armRateCap = rate;
     this.setArmDir(this.armPivotL, -1, -0.35, 0.35);
@@ -172,6 +193,9 @@ Player.prototype.armsWide = function(rate = 0): void {
     this.armRateCap = 0;
 };
 
+/** ストレートドライブを止める: ボールに近い手が前かつ低く出て侵入を壁で防ぎ
+ *  ボールを突く（スティール）、逆の手はスライド中のバランスのため低く外へ構える。
+ *  `rate` が向け直しをレート制限する。 */
 Player.prototype.guardDrive = function(world: Vector3, useRight: boolean, rate = 0): void {
     this.armRateCap = rate;
     const near = useRight ? this.armPivotR : this.armPivotL;
@@ -185,6 +209,9 @@ Player.prototype.guardDrive = function(world: Vector3, useRight: boolean, rate =
     this.armRateCap = 0;
 };
 
+/** パスをディナイする: 片手を斜めに突き出す — ボール側へ外へ、上へ、バスケットへ
+ *  向けて後ろへ角度をつける — レーンを壁で塞ぎ、パスが彼の後ろへ滑り込めない
+ *  ようにする。胸を横切る横方向のスイングは許容する（それでよい）。 */
 Player.prototype.denyLane = function(useRight: boolean, rate = 0): void {
     this.armRateCap = rate;
     const s = useRight ? 1 : -1;
@@ -199,6 +226,8 @@ Player.prototype.denyLane = function(useRight: boolean, rate = 0): void {
     this.armRateCap = 0;
 };
 
+/** 垂直の（ジャンプしない）シュートコンテスト: 両手を垂直にし、床を離れずに
+ *  挑む（空中のコンテストは代わりにボールへ手を伸ばす）。 */
 Player.prototype.handsUp = function(rate = 0): void {
     this.armRateCap = rate;
     this.setArmDir(this.armPivotL, -0.14, 1, 0.06);

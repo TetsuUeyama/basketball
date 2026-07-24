@@ -15,6 +15,12 @@ declare module "./player" {
   }
 }
 
+/**
+ * ベンチに座ってボールを眺める1フレーム: 視線は数秒ごとに漂う個人的な
+ * オフセットとともにボールを追い、数秒ごとに小さなランダムなそわそわが発火する
+ * — 小さなホップ、片手を半分上げる、腕を広げる。自身のジャンプ減算とメッシュ
+ * 同期を処理する（ベンチの選手はコート上の毎フレーム更新を受けない）。
+ */
 Player.prototype.benchIdle = function(dt: number, ballX: number, ballZ: number): void {
     this.benchGazeT -= dt;
     if (this.benchGazeT <= 0) {
@@ -49,6 +55,9 @@ Player.prototype.benchIdle = function(dt: number, ballX: number, ballZ: number):
     this.sync();
 };
 
+/** うなだれ: 腰と脚は直立のまま — 上半身だけが前へかがみ（胴のピッチ）、腕は
+ *  だらりと垂れる。とぼとぼとベンチへ戻る間もこの姿勢を保つ（脚は下で歩き続ける）。
+ *  毎フレーム呼んで保持する。resetTwist()/sit()/resetFacing()が体をまっすぐに戻す。 */
 Player.prototype.dejectedPose = function(): void {
     const Pt = -this.numberSide * 0.42;                    // 胸が前へ傾く
     const cut = Player.ACORN_CUT;
@@ -69,6 +78,9 @@ Player.prototype.dejectedPose = function(): void {
     this.bendElbow(this.elbowR, 0.05);
 };
 
+/** ファウルリアクションを開始する。`pushX/pushZ` は接触が彼を弾いたワールド方向
+ *  （0,0=不明 → 単純に後ろへのけぞる）。`strength` (0..1) がのけぞりの強さ、
+ *  継続時間、よろけになる確率をスケールする。 */
 Player.prototype.foulReaction = function(kind: "hurt" | "and1", pushX = 0, pushZ = 0, strength = 0.5): void {
     this.foulReactKind = kind;
     const s = clamp(strength, 0, 1);
@@ -95,6 +107,8 @@ Player.prototype.foulReaction = function(kind: "hurt" | "and1", pushX = 0, pushZ
     } else { this.foulStaggerX = this.foulStaggerZ = 0; }
 };
 
+/** ファウルリアクションのポーズの1フレーム。runArmsの後に呼ぶ（動いている間は
+ *  腕を占有する）。減算はtickCooldownで行う。 */
 Player.prototype.poseFoulReaction = function(): void {
     if (this.foulReactT <= 0) {
       this.flinchPitch = this.flinchRoll = 0;   // 反応終了（または中断）——立ち直る
@@ -132,6 +146,8 @@ Player.prototype.poseFoulReaction = function(): void {
     }
 };
 
+/** 守備成功の演出を開始する（純粋に見た目のみ）。ファウルリアクションが既に
+ *  動いている場合は無視する（ブロックからのファウルは接触の演出を保つ）。 */
 Player.prototype.defWin = function(kind: "block" | "steal" | "stop"): void {
     if (this.foulReactT > 0) return;
     this.defWinKind = kind;
@@ -141,6 +157,10 @@ Player.prototype.defWin = function(kind: "block" | "steal" | "stop"): void {
     if (kind === "block" && !this.airborne) this.jump(0.14, 0.4);
 };
 
+/** 守備成功のポーズの1フレーム。runArms/poseFoulReactionの後に呼ぶ（動いている間は
+ *  腕+ひるみの傾きを占有する）。減算はtickCooldownで行う。呼び出し側は、選手が
+ *  アクティブなボールの仕事（ハンドリング、シュート、まだ空中、ルーズボールへの
+ *  スクランブル）を持つ間はこれを抑止する。 */
 Player.prototype.poseDefWin = function(): void {
     if (this.defWinT <= 0) return;
     const k = this.defWinDur > 0 ? 1 - this.defWinT / this.defWinDur : 1;

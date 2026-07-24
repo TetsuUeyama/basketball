@@ -9,7 +9,13 @@ import { Game } from "./game";
 import { optimizeLineups } from "./systems/lineups";
 import { Player } from "./objects/player/player";
 import { ROSTER } from "./attributes";
-import { UI } from "./ui";
+import { UI } from "./ui/ui";
+import "./ui/ui-title";
+import "./ui/ui-eval";
+import "./ui/ui-pregame";
+import "./ui/ui-pickers";
+import "./ui/ui-result";
+import "./ui/ui-hud";
 import { TEAM_NAMES, TEAM_COLORS } from "./config";
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;

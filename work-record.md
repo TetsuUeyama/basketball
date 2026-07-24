@@ -4090,3 +4090,68 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - 検証: tsc✓ / vite build✓(15.70s) / headless 40試合 27.3・29.4・29.3(基準28-30内) / **数値定数バイト一致**(旧543ca0a Player全体 vs 新 objects/player 全体: count1129・sum5203.9460 完全一致=逐語移動)。
 - 最終: objects/{ball,court, player/{player,player-move,player-query,player-state,player-arms,player-facing,player-legs,player-react}}。
 - ⚠️ 未コミット(543ca0a の上に 312/313)。
+
+## 2026-07-24 (314) player.ts のフィールド宣言を概念別に区画整理（アクセス不変）
+
+- ユーザー要望「player.ts 内のフィールド宣言の区画整理」。constructor 前の主インスタンスフィールド152個を11区画へ再配置。
+- 区画: 同一性・能力・ロール / ローテーション・出場 / ボックススコア / 位置・速度・加速・疲労 / 硬直・回復タイマー / 攻防の可変状態 / 移動目標ベクトル / ジャンプ / リアクション演出の状態 / 3Dメッシュ・ノード / 見た目マテリアル・背番号・ネームタグ・髪。各区画に `// ═════ タイトル ═════` ヘッダー。
+- 手法: **元の宣言行を再利用して並べ替える**スクリプト(scratchpad/section-fields.cjs)。フィールドの先頭コメント＋末尾継続コメント(4+スペース深インデントの // )も取り込み、完全性チェック(欠落/重複/未分類を検出)。初期化子は全て自己完結(this.参照ゼロ)のため並べ替え安全。
+- **アクセス・コード不変**: フィールド宣言はバイト保存(並べ替えのみ)。数値定数が c8d1edd と完全一致(count590/sum4832.1908)で機械確認。参照側(p.fatigue 等 数百箇所)は一切変更なし。
+- コンストラクタ後に散在する9フィールド(benchGaze×4/tiltX/tiltZ/backArms/lastDt/armRateCap)は周辺の orphan コメントと絡むため今回は据え置き(主ブロックのみ整理)。静的定数(TWIST_MAX 等)も対象外。
+- 検証: tsc✓ / vite build✓(23.21s) / headless 40試合 28.2(基準内) / 数値定数バイト一致。
+- ⚠️ 未コミット(c8d1edd の上に本314)。
+
+## 2026-07-25 (316) player.ts 縮小: 見た目/メッシュ管理メソッドを player-visual.ts へ
+
+- ユーザー要望「player.ts が大きいので分割」。視覚系10メソッドをプロトタイプ拡張 player-visual.ts へ逐語移動。
+  - buildHairMeshes / applyLook / setNumberSide / applyModel / refreshScale / refreshBodyDepth / sync / drawNameTag / applyUniform / setNameTagVisible。
+- プロトタイプ拡張のため、視覚メソッドが触る private を public 化: フィールド25個(humanNode/acornNode/scene/head/footL/R/nameTex/namePlane/topMat/bottomMat/sleeveMat/shoeMat/numHuman±/numAcorn±/sideApplied/headMat/hairMat/hair/hairTilt/hairBun/hairBack/hairDreads/headband) ＋ static定数3個(HIP_Y/SEAT_HIP/ACORN_SPLAY)。既存の anim 拡張と同じ方針(メッシュ内部を拡張ファイルへ開放)。
+- applyDef/getter(rooted/airborne)/jumpY/acornSeatDrop は player.ts 残置。game.ts が player-visual を副作用import。
+- 抽出手法: ブレース深度で各メソッド全域(コメント含む)を切り出し `Player.prototype.X = function(){...}` へ変換＋declare module 型マージするスクリプト(scratchpad/extract-visual.cjs)。
+- 検証: tsc✓ / vite build✓(17.04s) / headless 40試合 28.8(基準内) / **数値定数バイト一致**(c8d1edd の objects/player 全体 count1129・sum5203.9460 と完全一致=逐語移動)。※描画系のため見た目そのものは実機未検証。
+- 行数: player.ts 1318→1000(−318)。player-visual.ts 340新規。
+- 残る最大塊は **constructor(488行、メッシュ構築inline)**。分割するにはフェーズ別メソッド化(ローカル変数の受け渡し要検討)が必要=次段。
+- ⚠️ 未コミット(c8d1edd の上に 314/315/316)。
+
+## 2026-07-25 (318) player.ts 掃除: 移動済みメソッドの「孤立JSDoc」25個を移動先へ戻す
+
+- ユーザー指摘「player.ts に Visual/状態へ入れるべき箇所が多い」を精査 → 実体は**別ファイルへ移動済みメソッドの JSDoc だけが player.ts に取り残されていた**（本体は player-arms/facing/legs/react に移動済み、移動先には JSDoc 無し）。＝抽出すべきコードではなく孤立した死にコメント。
+- 25個の JSDoc を対応メソッド直上へ移動（column0へ de-indent）: jump→player-legs / twistToward・lookToward・faceChestToward・relativeChestAngle・resetTwist・faceToward・faceSmooth・resetFacing→player-facing / benchIdle・dejectedPose・foulReaction・poseFoulReaction・defWin・poseDefWin→player-react / handsRest・runArms・reach・digReach・holdBallHands・reachDribble・armsWide・guardDrive・denyLane・handsUp→player-arms。
+- 手法: 正確な行範囲→(対象ファイル,メソッド名)を明示指定するスクリプト(scratchpad/move-orphan-jsdoc.cjs)。各ブロックがコメントのみか事前検証、`Player.prototype.X=` 直上へ挿入、player.ts側は削除＋連続空行圧縮。
+- 検証: tsc✓ / vite build✓(14.41s) / headless 40試合 29.7(基準内) / **数値定数バイト一致**(c8d1edd 全体と count1129・sum5203.9460=コード不変、コメント移動のみ)。
+- 行数: player.ts 956→856(−100)。constructor以降の残置は幾何/ポーズ定数(static)・getter(rooted/airborne)・jumpY・acornSeatDrop・少数のランタイムfield(benchGaze/tilt/backArms)＝いずれも正当な残置。
+- 補足: 残る唯一の大塊は constructor(~488行)。これ以上「別ファイル化すべきコード」は無い(clsフィールドは抽出不可、既にメソッドは全て用途別ファイルへ)。
+- ⚠️ 未コミット(c8d1edd の上に 314/315/316/317/318)。
+
+## 2026-07-25 (319) 見た目を playerdb に1人ずつ保持化（util.ts から player-look.ts へ分離）
+
+- ユーザー要望「肌色/髪色/髪型を選手DBに1人1人持たせ、呼び出しは objects/player/player-look.ts に」。
+- 事実確認: playerdb.ts は WE2010 Excel から**自動生成・手編集不可・4015人**、元データに見た目列なし。→ 手作業付与も生成側付与も不可。
+- 方針: **現在の見た目（旧 util.playerLook = 名前ハッシュ＋既存オーバーライドの結果）をスクリプトで算出し、各エントリに番号 `[skin,hair,style]` として焼き込み**（見た目を1人も変えずにDB保持へ移行）。
+- 変更:
+  - 新規 `objects/player/player-look.ts`: `PlayerLook`/`LookIdx`型・SKIN/HAIR配色・`resolveLook(番号→見た目)`・`lookIndicesFromName`/`playerLook`(DB外フォールバック＆生成用)。util.ts②を移設。
+  - `playerdb.ts`: DbPlayer を8要素タプル化（look列追加）、4015人へ番号焼き込み(scratchpad/bake-look.cjs)、ヘッダに「再生成後は bake-look で look列を再付与」明記。
+  - `attributes.ts`: PlayerDef に `look?: PlayerLook`。makeDefFromDb が tuple[7]→resolveLook、applyDbPlayer が look コピー。
+  - `player.ts`: look フィールド追加、constructor で `def.look ?? playerLook(name)`、頭マテリアルは this.look 使用。
+  - `player-visual.ts`(applyLook)・`player-roster.ts`(applyDef, 交代時 look更新)・`ui.ts`(HUD顔アイコン `player.look ?? playerLook`)。
+  - `util.ts`: 見た目②(100行)削除。①汎用ヘルパー＋weightedPick は残置(145→45行)。
+- 検証: **見た目不変=全4015人で旧playerLook(name)==resolveLook(焼込番号) 一致0不一致**(scratchpad/verify-look.cjs) / tsc✓ / vite build✓(14.99s) / headless 40試合 30.0(基準内)。※3Dの実描画は headless 対象外だが、色/髪型の解決値が全員一致のため見た目は不変。
+- DB外の初期ダミー(mk製 Vega等)は look 未設定 → playerLook(name) フォールバックで従来通り。
+- ⚠️ 未コミット(c8d1edd の上に 314〜319)。
+
+## 2026-07-25 (320) ui.ts 分割: src/ui/ フォルダへ機能別7ファイル化（プロトタイプ拡張）
+
+- ユーザー要望「ui.tsが大きすぎ、UIフォルダを作り機能毎に分割」。単一クラス UI(約90メソッド, 3566行)を Player と同じプロトタイプ拡張で分割。
+- 段階1(移設+公開化): ui.ts→src/ui/ui.ts。自身のimport ./→../、インライン型import(../objects)修正。トップレベル colorOf/Phase/POP_STATS を export。private を全撤廃(内部UIクラスのためクラス横断アクセス可に)。main.ts の import 更新。tsc✓ build✓。
+- 段階2(抽出): 83メソッドを6ファイルへ逐語移動(scratchpad/split-ui.cjs)。
+  - ui-title(7): タイトル/クラブ対戦ウィザード
+  - ui-eval(22): ロスター評価(ロール/選択順位/OVR/軸/身長の算出・自動割当)
+  - ui-pregame(16): 試合前エディタ/VSボード/ロスターカード/ドラッグ
+  - ui-pickers(13): 各モーダル(ロール/詳細/選手/クラブ/キャリー/選手カード/ヘックス図)
+  - ui-result(12): 結果画面/スタッツ表/チーム比較
+  - ui-hud(13): 試合中HUD(選手バー/顔アイコン/drawFace/スタミナ/スタッツポップ/ボタン)
+  - コア残置(ui.ts 803行): fields/constructor/update/setPhase/applyLayout/panel/ツールチップ基盤。
+- 手法要点: 本体は de-indent せず逐語保存(テンプレートリテラル不変)、シグネチャ行と末尾}のみ変換。body-openは「最後の深さ0の{」で戻り型のinline {} を跨いで頑健特定。デフォルト引数は interface で optional 化(openRolePickerの union文字列型1件は手修正)。noUnusedLocals:false のため広域import共通ヘッダで可。main.tsが6拡張を副作用import(new UI()は全注入後)。
+- 検証: tsc✓ / vite build✓(15.08s) / **数値定数バイト一致**(分割前 count2542・sum6300276203.4320 と全ui/*.ts合算が完全一致=コード不変・逐語移動)。
+- ⚠️ **重要**: UIは headless非対象(headlessはui.tsを読まない)。型・ビルド・逐語一致は保証したが、**実際の画面表示・モーダル操作・イベントはブラウザでの目視確認が必須**(未検証)。
+- ⚠️ 未コミット(c8d1edd の上に 314〜320)。

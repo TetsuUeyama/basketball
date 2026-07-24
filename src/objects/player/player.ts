@@ -5,17 +5,9 @@ import {
 import { TEAM_COLORS, HUD_OPTS, uniformOf, type RGB } from "../../config";
 import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority, ROLE_BEHAVIOR,
   DEF_ROLE_BEHAVIOR, OffAction, offActionOf } from "../../attributes";
-import { clamp, playerLook } from "../../util";
-
-// 現在の試合における選手のボックススコア。`min` はコート上の時間で、
-// ゲームクロック秒（結果画面では分として表示）。
-export interface Stats {
-  pts: number; reb: number; ast: number; stl: number; blk: number; tov: number;
-  fgm: number; fga: number;   // フィールドゴール成功/試投（3Pを含む全シュート）
-  tpm: number; tpa: number;   // 3Pシュート成功/試投
-  ftm: number; fta: number;   // フリースロー成功/試投
-  min: number;
-}
+import { clamp } from "../../util";
+import { playerLook, type PlayerLook } from "./player-look";
+import type { Stats } from "./stats";
 
 // 既定の下向きの腕 (0,-1,0) を単位ベクトルへ回転させるクォータニオン。
 export function aimDownTo(vx: number, vy: number, vz: number): Quaternion {
@@ -36,11 +28,12 @@ export class Player {
   // 再描画をスキップし、数千回のロースター入替でBabylonメッシュが増殖/リークしない
   // ようにする。シミュレーション前にヘッドレスランナーがtrueにする。画面表示のゲームではfalseのまま。
   static HEADLESS = false;
+
+  // ═════════ 同一性・能力・ロール（ロースターdef / applyDef 由来） ═════════
   readonly team: number;
   readonly idx: number;          // チーム内のロースター番号 (0..12)。ユニフォーム番号 = idx+1
-  slot = 0;                      // コート上のスロット 0..4（マンマッチのキー）
-  stintT = 0;                    // この選手が最後にチェックインしてからのゲーム秒
   name: string;
+  look: PlayerLook;              // 見た目(肌/髪/髪型)。defのlookを保持しHUD/頭と共有
   attr: Attributes;              // defの能力値へのライブ参照
   height: number;                // メートル
   runSpeed: number;              // m/s、`speed`能力値から算出
@@ -57,185 +50,20 @@ export class Player {
   offhandFreq = 5;               // 逆手頻度 2..8 — どれだけ進んで逆サイドを使うか
   offPriority: number;           // 0..1 スコアオプションの比重（頼れるスコアラー=高）
   playmaking: number;            // 0..1 ボール運び/プレイメイキングのロール（PG=高）
-
-  // 現在の試合を通して累積するボックススコアの統計
-  readonly stats: Stats = { pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, min: 0 };
-  readonly pos = new Vector3();  // 論理位置（足元）
-  readonly root: TransformNode;
-
-  // ボールを保持/ドリブル/パス/シュートするために手を伸ばす短い腕
-  readonly armPivotL: TransformNode;
-  readonly armPivotR: TransformNode;
-  elbowL!: TransformNode;   // 上腕 ↔ 前腕の関節（静止時は曲げ、伸ばして届かせる）
-  elbowR!: TransformNode;
-
-  // 名前が変わると再描画される浮遊ネームタグ
-  private nameTex!: DynamicTexture;
-  private namePlane!: Mesh;   // 浮遊ネームタグ。HUD_OPTS.showNamesがオフのとき非表示
-  // ユニフォームキットのマテリアル — キット切替時にapplyUniform()でライブに再着色
-  private topMat!: StandardMaterial;
-  private bottomMat!: StandardMaterial;
-  private sleeveMat!: StandardMaterial;
-  private shoeMat!: StandardMaterial;
-
-  // 背番号のデカール。Zの各サイド・各ボディスタイルごとに1つ。表示されるのは
-  // 現在表示中のボディにおける選手の背中側
-  private numHumanPlus!: Mesh;
-  private numHumanMinus!: Mesh;
-  private numAcornPlus!: Mesh;
-  private numAcornMinus!: Mesh;
-  numberSide = 1;   // 現在どちらのローカルZサイドに番号を表示しているか
-  private sideApplied = false; // Gameがまだ背中側を選んでいない — シェルは非表示のまま
-
-  // 上半身のキャリア: 胴・頭・腕・背番号がこれに乗り、プレー方向へTWISTする
-  // (twistToward)。一方でroot — そして脚と足 — は進行方向を向く。胴を回して
-  // 受け・パス・ドライブへの追随をしながら、片方向へ走り続けられるようにする。
-  torsoNode!: TransformNode;
-  torsoTwist = 0;   // 平滑化したツイスト(rad)、±TWIST_MAXにクランプ
-  headNode!: TransformNode;   // 頭のキャリア — 胴のツイストの上にヨーを重ねる
-  headYaw = 0;      // 胴に対する平滑化した頭の回転(rad)、±HEAD_MAX
-
-  // 両方のボディスタイルは生成時から存在する。applyModel()が一方を表示し他方を
-  // 隠すので、HUDメニューからスタイルをライブに切り替えられる。
-  private humanNode!: TransformNode;   // 矩形の胴（リボン+キャップ）
-  private acornNode!: TransformNode;   // どんぐりの姿（胸+腰+シューズの足）
-  acornWaistPivot!: TransformNode; // 腰はこれに乗る。腰-胸の切断面の位置 —
-                                       // 着席時は90°前方へ折り畳む（膝の上）
-  acornFootL!: TransformNode;  // シューズ型の足 — 非対称なので、位置もヨーも
-  acornFootR!: TransformNode;  // numberSideと共に反転する
-  acornLegL!: TransformNode;   // 腰→シューズを繋ぐ素肌の脚シリンダー
-  acornLegR!: TransformNode;   // （どんぐりモデル専用。rootに固定）
-  eyeL!: Mesh;                  // 顔の目 — 前面に配置 (-numberSide·Z)
-  eyeR!: Mesh;
-  private scene!: Scene;               // 後で髪メッシュを再構築できるよう保持
-  private head!: Mesh;                 // 肌の球（髪/目がこれを親にする）
-  private headMat!: StandardMaterial;  // 肌色（選手が変わると再着色）
-  private hairMat!: StandardMaterial;  // 髪色（選手が変わると再着色）
-  private hair: Mesh | null = null;    // 髪のクラウン — 後傾させて前と後頭部で差をつける
-  private hairTilt = 0;                // 後傾の大きさ（numberSideで反転）
-  private hairBun: Mesh | null = null; // 後頭部のマンバンの結び（numberSideで反転）
-  private hairBack: Mesh | null = null;// ロング/ボブの後ろ髪パネル（numberSideで反転）
-  private hairDreads: TransformNode | null = null; // ドレッドの房（クラスタ全体がnumberSideで反転）
-  private headband: Mesh | null = null;// チームカラーのバンド（スタイル4）
-
-  decisionT = 0;                 // 次のAI判断までのクールダウン
-  driveTarget = new Vector3();   // ハンドラーが向かっている先
-
-  // オフボールの動作状態
-  cutting = false;               // 現在バスケットへカット中
-  offTimer = 0;                  // 次のオフボール判断までのクールダウン
-  spotIdx: number;               // この選手が現在担うフォーメーションの位置
-  readonly offTarget = new Vector3(); // 現在のオフボール移動目標
-
-  // 1対1の攻防状態
-  driveSide = 1;   // オフェンス: ハンドラーがどちらへ攻めているか (-1左, +1右)
-  shadeSide = 1;   // 守備: オンボール守備者がどちらへシェードしているか
-  reactT = 0;      // 守備: シェードが追いつくまでの反応の遅れ
-  looseReactT = 0; // ルーズボール: この選手が追いかけ始めるまでの反応の遅れ（反応でスケール）
-  matchupHoldT = 0; // コーチング: マッチアップ交代後この時間ベンチに留める（即座には戻さない）
-  beatenT = 0;     // オフェンス: (スピードによる)抜き去りバーストの残り時間
-  powerT = 0;      // オフェンス: 相手を押し込むパワードライブの残り時間
-  stalledT = 0;    // オフェンス: ハンドラーが壁にされて(封じられて)引き戻される時間
-  jukeT = 0;       // オフェンス: ドリブルムーブ（ステップイン/サイドステップ/ステップバック）実行中
-  readonly jukeTarget = new Vector3(); // jukeTが減っている間のフットワーク目標
-  comboN = 0;      // オフェンス: 現在の揺さぶりコンボで既に仕掛けたシェイクの数
-  lastFakeDir = 0; // オフェンス: 直前のフェイクが見せたサイド。コンボが交互になるように
-  lean = 0;        // 守備: 横方向の重心 (-1..1, 0=スクエア)
-  // leanが指すワールド空間の横軸（単位XZ）。実際のリーン方向は
-  // (leanAxisX, leanAxisZ) * lean。leanを変更する箇所で設定する。
-  leanAxisX = 0;
-  leanAxisZ = 0;
-
-  // パスやシュート後の回復クールダウン — これが経過するまで選手は根が生えた
-  // 状態（動き出せない）で、リリースのフォロースルーを表現する
-  coolT = 0;
-  // 着地の回復 — ジャンプから降りてきた後、次のジャンプやスプリントへ爆発する
-  // 前に重心が落ち着く必要がある（完全に根が生えるわけではない: すり足はできるが
-  // 再ジャンプや全速の踏み出しはできない）
-  landT = 0;
-  landDur = 0;   // 着地硬直の全長。accelSpeedがこれをかけて移動スロットルを
-                         // 徐々に戻せるようにする（長い回復でも平坦なほぼ静止では
-                         // ない — 動き出せるが再ジャンプはできない）
-  plantDur = 0;  // 同上、クロスオーバー/停止のプラント用（動き直し）
-  // ルーズボールを手で床からすくい上げる（ホップなし）: ボールは足首の高さから
-  // このウィンドウをかけて保持位置へ上がり、手はそれを下→上に追う
-  pickupT = 0;
-  pickupDur = 0;
-
-  // オンボール守備のスタンス。ヒステリシスで保持し、ハンドラーの速度が閾値付近で
-  // ぶれても毎フレームポーズが切り替わらないようにする（その切り替わりが
-  // 「手を小刻みに動かす」ように見えた）。true=腕を大きく広げてサイドドライブを壁で防ぐ、
-  // false=前の手を下げてストレートドライブを止める/ボールをはたく。
-  stanceWide = false;
-
-  // 硬直: こぼしかけたキャッチをまだ収めている最中。これが動いている間ボールは
-  // 手の中で揺れ（まだ確保していない）、密着した守備者がはたき出せる。
-  // 長さは配球がどれだけ逸れたかと本人の技術（ハンドリング）でスケールする。
-  gatherT = 0;
-  gatherDur = 0;   // ギャザーの全長。キャッチが収まるにつれてボールを段階的に
-                   // シールド（遠い腰へ振る）できるようにする — 収める前に
-                   // 手が届いた守備者がはたき出す。
-  // キャッチをどう扱うか。キャッチの瞬間に決めて姿勢を確定させる:
-  // "shield"=プレッシャー下、遠い腰へしまう。"shoot"=キャッチ&シュート、
-  // ポケットへ上げる。"drive"=オープン、次の動き（リム）へ運び出す。
-  catchIntent: "shield" | "shoot" | "drive" = "drive";
-  // 通路ブロック: 攻撃側がこの守備者の脇をサイドステップで抜いた直後 — 一拍の間
-  // (wallX, wallZ)、新しいレーンの入口へスライドして再び壁で塞ぐ。steerAroundが
-  // 設定する。スライド自体はaccelToward経由で走るので、素早さ
-  // (turnFactor / 動き直しのプラント)がステップ勝負の勝者を決める。
-  wallT = 0;
-  wallX = 0;
-  wallZ = 0;
   // 特殊能力 — ロースターdef由来のAbilityKeyフラグの集合
   abilities: Set<AbilityKey>;
-  // ダイレクトプレイ: パスを受けた後のワンタッチプレー用ウィンドウ（秒）
-  quickT = 0;
-  // ピック&ロール: このスクリナーが守備の空けたスペースへロールした（ヘッジ/
-  // スイッチでマークが後ろに残った） — 供給する価値のあるポケットパスのウィンドウ
-  openRollT = 0;
-  // お膳立て: 良いパスからリズムよく受けた — 次のシュートが `setupBonus` を得る
-  // キャッチ&シュートのウィンドウ（優れたパサーは限られたスコアラーにも決めやすい
-  // 形を作り出す。速いパスほどウィンドウが長く開く）。
-  setupT = 0;
-  setupBonus = 0;
 
-  // ドリブルの持ち位置: ライブドリブルがハンドラーに対してどこにあるか（ワールド
-  // XZオフセット）。ゲームは速い前方キャリーと守られた横キャリーの間を、D精度が
-  // 決める速さで補間する。baitTは意図的に「見せたボール」のウィンドウで、
-  // ハンドラーが仕留める準備のあるリーチインを誘う。
-  carryX = 0;
-  carryZ = 0;
-  baitT = 0;
-  // ドリブルのカデンツ位相（ハンドラー毎）: D精度が高いハンドラーほど速く進む。
-  // 下手なハンドラーはゆっくり突くのでボールが手から離れている時間が長くなる
-  // （はたかれる隙になり、次の動作はボールが手に戻ってからしか始められない）。
-  dribblePhase = 0;
+  // ═════════ ローテーション・出場 ═════════
+  slot = 0;                      // コート上のスロット 0..4（マンマッチのキー）
+  stintT = 0;                    // この選手が最後にチェックインしてからのゲーム秒
+  matchupHoldT = 0; // コーチング: マッチアップ交代後この時間ベンチに留める（即座には戻さない）
 
-  // ファウルリアクション — デッドボールの一時停止中に再生される、純粋に見た目
-  // だけの短い演出: "hurt"は接触を演じ（腕が跳ね上がり体が後ろへのけぞる）、
-  // "and1"はラインへ向かう前の力み（拳を上げてホップ）
-  foulReactT = 0;
-  foulReactDur = 0;
-  foulReactKind: "hurt" | "and1" = "hurt";
-  flinchPitch = 0;   // ひるみ中の追加のrootピッチ、sync()で加算
-  flinchRoll = 0;    // ひるみ中の追加のrootロール（方向性のあるファウル傾き）
-  // 守備成功の演出 — 守備プレーに勝った直後に再生される、純粋に見た目だけの
-  // 短い喜び/主張。良いストップが画面上でちゃんと伝わるように:
-  // "block"（勝ち誇って拳を上げてホップ）、"steal"（低い両拳のガッツポーズ）、
-  // "stop"（踏ん張った — 腕を広げ前へ踏ん張る）。tickCooldownで減算され、
-  // runArms/poseFoulReactionの後にposeDefWin()でポーズ付けする。
-  defWinT = 0;
-  defWinDur = 0;
-  defWinKind: "block" | "steal" | "stop" = "block";
-  // 接触が彼を弾いた方向（ワールド単位XZ; 0,0=情報なし→後ろへのけぞる）、
-  // その強さ(0..1)、そしてバランスを崩してよろけたかどうか
-  foulPushX = 0;
-  foulPushZ = 0;
-  foulStrength = 0;
-  foulStumble = false;
-  foulStaggerX = 0;
-  foulStaggerZ = 0;
+  // ═════════ ボックススコア ═════════
+  // 現在の試合を通して累積するボックススコアの統計
+  readonly stats: Stats = { pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, min: 0 };
 
+  // ═════════ 位置・速度・加速・疲労（毎フレーム計測/更新） ═════════
+  readonly pos = new Vector3();  // 論理位置（足元）
   // --- コンディション（スタミナ/加速） ---
   // 前フレームで実際に達した速度(m/s)、変位から計測。加速モデルはこれを基に
   // 積み上げるので、静止からの発進はトップスピードまで立ち上がる。
@@ -247,42 +75,125 @@ export class Player {
   velZ = 0;
   prevVelX = 0;    // 前フレームの速度、急な方向転換の検出用
   prevVelZ = 0;
+
+  // ═════════ 硬直・回復タイマー（tickCooldown/accelSpeed が消費） ═════════
+  // パスやシュート後の回復クールダウン — これが経過するまで選手は根が生えた
+  // 状態（動き出せない）で、リリースのフォロースルーを表現する
+  coolT = 0;
+  // 着地の回復 — ジャンプから降りてきた後、次のジャンプやスプリントへ爆発する
+  // 前に重心が落ち着く必要がある（完全に根が生えるわけではない: すり足はできるが
+  // 再ジャンプや全速の踏み出しはできない）
+  landT = 0;
+  landDur = 0;   // 着地硬直の全長。accelSpeedがこれをかけて移動スロットルを
+                         // 徐々に戻せるようにする（長い回復でも平坦なほぼ静止では
+                         // ない — 動き出せるが再ジャンプはできない）
   // 動き直し: 急な方向転換後のプラント&再プッシュ。全速で切り返すことはできない
   // — 新しい方向へ踏み出す前に足を踏み直す必要があり、これが動いている間は
   // 加速がスロットルされる（accelSpeed参照）。素早い(敏捷性)選手はすぐ立て直す。
   // 遅い選手は実際に一拍失い、速く動いていた(ダッシュ)ほどプラントが大きくなる。
   // tickMotionで設定。
   plantT = 0;
-  gaugeDrawn = 0;   // ネームタグのゲージに最後に描いた疲労値
-  gaugeRev = -1;    // タグを最後に描いたときのHUD_OPTS.rev（トグル時に再描画を強制）
-
+  plantDur = 0;  // 同上、クロスオーバー/停止のプラント用（動き直し）
+  // ルーズボールを手で床からすくい上げる（ホップなし）: ボールは足首の高さから
+  // このウィンドウをかけて保持位置へ上がり、手はそれを下→上に追う
+  pickupT = 0;
+  pickupDur = 0;
+  // 硬直: こぼしかけたキャッチをまだ収めている最中。これが動いている間ボールは
+  // 手の中で揺れ（まだ確保していない）、密着した守備者がはたき出せる。
+  // 長さは配球がどれだけ逸れたかと本人の技術（ハンドリング）でスケールする。
+  gatherT = 0;
+  gatherDur = 0;   // ギャザーの全長。キャッチが収まるにつれてボールを段階的に
+                   // シールド（遠い腰へ振る）できるようにする — 収める前に
+                   // 手が届いた守備者がはたき出す。
   // ルーズボールに触れた後の短いロックアウト。1回のタップが同じフレーム区間で
   // 何十回もの接触を再発火させないように
   touchCool = 0;
-
   // 直前に手放したばかり: ボールを手放してから数秒間この選手はパス先として
   // 低優先になり、ボールがすぐ彼に跳ね返らないようにする（ショットクロックを
   // 浪費するだけの2人のピンポン）。本当にリムへカットすれば（本物のギブ&ゴー）
   // 解除される。tickCooldownで減算。
   justPassedT = 0;
-
   // トラップ記憶: この選手が最後に本物のダブルチーム（2人以上の守備者が寄った）
   // の中にいてからの秒数。>0の間はボールを彼へ振り戻さない/戻さない — トラップが
   // まだ生きている（あるいは直前まで生きていて、瞬間的な2.0m判定ではボール到着時に
   // 再び寄り集まるトラップを見逃しうる）。これがオフェンスが脱出したばかりの
   // トラップへA→B→Aで戻すのを実際に止める。トラップ中は判断毎に更新、tickCooldownで減算。
   trappedT = 0;
-
   // キープドリブルのシールド: 下手なハンドラー（低D精度）がマークされて前進できず
   // — 半身になってボールをシールドする。>0の間はドリブルがじりじりと進み、
   // 体をボールと守備者の間に入れる。keepDribbleDecideが設定、tickCooldownで減算。
   keepShieldT = 0;
+  // ダイレクトプレイ: パスを受けた後のワンタッチプレー用ウィンドウ（秒）
+  quickT = 0;
+  // ピック&ロール: このスクリナーが守備の空けたスペースへロールした（ヘッジ/
+  // スイッチでマークが後ろに残った） — 供給する価値のあるポケットパスのウィンドウ
+  openRollT = 0;
+  // お膳立て: 良いパスからリズムよく受けた — 次のシュートが `setupBonus` を得る
+  // キャッチ&シュートのウィンドウ（優れたパサーは限られたスコアラーにも決めやすい
+  // 形を作り出す。速いパスほどウィンドウが長く開く）。
+  setupT = 0;
+  setupBonus = 0;
+  baitT = 0;
+  // 通路ブロック: 攻撃側がこの守備者の脇をサイドステップで抜いた直後 — 一拍の間
+  // (wallX, wallZ)、新しいレーンの入口へスライドして再び壁で塞ぐ。steerAroundが
+  // 設定する。スライド自体はaccelToward経由で走るので、素早さ
+  // (turnFactor / 動き直しのプラント)がステップ勝負の勝者を決める。
+  wallT = 0;
+  wallX = 0;
+  wallZ = 0;
+  decisionT = 0;                 // 次のAI判断までのクールダウン
+  offTimer = 0;                  // 次のオフボール判断までのクールダウン
+  reactT = 0;      // 守備: シェードが追いつくまでの反応の遅れ
+  looseReactT = 0; // ルーズボール: この選手が追いかけ始めるまでの反応の遅れ（反応でスケール）
 
+  // ═════════ 攻防の可変状態（1対1/オフボール/ドリブル/スクリーン） ═════════
+  // オフボールの動作状態
+  cutting = false;               // 現在バスケットへカット中
+  spotIdx: number;               // この選手が現在担うフォーメーションの位置
+  // 1対1の攻防状態
+  driveSide = 1;   // オフェンス: ハンドラーがどちらへ攻めているか (-1左, +1右)
+  shadeSide = 1;   // 守備: オンボール守備者がどちらへシェードしているか
+  beatenT = 0;     // オフェンス: (スピードによる)抜き去りバーストの残り時間
+  powerT = 0;      // オフェンス: 相手を押し込むパワードライブの残り時間
+  stalledT = 0;    // オフェンス: ハンドラーが壁にされて(封じられて)引き戻される時間
+  jukeT = 0;       // オフェンス: ドリブルムーブ（ステップイン/サイドステップ/ステップバック）実行中
+  comboN = 0;      // オフェンス: 現在の揺さぶりコンボで既に仕掛けたシェイクの数
+  lastFakeDir = 0; // オフェンス: 直前のフェイクが見せたサイド。コンボが交互になるように
+  lean = 0;        // 守備: 横方向の重心 (-1..1, 0=スクエア)
+  // leanが指すワールド空間の横軸（単位XZ）。実際のリーン方向は
+  // (leanAxisX, leanAxisZ) * lean。leanを変更する箇所で設定する。
+  leanAxisX = 0;
+  leanAxisZ = 0;
+  // オンボール守備のスタンス。ヒステリシスで保持し、ハンドラーの速度が閾値付近で
+  // ぶれても毎フレームポーズが切り替わらないようにする（その切り替わりが
+  // 「手を小刻みに動かす」ように見えた）。true=腕を大きく広げてサイドドライブを壁で防ぐ、
+  // false=前の手を下げてストレートドライブを止める/ボールをはたく。
+  stanceWide = false;
+  // キャッチをどう扱うか。キャッチの瞬間に決めて姿勢を確定させる:
+  // "shield"=プレッシャー下、遠い腰へしまう。"shoot"=キャッチ&シュート、
+  // ポケットへ上げる。"drive"=オープン、次の動き（リム）へ運び出す。
+  catchIntent: "shield" | "shoot" | "drive" = "drive";
+  // ドリブルの持ち位置: ライブドリブルがハンドラーに対してどこにあるか（ワールド
+  // XZオフセット）。ゲームは速い前方キャリーと守られた横キャリーの間を、D精度が
+  // 決める速さで補間する。baitTは意図的に「見せたボール」のウィンドウで、
+  // ハンドラーが仕留める準備のあるリーチインを誘う。
+  carryX = 0;
+  carryZ = 0;
+  // ドリブルのカデンツ位相（ハンドラー毎）: D精度が高いハンドラーほど速く進む。
+  // 下手なハンドラーはゆっくり突くのでボールが手から離れている時間が長くなる
+  // （はたかれる隙になり、次の動作はボールが手に戻ってからしか始められない）。
+  dribblePhase = 0;
   // ボールスクリーン（ピック）の状態 — ハンドラーを解放するためスクリーンをセット/保持
   screening = false;
   screenT = 0;      // ポップアウトする前にピックを確立・保持する残り時間
   screenSide = 1;   // スクリーンがハンドラーをどちらへ解放するか (-1/+1)
 
+  // ═════════ 移動目標（ベクトル） ═════════
+  driveTarget = new Vector3();   // ハンドラーが向かっている先
+  readonly offTarget = new Vector3(); // 現在のオフボール移動目標
+  readonly jukeTarget = new Vector3(); // jukeTが減っている間のフットワーク目標
+
+  // ═════════ ジャンプ ═════════
   // 垂直ジャンプのアニメ（シュート、ダンク、レイアップ、コンテスト、リバウンド）
   jumpRemaining = 0;
   jumpDur = 0;
@@ -293,6 +204,60 @@ export class Player {
   leapX = 0;
   leapZ = 0;
 
+  // ═════════ リアクション演出の状態（ファウル/守備成功/ひるみ） ═════════
+  // ファウルリアクション — デッドボールの一時停止中に再生される、純粋に見た目
+  // だけの短い演出: "hurt"は接触を演じ（腕が跳ね上がり体が後ろへのけぞる）、
+  // "and1"はラインへ向かう前の力み（拳を上げてホップ）
+  foulReactT = 0;
+  foulReactDur = 0;
+  foulReactKind: "hurt" | "and1" = "hurt";
+  flinchPitch = 0;   // ひるみ中の追加のrootピッチ、sync()で加算
+  flinchRoll = 0;    // ひるみ中の追加のrootロール（方向性のあるファウル傾き）
+  // 接触が彼を弾いた方向（ワールド単位XZ; 0,0=情報なし→後ろへのけぞる）、
+  // その強さ(0..1)、そしてバランスを崩してよろけたかどうか
+  foulPushX = 0;
+  foulPushZ = 0;
+  foulStrength = 0;
+  foulStumble = false;
+  foulStaggerX = 0;
+  foulStaggerZ = 0;
+  // 守備成功の演出 — 守備プレーに勝った直後に再生される、純粋に見た目だけの
+  // 短い喜び/主張。良いストップが画面上でちゃんと伝わるように:
+  // "block"（勝ち誇って拳を上げてホップ）、"steal"（低い両拳のガッツポーズ）、
+  // "stop"（踏ん張った — 腕を広げ前へ踏ん張る）。tickCooldownで減算され、
+  // runArms/poseFoulReactionの後にposeDefWin()でポーズ付けする。
+  defWinT = 0;
+  defWinDur = 0;
+  defWinKind: "block" | "steal" | "stop" = "block";
+
+  // ═════════ 3Dメッシュ・ノード（実体） ═════════
+  readonly root: TransformNode;
+  // ボールを保持/ドリブル/パス/シュートするために手を伸ばす短い腕
+  readonly armPivotL: TransformNode;
+  readonly armPivotR: TransformNode;
+  elbowL!: TransformNode;   // 上腕 ↔ 前腕の関節（静止時は曲げ、伸ばして届かせる）
+  elbowR!: TransformNode;
+  // 上半身のキャリア: 胴・頭・腕・背番号がこれに乗り、プレー方向へTWISTする
+  // (twistToward)。一方でroot — そして脚と足 — は進行方向を向く。胴を回して
+  // 受け・パス・ドライブへの追随をしながら、片方向へ走り続けられるようにする。
+  torsoNode!: TransformNode;
+  torsoTwist = 0;   // 平滑化したツイスト(rad)、±TWIST_MAXにクランプ
+  headNode!: TransformNode;   // 頭のキャリア — 胴のツイストの上にヨーを重ねる
+  headYaw = 0;      // 胴に対する平滑化した頭の回転(rad)、±HEAD_MAX
+  // 両方のボディスタイルは生成時から存在する。applyModel()が一方を表示し他方を
+  // 隠すので、HUDメニューからスタイルをライブに切り替えられる。
+  humanNode!: TransformNode;   // 矩形の胴（リボン+キャップ）
+  acornNode!: TransformNode;   // どんぐりの姿（胸+腰+シューズの足）
+  acornWaistPivot!: TransformNode; // 腰はこれに乗る。腰-胸の切断面の位置 —
+                                       // 着席時は90°前方へ折り畳む（膝の上）
+  acornFootL!: TransformNode;  // シューズ型の足 — 非対称なので、位置もヨーも
+  acornFootR!: TransformNode;  // numberSideと共に反転する
+  acornLegL!: TransformNode;   // 腰→シューズを繋ぐ素肌の脚シリンダー
+  acornLegR!: TransformNode;   // （どんぐりモデル専用。rootに固定）
+  eyeL!: Mesh;                  // 顔の目 — 前面に配置 (-numberSide·Z)
+  eyeR!: Mesh;
+  scene!: Scene;               // 後で髪メッシュを再構築できるよう保持
+  head!: Mesh;                 // 肌の球（髪/目がこれを親にする）
   // 多関節の脚: 各サイドに股関節ピボット（腿）+膝ピボット（脛+足）。
   // プレー中は歩行/走行サイクルで振れ、ベンチでは着席ポーズに折り畳む。
   // updateLegs()が駆動、sit()/stand()がポーズ付け。
@@ -301,10 +266,38 @@ export class Player {
   hipR!: TransformNode;
   kneeL!: TransformNode;
   kneeR!: TransformNode;
-  private footL!: Mesh;
-  private footR!: Mesh;
+  footL!: Mesh;
+  footR!: Mesh;
   stridePhase = 0;   // 移動距離とともに累積 → 脚の振り
   acornWaddle = 0;   // 平滑化したペンギンの体ロール(rad)、sync()でrootロールに加算
+
+  // ═════════ 見た目マテリアル・背番号・ネームタグ・髪 ═════════
+  // 名前が変わると再描画される浮遊ネームタグ
+  nameTex!: DynamicTexture;
+  namePlane!: Mesh;   // 浮遊ネームタグ。HUD_OPTS.showNamesがオフのとき非表示
+  // ユニフォームキットのマテリアル — キット切替時にapplyUniform()でライブに再着色
+  topMat!: StandardMaterial;
+  bottomMat!: StandardMaterial;
+  sleeveMat!: StandardMaterial;
+  shoeMat!: StandardMaterial;
+  // 背番号のデカール。Zの各サイド・各ボディスタイルごとに1つ。表示されるのは
+  // 現在表示中のボディにおける選手の背中側
+  numHumanPlus!: Mesh;
+  numHumanMinus!: Mesh;
+  numAcornPlus!: Mesh;
+  numAcornMinus!: Mesh;
+  numberSide = 1;   // 現在どちらのローカルZサイドに番号を表示しているか
+  sideApplied = false; // Gameがまだ背中側を選んでいない — シェルは非表示のまま
+  headMat!: StandardMaterial;  // 肌色（選手が変わると再着色）
+  hairMat!: StandardMaterial;  // 髪色（選手が変わると再着色）
+  hair: Mesh | null = null;    // 髪のクラウン — 後傾させて前と後頭部で差をつける
+  hairTilt = 0;                // 後傾の大きさ（numberSideで反転）
+  hairBun: Mesh | null = null; // 後頭部のマンバンの結び（numberSideで反転）
+  hairBack: Mesh | null = null;// ロング/ボブの後ろ髪パネル（numberSideで反転）
+  hairDreads: TransformNode | null = null; // ドレッドの房（クラスタ全体がnumberSideで反転）
+  headband: Mesh | null = null;// チームカラーのバンド（スタイル4）
+  gaugeDrawn = 0;   // ネームタグのゲージに最後に描いた疲労値
+  gaugeRev = -1;    // タグを最後に描いたときのHUD_OPTS.rev（トグル時に再描画を強制）
 
   constructor(scene: Scene, team: number, idx: number, def: PlayerDef) {
     this.scene = scene;
@@ -313,6 +306,7 @@ export class Player {
     this.slot = Math.min(idx, 4);   // スターターは自分のスロットを持つ。ベンチはチェックイン時に付与
     this.spotIdx = this.slot;
     this.name = def.name;
+    this.look = def.look ?? playerLook(def.name);   // DB選手はdef.look、DB外ダミーは名前フォールバック
     this.attr = def.attr;
     this.height = def.height;
     this.runSpeed = 3.2 + rate(def.attr.speed) * 4.8; // ~3.2（遅い）.. 8.0（速い）
@@ -515,7 +509,7 @@ export class Player {
     // するので見た目は選手のアイデンティティに紐づき、ロースターのスロットには紐づかない）。
     // 髪のメッシュはbuildHairMeshesが（再）構築する。ロースター入替でこのスロットの
     // 占有者が変わると、applyLook()が両方を再実行する。
-    const look = playerLook(this.name);
+    const look = this.look;
     const headMat = new StandardMaterial(`hmat_${team}_${idx}`, scene);
     headMat.diffuseColor = new Color3(look.skin.r, look.skin.g, look.skin.b);
     headMat.specularColor = new Color3(0.05, 0.05, 0.05);
@@ -797,282 +791,18 @@ export class Player {
 
   readonly meshes: Mesh[];
 
-  /** `height` メートルの、`dur` 秒続くジャンプを開始する。任意の (leapX,leapZ) は
-   *  飛行全体に分散する水平の踏み込み — 正面にないシュートへの斜めのジャンプ
-   *  （高さは低いが、ブロックするために横へ届く）。 */
-
-  // （既に生成済みの）頭に髪型の髪メッシュを構築する。コンストラクタから切り出して
-  // あるので、ロースター入替でこのスロットに別の選手が来たときapplyLook()が再構築
-  // できる。0=短髪 1=丸刈り 2=アフロ 3=フラットトップ 4=ヘッドバンド
-  // 5=ボブ 6=前髪上げ 7=モヒカン 8=マンバン 9=センター分け 10=ロング(肩まで)
-  // 11=くせ毛長髪(太めの房) 12=ドレッド(細く多く長い房)。
-  private buildHairMeshes(style: number): void {
-    const { head, hairMat, team } = this;
-    // slice = ドームがどこまで下りてくるか（顔ではなく側面/後ろを覆う）。
-    // tilt = 後傾で、後頭部を覆ったまま前が目の上へ乗り上がる（numberSideで反転
-    // するので前 = -numberSide·Z）。
-    // slice ≲0.6 + 適度なtiltでクラウンを顔から外す（ヘルメット感なし）。
-    // 長さは後頭部を垂れる別の `back` パネル（下記）が担い、大きなsliceでは担わない
-    // — 大きなドームは後ろと同じくらい顔も覆ってしまう。
-    type HStyle = { d: number; slice: number; sy: number; y: number; tilt: number;
-                    back?: { d: number; sx: number; sy: number; sz: number; y: number } };
-    const HS: (HStyle | null)[] = [
-      { d: 0.375, slice: 0.58, sy: 1.0, y: 0.0, tilt: 0.34 },   // 0 短髪
-      { d: 0.362, slice: 0.60, sy: 1.0, y: 0.0, tilt: 0.16 },   // 1 丸刈り(バズ、頭とほぼ同径で薄く覆う)
-      { d: 0.47, slice: 0.66, sy: 1.08, y: 0.0, tilt: 0.24 },   // 2 アフロ
-      { d: 0.375, slice: 0.56, sy: 1.4, y: 0.02, tilt: 0.30 },  // 3 フラットトップ
-      { d: 0.375, slice: 0.56, sy: 0.95, y: 0.0, tilt: 0.32 },  // 4 ヘッドバンド下の髪
-      // 5 ボブ: 前は開けたクラウン + 顎ラインまでの後ろ髪パーツ
-      { d: 0.375, slice: 0.56, sy: 1.0, y: 0.0, tilt: 0.30,
-        back: { d: 0.30, sx: 1.05, sy: 1.30, sz: 0.55, y: -0.05 } },
-      { d: 0.36, slice: 0.50, sy: 0.90, y: 0.03, tilt: 0.48 },  // 6 前髪上げ(前を強く後傾、額出し)
-      null,                                                     // 7 モヒカン(下のクレストで作る)
-      { d: 0.36, slice: 0.55, sy: 0.98, y: 0.0, tilt: 0.30 },   // 8 マンバン(このクラウン+お団子)
-      { d: 0.38, slice: 0.58, sy: 1.02, y: -0.005, tilt: 0.24 },// 9 センター分け(前髪は軽く、額は隠れすぎない)
-      // 10 ロング: 前は開けたクラウン + 肩まで垂れる後ろ髪パーツ
-      { d: 0.375, slice: 0.56, sy: 1.0, y: 0.0, tilt: 0.30,
-        back: { d: 0.32, sx: 1.05, sy: 1.75, sz: 0.50, y: -0.13 } },
-      // 11 くせ毛長髪: 前は開けたクラウン + サイド〜後ろに垂らす太めの房(下の専用ブランチ)
-      { d: 0.365, slice: 0.56, sy: 1.0, y: 0.0, tilt: 0.28 },
-      // 12 ドレッド: 同じ作りで房が細く・多く・長い(下の専用ブランチ)
-      { d: 0.37, slice: 0.60, sy: 1.0, y: 0.0, tilt: 0.22 },
-    ];
-    const hs = HS[style];
-    if (hs) {
-      const hair = MeshBuilder.CreateSphere(`haircap_${team}_${this.idx}`, { diameter: hs.d, segments: 12, slice: hs.slice }, this.scene);
-      hair.material = hairMat;
-      hair.parent = head;            // 頭に乗る
-      hair.position.y = hs.y;
-      hair.scaling.y = hs.sy;
-      hair.rotation.x = this.numberSide * hs.tilt;   // 後傾: 前が上、後頭部が下
-      this.hair = hair;
-      this.hairTilt = hs.tilt;
-    }
-    if (hs?.back) {
-      // 後ろ髪: 後頭部を垂れる扁平な楕円体（後ろ = +numberSide·Z なので、ハーフタイムに
-      // setNumberSideでzが反転する）。頭の後ろかつ下に位置するので顔に届かない
-      // — 前を覆わずに長さを出す。
-      const b = hs.back;
-      const back = MeshBuilder.CreateSphere(`hairback_${team}_${this.idx}`, { diameter: b.d, segments: 12 }, this.scene);
-      back.material = hairMat;
-      back.parent = head;
-      back.scaling.set(b.sx, b.sy, b.sz);
-      back.position.set(0, b.y, this.numberSide * 0.05);
-      this.hairBack = back;
-    }
-    if (style === 4) {
-      // ヘッドバンド — 頭を囲うチームカラーのリング
-      const band = MeshBuilder.CreateTorus(`band_${team}_${this.idx}`, { diameter: 0.355, thickness: 0.05, tessellation: 12 }, this.scene);
-      const bandMat = new StandardMaterial(`bandmat_${team}_${this.idx}`, this.scene);
-      const tc = TEAM_COLORS[team];
-      bandMat.diffuseColor = new Color3(tc.r, tc.g, tc.b);
-      bandMat.specularColor = new Color3(0.05, 0.05, 0.05);
-      band.material = bandMat;
-      band.parent = head;
-      band.position.y = 0.035;       // 額の高さ
-      this.headband = band;
-    }
-    if (style === 7) {
-      // モヒカン: 頭の中心線に沿って前後に走る、薄く高いクレストの尾根。z=0に対して
-      // 対称なので、エンドを入れ替えても（numberSide反転）見た目は変わらない。
-      // 再着色/破棄のため `this.hair` として登録する。
-      const crest = MeshBuilder.CreateSphere(`mohawk_${team}_${this.idx}`, { diameter: 0.30, segments: 10 }, this.scene);
-      crest.material = hairMat;
-      crest.parent = head;
-      crest.position.y = 0.10;
-      crest.scaling.set(0.34, 1.7, 1.05);   // 横に薄く、上に高く、前後に長く
-      this.hair = crest;
-    }
-    if (style === 8) {
-      // マンバン: ベースのクラウン（上で構築）に加えて後頭部の上に小さな結び。
-      // 後ろ = +numberSide·Z なので、bunのzはハーフタイムで反転する（setNumberSide）。
-      const bun = MeshBuilder.CreateSphere(`bun_${team}_${this.idx}`, { diameter: 0.145, segments: 10 }, this.scene);
-      bun.material = hairMat;
-      bun.parent = head;
-      bun.position.set(0, 0.055, this.numberSide * 0.15);
-      this.hairBun = bun;
-    }
-    if (style === 11 || style === 12) {
-      // 側面と後ろだけに垂れる房（前は空けて顔を覆わないようにする）。すべてが
-      // 1つのノードを親にし、そのY回転がハーフタイムで反転するので、クラスタは
-      // 正しい背中側に留まる。
-      //   11 くせ毛長髪 = 少なく、太く、短い。 12 ドレッド = 多く、細く、長い。
-      const cfg = style === 11
-        ? { n: 9, r: 0.15, dia: 0.050, hBase: 0.38, hVar: 0.045, top: 0.02, spread: 3.8 }
-        : { n: 16, r: 0.155, dia: 0.030, hBase: 0.50, hVar: 0.060, top: 0.05, spread: 4.4 };
-      const root = new TransformNode(`dread_${team}_${this.idx}`, this.scene);
-      root.parent = head;
-      root.rotation.y = this.numberSide > 0 ? 0 : Math.PI;
-      for (let i = 0; i < cfg.n; i++) {
-        const phi = -cfg.spread / 2 + (i / (cfg.n - 1)) * cfg.spread;   // 後ろ側。前は飛ばす
-        const H = cfg.hBase + (i % 3) * cfg.hVar;                       // 少し不揃いな長さ
-        const loc = MeshBuilder.CreateCylinder(`loc_${team}_${this.idx}_${i}`,
-          { height: H, diameter: cfg.dia, tessellation: 6 }, this.scene);
-        loc.material = hairMat;
-        loc.parent = root;
-        loc.position.set(Math.sin(phi) * cfg.r, cfg.top - H / 2, Math.cos(phi) * cfg.r);
-      }
-      this.hairDreads = root;
-    }
-  }
-
-  // このスロットを今占有する選手のために、手続き的な見た目（肌/髪の色+髪型メッシュ）
-  // 全体を再適用する。ロースター入替（applyDef）で呼ばれ、NAMEをキーにした見た目が
-  // 構築時のまま留まらず実際に選手に追随するようにする。
-  private applyLook(): void {
-    const look = playerLook(this.name);
-    this.headMat.diffuseColor = new Color3(look.skin.r, look.skin.g, look.skin.b);
-    this.hairMat.diffuseColor = new Color3(look.hair.r, look.hair.g, look.hair.b);
-    this.hair?.dispose(); this.hair = null; this.hairTilt = 0;
-    this.hairBun?.dispose(); this.hairBun = null;
-    this.hairBack?.dispose(); this.hairBack = null;
-    if (this.hairDreads) {
-      this.hairDreads.getChildMeshes(false).forEach((m) => m.dispose());
-      this.hairDreads.dispose(); this.hairDreads = null;
-    }
-    this.headband?.dispose(); this.headband = null;
-    this.buildHairMeshes(look.style);
-  }
-
-  /** 指定のZサイド(+1 / -1)に背番号を表示する — 選手の背中側、すなわち
-   *  攻めるバスケットから遠い側。ハーフタイムで反転する。
-   *  肩はわずかに前寄りなので、（反対側の）胸側に追随する — さもないと-Zを攻める
-   *  チームが前後逆に見え、腕が背中に付いているように見える。 */
-  setNumberSide(sign: number): void {
-    this.sideApplied = true;
-    this.numberSide = sign >= 0 ? 1 : -1;
-    const human = HUD_OPTS.model === "human";
-    this.numHumanPlus.isVisible = human && sign > 0;
-    this.numHumanMinus.isVisible = human && sign < 0;
-    this.numAcornPlus.isVisible = !human && sign > 0;
-    this.numAcornMinus.isVisible = !human && sign < 0;
-    this.armPivotL.position.z = -this.numberSide * 0.06;
-    this.armPivotR.position.z = -this.numberSide * 0.06;
-    // つま先は胸/腕と同じ方向（前 = -numberSide·Z）を指すので、-Zを攻めるチームが
-    // 足が後ろ向きに見えることはない
-    this.footL.position.z = -this.numberSide * 0.1;
-    this.footR.position.z = -this.numberSide * 0.1;
-    // 目も胸/前側に配置し、背中側に来ないようにする
-    if (this.eyeL) { this.eyeL.position.z = -this.numberSide * 0.15; this.eyeR.position.z = -this.numberSide * 0.15; }
-    // 髪は顔に対して後傾するので、傾きは前側とともに反転する
-    if (this.hair) this.hair.rotation.x = this.numberSide * this.hairTilt;
-    // マンバンは頭の後ろに配置 — 新しい背中側へ向け直す
-    if (this.hairBun) this.hairBun.position.z = this.numberSide * 0.15;
-    // ロング/ボブの後ろ髪も背中に垂れる — これも向け直す
-    if (this.hairBack) this.hairBack.position.z = this.numberSide * 0.05;
-    // ドレッドのクラスタは全体で反転し、背中側に留まる
-    if (this.hairDreads) this.hairDreads.rotation.y = this.numberSide > 0 ? 0 : Math.PI;
-    // シューズの足: 同じ規則だが、シューズは前後非対称なのでヨーも反転する
-    // （numberSide +1 用につま先前向きで作られている）。スタンスは体の後ろ寄りで
-    // つま先を外へ開く（軽いガニ股）ので、各足のヨー = 基準の向き ± 外向きの開き。
-    const fns = this.numberSide;
-    this.acornFootL.position.z = -fns * Player.ACORN_FOOT_Z;
-    this.acornFootR.position.z = -fns * Player.ACORN_FOOT_Z;
-    const fBase = fns > 0 ? 0 : Math.PI;
-    this.acornFootL.rotation.y = fBase + fns * Player.ACORN_SPLAY;
-    this.acornFootR.rotation.y = fBase - fns * Player.ACORN_SPLAY;
-    this.syncAcornLegs();
-    if (this.seated) {
-      this.foldSeatedLegs();   // 着席の折り畳みを正しい向きに保つ
-      if (HUD_OPTS.model === "acorn") this.foldAcornSeat();
-    }
-  }
-
-  /** モデル切替（人型 ⇄ どんぐりカプセル）: 選択中のボディだけを表示し、腕の
-   *  肩幅・背番号シェル・着席姿勢をそのモード用に組み直す。いつ呼んでも安全
-   *  （腕/頭/名前タグは両モード共用）。 */
-  applyModel(): void {
-    const human = HUD_OPTS.model === "human";
-    this.humanNode.setEnabled(human);
-    this.hipL.setEnabled(human);          // 脚（腿/脛/足がこれらのピボットに乗る）
-    this.hipR.setEnabled(human);
-    this.acornNode.setEnabled(!human);
-    this.acornFootL.setEnabled(!human);   // シューズの足はrootにある（ツイストしない）
-    this.acornFootR.setEnabled(!human);   // ので、別々に切り替わる
-    this.acornLegL.setEnabled(!human);    // 素肌の脚（足と同様にrootに固定）
-    this.acornLegR.setEnabled(!human);
-    // カプセルは矩形の胴より広い — 肩をそれに合わせて外へ動かす
-    const sx = human ? 0.28 : 0.34;
-    this.armPivotL.position.x = -sx;
-    this.armPivotR.position.x = sx;
-    if (this.sideApplied) this.setNumberSide(this.numberSide); // 番号をこのボディへ移す
-    // このモード用に再ポーズ: 着席のどんぐりは腰を膝の上に折り、着席の人型は
-    // 折り畳んだ脚の上に座る（どちらの場合もまずどんぐりの折り畳みを解除）
-    if (this.seated && !human) this.foldAcornSeat();
-    else this.unfoldAcornSeat();
-    this.refreshScale();
-  }
-
   // 胸が腰からどこまでツイストできるか（どちらの向きも）。実際の胴は足を回さねば
   // ならなくなる前に~60-70°までいける。
   static readonly TWIST_MAX = 1.15;
 
-  /** 上半身をツイストして、root（脚、足）が自身の向きを保ったまま胸がワールド点を
-   *  向くようにする — 走りながら受ける、並走しながらドライブへ追随する。TWIST_MAXに
-   *  クランプし平滑化する。rootの向き付近を狙う（またはスクエアに立つ）と
-   *  ゼロへ巻き戻る。 */
-
   // 頭が胸を越えてどこまで回れるか（胴のツイストの上に）。
   static readonly HEAD_MAX = 0.95;   // ~54°
-
-  /** 胸のツイストの上に重ねて、頭を回してワールド点を見る — 片方向へ動く/向いた
-   *  選手でもボール（やマーク）を見続けられる。胸を越えてHEAD_MAXにクランプし
-   *  平滑化する。胸が既に向いている方を見るとゼロへ巻き戻る。 */
-
-  /** 胸を今すぐ(x,z)へ向ける（イージングなし） — 両手パスは胸を的へ正対させて
-   *  投げる。胴はそこへツイストする。足は胴が賄えない分だけ回る（|twist|は
-   *  TWIST_MAXで上限）ので、上半身が受け手に定まる間、足は遅れうる
-   *  （「足はズレていても」）。 */
-
-  /** 胸が現在向いている方向とワールド点への方向の間の符号付き角度(rad)。
-   *  0=的が胸の真正面。±π/2=真横。±π/2を越える=上半身の後ろ（そこへのパスは
-   *  彼が向き直す必要がある）。 */
-
-  /** 胸を即座に腰の上へスクエアに戻す（ベンチ着席、リセット）。 */
-
-  /** 姿全体をヨーさせて、胸（番号の反対側）がワールド点を向くようにする —
-   *  ベンチの選手が目でボールを追う。コート上のボディはヨーしない（すべての
-   *  ゲーム計算がそれを前提とする）ので、これはベンチ専用。 */
 
   // --- ベンチのアイドル: 各自の個性で試合を眺める ---
   benchGazeOff = 0;                       // 個人的な視線のオフセット(rad)
   benchGazeT = 0;                         // 次の向け直しまでの時間
   benchActT = 1 + Math.random() * 5;      // 次のそわそわまでの時間
   benchArmT = 0;                          // 現在の腕のジェスチャーの残り時間
-
-  /**
-   * ベンチに座ってボールを眺める1フレーム: 視線は数秒ごとに漂う個人的な
-   * オフセットとともにボールを追い、数秒ごとに小さなランダムなそわそわが発火する
-   * — 小さなホップ、片手を半分上げる、腕を広げる。自身のジャンプ減算とメッシュ
-   * 同期を処理する（ベンチの選手はコート上の毎フレーム更新を受けない）。
-   */
-
-  /** コート上のボディをワールド点へ向ける。このフレームで最大 `maxStep` ラジアン
-   *  までイージングするので、選手はプレー（ボール、または攻めるバスケット）を
-   *  カクつかずに追う。faceTowardと同じ胸の向き規約を使う。腕のリグ(aimArm)は
-   *  結果として生じるヨーを織り込む。 */
-
-  /** ヨーをクリアする（試合開始/ベンチの視線）。ボディは次の向き更新で再び
-   *  スクエアになる。 */
-
-  /** うなだれ: 腰と脚は直立のまま — 上半身だけが前へかがみ（胴のピッチ）、腕は
-   *  だらりと垂れる。とぼとぼとベンチへ戻る間もこの姿勢を保つ（脚は下で歩き続ける）。
-   *  毎フレーム呼んで保持する。resetTwist()/sit()/resetFacing()が体をまっすぐに戻す。 */
-
-  /** ファウルリアクションを開始する。`pushX/pushZ` は接触が彼を弾いたワールド方向
-   *  （0,0=不明 → 単純に後ろへのけぞる）。`strength` (0..1) がのけぞりの強さ、
-   *  継続時間、よろけになる確率をスケールする。 */
-
-  /** ファウルリアクションのポーズの1フレーム。runArmsの後に呼ぶ（動いている間は
-   *  腕を占有する）。減算はtickCooldownで行う。 */
-
-  /** 守備成功の演出を開始する（純粋に見た目のみ）。ファウルリアクションが既に
-   *  動いている場合は無視する（ブロックからのファウルは接触の演出を保つ）。 */
-
-  /** 守備成功のポーズの1フレーム。runArms/poseFoulReactionの後に呼ぶ（動いている間は
-   *  腕+ひるみの傾きを占有する）。減算はtickCooldownで行う。呼び出し側は、選手が
-   *  アクティブなボールの仕事（ハンドリング、シュート、まだ空中、ルーズボールへの
-   *  スクランブル）を持つ間はこれを抑止する。 */
 
   /** パス/シュートのフォロースルー中は true — 動き出してはいけない。 */
   get rooted(): boolean {
@@ -1094,8 +824,8 @@ export class Player {
   tiltZ = 0;
 
   // 脚のジオメトリ/ポーズの定数。
-  private static readonly HIP_Y = 0.92;      // 股関節ピボットの高さ（makeLegと一致）
-  private static readonly SEAT_HIP = 0.46;   // 着席時、腰はベンチ座面に置く
+  static readonly HIP_Y = 0.92;      // 股関節ピボットの高さ（makeLegと一致）
+  static readonly SEAT_HIP = 0.46;   // 着席時、腰はベンチ座面に置く
   static readonly SIT_HIP = 1.45;    // 腿が~水平（前方）まで振り上がる
   static readonly SIT_KNEE = -1.55;  // 脛が床へ折れ戻る
   // どんぐりの着席: 腰が腰-胸の切断面で90°前方へ折れ（膝の上に見える）、
@@ -1106,27 +836,7 @@ export class Player {
   static readonly SIT_FOLD = 1.15;      // 着席時の腰の折り（~66°、きつい90°より緩やか）
   static readonly ACORN_WAIST_LEN = 0.50; // ピボット→腰先端の長さ（旋盤プロファイルから）
   static readonly ACORN_FOOT_Z = 0.02;  // 立ちスタンス: 足は後ろ寄りに配置
-  private static readonly ACORN_SPLAY = 0.30;   // 立ちスタンス: つま先を外へ開く（各~17°）
-
-  /** 選手の身長に対する垂直スケール。 */
-  private refreshScale(): void {
-    this.root.scaling.y = this.height / 1.95;
-  }
-
-  /** ボディバランス(フィジカル)が胴の前後の厚み（Zの奥行き）を決める: 安定して
-   *  強い99はフルの体格を保つ。65以下は3分の2（一般的な最小）まで細くなり、
-   *  その間は線形。胸、腰、それらの背番号シェルはすべて一緒に圧縮されるので、
-   *  番号は（今や浅くなった）背中に留まる。頭、腕、脚は奥行きを保つ。純粋に見た目のみ。 */
-  private refreshBodyDepth(): void {
-    const t = clamp((this.attr.balance - 65) / (99 - 65), 0, 1);
-    const z = 2 / 3 + t * (1 / 3);   // 0.667（≤65）.. 1.0（99）
-    this.acornNode.scaling.z = z;
-    this.humanNode.scaling.z = z;
-    this.numAcornPlus.scaling.z = z;
-    this.numAcornMinus.scaling.z = z;
-    this.numHumanPlus.scaling.z = z;
-    this.numHumanMinus.scaling.z = z;
-  }
+  static readonly ACORN_SPLAY = 0.30;   // 立ちスタンス: つま先を外へ開く（各~17°）
 
   // どんぐりのボディを着席ポーズに折り畳む: 腰が胸側へ水平まで振り上がり（前 =
   // -numberSide·Z なので、rotation.x = +90°·ns が下向きの腰を -ns·Z へ対応させる）、
@@ -1139,189 +849,10 @@ export class Player {
     return Player.ACORN_CUT - Player.ACORN_WAIST_R * (Math.cos(f) + Math.sin(f));
   }
 
-  sync(): void {
-    if (this.seated) {
-      // リグを下げて（折り畳んだ）腰がベンチ座面に合うようにする。折り畳んだ脚は
-      // 前で床に届く。rotation.yはbenchIdle/faceTowardが設定する — それを保つ。
-      // 直立のまま（傾きなし）。どんぐりのボディは、折り畳んだ腰の下面（ヒンジから
-      // 腰の半径を引いたもの）が座面に置かれるまで下がる — 胸は膝の上に乗り、
-      // シューズはfoldAcornSeatが床へ持ち上げ戻す。
-      const s = this.height / 1.95;
-      const rootY = HUD_OPTS.model === "acorn"
-        ? Player.SEAT_SURF - Player.acornSeatDrop() * s
-        : Player.SEAT_HIP - Player.HIP_Y * s;
-      this.root.position.set(this.pos.x, rootY + this.jumpY(), this.pos.z);
-      this.root.rotation.x = 0;
-      this.root.rotation.z = 0;
-      this.tiltX = this.tiltZ = 0;
-      return;
-    }
-    this.root.position.set(this.pos.x, this.jumpY(), this.pos.z);
-    // 見える体の傾き: 姿全体を確定した重心へ傾ける。ワールドの傾きベクトル →
-    // コードベースで検証済みの規約（RotationY(θ)がローカル+Zを(sinθ,0,cosθ)へ
-    // 対応させる — faceToward参照）を使ってヨーローカルフレームへ変換し、rootを
-    // ピッチ/ロールする。平滑化するので揺さぶりがカクつきでなく重心移動に見える。
-    const m = this.lean * 0.30;                     // フルの傾きで最大~17°
-    let tx = 0, tz = 0;
-    if (Math.abs(m) > 0.02) {
-      const wx = this.leanAxisX * m, wz = this.leanAxisZ * m;
-      const th = this.root.rotation.y;
-      const c = Math.cos(th), s = Math.sin(th);
-      const lx = wx * c - wz * s;                   // ヨーローカルフレームでの傾き
-      const lz = wx * s + wz * c;
-      tx = lz;                                      // ピッチ: ローカル+Zへ傾ける
-      tz = -lx;                                     // ロール: ローカル+Xへ傾ける
-    }
-    this.tiltX += (tx - this.tiltX) * 0.25;
-    this.tiltZ += (tz - this.tiltZ) * 0.25;
-    this.root.rotation.x = this.tiltX + this.flinchPitch;   // + ファウルひるみの後ろへのけぞり
-    // どんぐりのボディは足の羽ばたきに合わせて左右によちよち揺れる（updateAcornFeetで
-    // 平滑化、静止/空中や人型モードでは0）。ファウルひるみのロールは角度から来た
-    // 一撃で彼を横へ傾ける
-    this.root.rotation.z = this.tiltZ + this.flinchRoll + (HUD_OPTS.model === "acorn" ? this.acornWaddle : 0);
-  }
-
-  /** （編集されたかもしれない）ロースターdefから名前/身長/ロール/優先度/派生値を
-   *  読み直す。`attr` はライブ参照なので、能力値の編集は既に反映されている。 */
-  applyDef(def: PlayerDef): void {
-    this.role = def.role;
-    this.attr = def.attr;   // 再バインド: 試合前のスワップはdefオブジェクトを差し替えうる
-    this.abilities = new Set(def.abilities ?? []);
-    this.runSpeed = 3.2 + rate(def.attr.speed) * 4.8; // コンストラクタと同期を保つ
-    this.offPriority = computeOffPriority(def);
-    this.playmaking = roleOffense(def.role).playmaking;
-    // 評価ロールを実挙動へ: 仮想特能の付与と優先度/プレイメイキング補正。
-    // これで「エースにはボールが集まる」「ロックダウンは常時マンマーク」等が
-    // 既存の特殊能力/優先度の配線に乗って動く。
-    this.evalRole = def.evalRole;
-    this.offAction = offActionOf(def.evalRole);
-    this.choiceRank = def.choiceRank;
-    this.hand = def.hand ?? "R";
-    this.offhandAcc = def.future?.offhandAcc || 5;
-    this.offhandFreq = def.future?.offhandFreq || 5;
-    const rb = def.evalRole ? ROLE_BEHAVIOR[def.evalRole] : undefined;
-    if (rb) {
-      for (const k of rb.ab ?? []) this.abilities.add(k);
-      this.offPriority = clamp(this.offPriority + (rb.pri ?? 0), 0, 1);
-      this.playmaking = clamp(this.playmaking + (rb.pm ?? 0), 0, 1);
-    }
-    // ディフェンスロール（オフェンスロールとは独立）: 守備の仮想特能と常時全力。
-    this.defRole = def.defRole;
-    this.lockDef = false;
-    this.defEffortGear = undefined;
-    const db = def.defRole ? DEF_ROLE_BEHAVIOR[def.defRole] : undefined;
-    if (db) {
-      for (const k of db.ab ?? []) this.abilities.add(k);
-      this.lockDef = !!db.lockEffort;
-      this.defEffortGear = db.effort;
-    }
-    if (def.name !== this.name) {
-      this.name = def.name;
-      if (!Player.HEADLESS) { this.drawNameTag(); this.applyLook(); }   // 見た目のみ — ヘッドレスではスキップ
-    }
-    if (def.height !== this.height) {
-      this.height = def.height;
-      this.refreshScale();   // 姿を新しい身長へ再スケール（着席の潰しを保つ）
-    }
-    this.refreshBodyDepth();   // 交代で入った選手のボディバランスが胴の奥行きを決める
-  }
-
-  // 浮遊ネームタグとその下のスタミナゲージを描画する。背番号は名前の横ではなく
-  // 選手の背中（デカール）にある。
-  // ゲージはタンクの残り(1 - fatigue)を示す: 元気なら緑、息が上がると
-  // アンバー、バテると赤。
-  drawNameTag(): void {
-    const ctx = this.nameTex.getContext() as unknown as CanvasRenderingContext2D;
-    ctx.clearRect(0, 0, 256, 64);
-    // 背景ボックスなし — ドロップシャドウがコート上でテキストを読みやすく保つ
-    ctx.shadowColor = "rgba(0,0,0,0.9)";
-    ctx.shadowBlur = 6;
-    ctx.fillStyle = "#fff";   // 白がコート上で最も読みやすい（チーム=ユニフォーム色）
-    // 長いデータベース名（例: クリスティアーノ・ロナウド）はタグに収まるよう縮小する
-    const size = this.name.length > 11 ? 18 : this.name.length > 7 ? 24 : 30;
-    ctx.font = `bold ${size}px sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(this.name, 128, 24);
-
-    // スタミナゲージ（トラック+フィル） — HUDがネームタグに表示する設定のときのみ。
-    // "icon"モードでは代わりに下部HUDの顔アイコンの下に置かれる
-    if (HUD_OPTS.staminaOn === "name") {
-      const left = 14, top = 46, width = 228, height = 10;
-      const frac = clamp(1 - this.fatigue, 0, 1);
-      ctx.fillStyle = "rgba(255,255,255,0.22)";
-      ctx.fillRect(left, top, width, height);
-      ctx.fillStyle = frac > 0.5 ? "rgb(80,220,110)"
-        : frac > 0.25 ? "rgb(240,200,70)" : "rgb(235,80,60)";
-      ctx.fillRect(left, top, width * frac, height);
-    }
-    ctx.shadowBlur = 0;
-
-    this.nameTex.update();
-    this.namePlane.isVisible = HUD_OPTS.showNames;   // コート上のネームタグを切り替える
-    this.gaugeDrawn = this.fatigue;
-    this.gaugeRev = HUD_OPTS.rev;
-  }
-
-  /** チームの現在アクティブなユニフォーム（ホーム/アウェイ）からこの選手のキットを
-   *  再着色する。TEAM_UNIFORM変更後に呼ばれ、スワップがライブに表示される。 */
-  applyUniform(): void {
-    const u = uniformOf(this.team);
-    this.topMat.diffuseColor = new Color3(u.top.r, u.top.g, u.top.b);
-    this.bottomMat.diffuseColor = new Color3(u.bottom.r, u.bottom.g, u.bottom.b);
-    this.sleeveMat.diffuseColor = new Color3(u.sleeve.r, u.sleeve.g, u.sleeve.b);
-    this.shoeMat.diffuseColor = new Color3(u.shoes.r, u.shoes.g, u.shoes.b);
-  }
-
-  /** HUDオプションに関わらず浮遊ネームタグを隠す/表示する — 試合前のイントロは
-   *  タグを自身のキャプションボードに置き換える。`true` で復元しても、ユーザーの
-   *  HUD_OPTS.showNames設定は尊重する。 */
-  setNameTagVisible(v: boolean): void {
-    this.namePlane.isVisible = v && HUD_OPTS.showNames;
-  }
-
-  /** 両腕を脇に垂らし、肘を少し曲げる（既定ポーズ）。 */
-
-  // ボールをハンドリングしていない選手の腕。前へ走るとストライドに合わせて前後に
-  // 振る（同じ側の脚と逆位相、肘は曲げたまま） — どんぐりのボディも振るが、
-  // 半分ほどの振り幅（ずんぐりしたペンギンの腕）。バックペダル（胸の向きに逆らって
-  // 動く — 後退する守備者）ではバランスポーズに切り替わる: 両腕を低く少し前へ出し、
-  // 足に合わせてはためく。歩行/静止では休める。poseHands()が全員にこれを呼び、
-  // その後でボールの腕を上書きする。
   backArms = false;   // ヒステリシスで閾値付近でスタイルがちらつかないように
   lastDt = 1 / 60;    // 最後のフレーム長、レート制限された腕のスルー用
   // > 0 の間、setArmDirは腕を即座にではなくこのrad/sで目標へ回す — 弱い守備者は
   // 手をゆっくり向け直すので、切り替えが遅れる。
   armRateCap = 0;
-
-  /** 右手（または両手）を伸ばして手のひらが `world` — ボール — に合うようにする。
-   *  肘が伸びて手のひらが狙った点に実際に届く。 */
-
-  /** ディグ(掻き出し): 片手で伸ばし、上半身をボールへ回転させて先行する肩が横切り、
-   *  手がボールへ大きく伸びる。反対の腕はバランスのため後ろへ振れる。守備者が
-   *  はたき出したルーズボールを突くのに使う — 両手でつかむのではなく、
-   *  思い切った踏み込み。 */
-
-  /** 両手のホールド: 手のひらがボールを両側から包む — ボールの両側に片手ずつ、
-   *  ボール1個分の幅を空けて — 両腕が同じ点を狙う（手のひらがボール越しに触れる）
-   *  のではなく。キャッチとギャザーに使い、ボールが手の間に収まり腕とともに
-   *  動くようにする。 */
-
-  /** ボールがある側と同じ側の手でドリブル/保持する — 左腰へ運んだボールは右腕を
-   *  体を横切って（越えて）伸ばすのではなく左手で持つ、そしてその逆も。 */
-
-  /** 両腕を大きく広げる — 左右のドライブを壁で防ぐアクティブな手。`rate` (rad/s)が
-   *  切り替えをレート制限する。0は即座に切り替える（ベンチ/非守備用途）。 */
-
-  /** ストレートドライブを止める: ボールに近い手が前かつ低く出て侵入を壁で防ぎ
-   *  ボールを突く（スティール）、逆の手はスライド中のバランスのため低く外へ構える。
-   *  `rate` が向け直しをレート制限する。 */
-
-  /** パスをディナイする: 片手を斜めに突き出す — ボール側へ外へ、上へ、バスケットへ
-   *  向けて後ろへ角度をつける — レーンを壁で塞ぎ、パスが彼の後ろへ滑り込めない
-   *  ようにする。胸を横切る横方向のスイングは許容する（それでよい）。 */
-
-  /** 垂直の（ジャンプしない）シュートコンテスト: 両手を垂直にし、床を離れずに
-   *  挑む（空中のコンテストは代わりにボールへ手を伸ばす）。 */
 
 }

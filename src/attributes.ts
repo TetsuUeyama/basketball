@@ -1,6 +1,7 @@
 import { clamp } from "./util";
 import { PLAYER_DB, DbPlayer } from "./playerdb";
 import { CLUBS } from "./clubdb";
+import { resolveLook, playerLook, type PlayerLook } from "./objects/player/player-look";
 
 // ---------------------------------------------------------------------------
 // 選手の能力値。すべての能力値は 0..100。25項目のスキーマはユーザーの仕様に従う
@@ -146,6 +147,9 @@ export interface PlayerDef {
   hand?: "R" | "L";
   // 安定度は未配線。逆手精度/逆手頻度は利き手システムが使用
   future?: { stability: number; offhandAcc: number; offhandFreq: number };
+  // 見た目（肌/髪の色+髪型）。playerdb の look番号 → resolveLook で解決。DBから作る def
+  // には必ず入る。DB外の初期ダミー等では未設定 → 利用側は playerLook(name) にフォールバック。
+  look?: PlayerLook;
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +346,7 @@ const MAX = A(99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99
 // ポジション、身長、能力値、特殊能力、利き手)。試合前の選手ピッカーが、ロスタースロットに
 // 触れずに4000人超の任意の選手をプレビューするのに使う。
 export function makeDefFromDb(p: DbPlayer): PlayerDef {
-  const [name, role, hcm, ratings, mask, extras, hand] = p;
+  const [name, role, hcm, ratings, mask, extras, hand, look] = p;
   const attr = {} as Attributes;
   ATTR_META.forEach((m, k) => { attr[m.key] = clamp(ratings[k] ?? 50, 0, 100); });
   return {
@@ -350,6 +354,7 @@ export function makeDefFromDb(p: DbPlayer): PlayerDef {
     abilities: ABILITY_META.filter((_, b) => mask & (1 << b)).map((m) => m.key),
     hand: hand === "L" ? "L" : "R",
     future: { stability: extras[0] ?? 0, offhandAcc: extras[1] ?? 0, offhandFreq: extras[2] ?? 0 },
+    look: look ? resolveLook(look) : playerLook(name),   // DBのlook番号→見た目（無ければ名前フォールバック）
   };
 }
 
@@ -366,6 +371,7 @@ export function applyDbPlayer(def: PlayerDef, p: DbPlayer): void {
   def.abilities = src.abilities;
   def.hand = src.hand;
   def.future = src.future;
+  def.look = src.look;   // 見た目もDB選手のものへ更新（交代/入替でコート上の頭・HUDが追随）
 }
 
 // データベースから1チーム分の新しい13人ロスターを引く。相手チームにすでにいる選手を
