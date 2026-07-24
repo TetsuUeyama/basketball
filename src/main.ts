@@ -6,7 +6,8 @@ import {
 import { buildCourt } from "./court";
 import { BroadcastCamera } from "./camera";
 import { Game } from "./game";
-import { Player } from "./entities";
+import { optimizeLineups } from "./systems/lineups";
+import { Player } from "./player";
 import { ROSTER } from "./attributes";
 import { UI } from "./ui";
 import { TEAM_NAMES, TEAM_COLORS } from "./config";
@@ -64,7 +65,7 @@ shadow.addShadowCaster(game.ball.mesh);
 const ui = new UI();
 ui.onRestart = () => game.reset();                       // restart the current game
 ui.onBack = () => game.reset();                          // result → back to a clean pre-game
-ui.onSetupLineups = () => game.optimizeLineups();        // opponent-aware default five when a matchup is first set
+ui.onSetupLineups = () => optimizeLineups(game);         // opponent-aware default five when a matchup is first set
 ui.onModelToggle = () => game.applyModelAll();           // 人型 ⇄ どんぐり体形を全員へ即時反映
 ui.onUniformToggle = () => {                             // ホーム ⇄ アウェイのユニフォームを全員へ即時反映
   game.applyUniforms();

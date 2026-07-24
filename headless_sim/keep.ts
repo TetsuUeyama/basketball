@@ -1,7 +1,7 @@
 import "./stubs";
 import { NullEngine, Scene } from "@babylonjs/core";
 import { Game } from "../src/game";
-import { Player } from "../src/entities";
+import { Player } from "../src/player";
 import { buildCourt } from "../src/court";
 import { clubTeam } from "../src/attributes";
 import { CLUBS } from "../src/clubdb";

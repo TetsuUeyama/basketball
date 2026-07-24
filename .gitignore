@@ -4,3 +4,4 @@ dist
 dev.out
 .DS_Store
 headless_sim/run.mjs
+headless_sim/keep.mjs

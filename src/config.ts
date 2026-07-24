@@ -36,6 +36,10 @@ export function hoopFloor(team: number) {
 export const SHOOT_RANGE = 7.6;   // max distance a player will normally shoot from
 export const THREE_DIST = 6.75;   // beyond this counts as a 3-pointer
 
+// シュートモーションのボール高さ（ロード頂点＝頭上／ギャザー開始＝胸元）
+export const SHOT_SET_Y = 2.1;    // overhead ball height at the top of the load
+export const SHOT_GATHER_Y = 1.2; // where the gather begins — chest / pocket
+
 // Where the stamina gauge is shown. "name": on the floating 3D name tag above
 // each player (default). "icon": under the bottom-HUD face icon instead. `rev`
 // bumps whenever the toggle flips so the name tags force a repaint even though
@@ -46,6 +50,12 @@ export const HUD_OPTS: { staminaOn: "name" | "icon"; showNames: boolean; model: 
 export const PLAYER_SPEED = 6.2;  // offensive run speed
 export const DEF_SPEED = 6.5;     // defenders are a touch quicker so they can recover
 export const PASS_SPEED = 13;     // pass travel speed
+export const LANE_W = 1.1;        // 守備がパスレーンを脅かす横方向の距離(m)
+// 手のひら当たり判定モデル: 守備のリーチ半径を(守備−オフェンス)でスケール。false で
+// 旧来の固定距離モデルへ。スティール/コンテスト/ブロックの確率ゲートに使う。
+export const PALM_HITBOX = true;
+// これより長いパスは投げない(クロスコートの一発はリードではない)
+export const MAX_PASS = 13;
 // Shot clock scaled to the compressed quarter (60s vs the NBA's 720s) AND the
 // fast pace: 14/10 rarely bit, so 7 makes it a genuine pressure. Partial resets
 // (after a foul / offensive rebound) → 5.

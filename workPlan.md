@@ -73,6 +73,36 @@ Babylon.js 製フルコート 5対5 の**観戦バスケットボールシミュ
 - [ ] 選手モデル/モーションの強化（soccer-sim の腕・体の向きの知見を流用可）
 - [ ] リプレイ・ハイライト演出
 
+## game.ts 分割計画（レイヤード・ドメイン設計 / 2026-07-22 着手）
+
+`src/game.ts`（約6700行・単一 `class Game`・フィールド114個）を機能別に段階分割する。
+公開API（`update`/`reset`/`applyRoster`/`syncVisuals` と `score`/`state`/`players`/`ball`/`lastEvent` 等、
+ui.ts / main.ts が参照）は維持する。
+
+### 目標アーキテクチャ（層）
+```
+src/
+  objects/     オブジェクト＋アニメ（既存: entities.ts の Player/Ball, court.ts）
+  moves/       具体ムーブ = アニメ＋発動関数（歩/走/ダッシュ/ジャンプ/シュート各種/パス各種/守備/ドリブル）
+  cognition/   個人の状況判断（handler/offball/defender の decide, pass-read）
+  tactics/     チーム戦術（offense/defense scheme, subs）
+  resolution/  アクションの効果 = 判定ルール（shot-outcome, contest-block, steal-intercept, foul, rebound）
+  core/        共有状態(GameState) と 公開API＋updateループ＋状態機械（薄い game.ts）
+  eval.ts      層をまたぐ純粋な評価プリミティブ
+```
+設計の肝: (1) アニメは選手オブジェクトに残し、発動と効果を分離。(2) 114フィールドは `core/game-state.ts`
+に集約し各層へ渡す（層分けと直交する土台）。
+
+### 移行順（都度 tsc＋vite build＋ヘッドレスで挙動不変を確認）
+- [x] Phase 0: 現状コミット（fe0cafc）
+- [ ] Phase 1: 純粋な評価プリミティブを `eval.ts` へ（着手中）:
+      rimProtect / perimContest / palmRadius / twWeight / reactionLag /
+      shootRangeOf / gatherFor / deepThreeOK / effShootRange / shotWindupFor / wontLoadUp
+- [ ] Phase 2a: `resolution/`（効果）を純粋な確率計算から抽出（shot make% / block / intercept / foul）
+- [ ] Phase 2b: 独立性の高いステートフル機能を移設（交代/ベンチ → FT → スクリーン → インバウンド/ティップ → ポーズ）
+- [ ] Phase 3: `core/game-state.ts` に状態集約 → cognition/tactics を関数モジュール化
+- [ ] Phase 4: 中核の密結合（decide/runDefense/loose/update ループ）を最後に整理
+
 ## 設計上の前提（変更しないこと）
 
 - **物理エンジン不使用**。ボールは軌道計算のみ。

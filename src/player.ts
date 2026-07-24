@@ -18,7 +18,7 @@ export interface Stats {
 }
 
 // Quaternion rotating the default down-pointing arm (0,-1,0) onto a unit vector.
-function aimDownTo(vx: number, vy: number, vz: number): Quaternion {
+export function aimDownTo(vx: number, vy: number, vz: number): Quaternion {
   const dot = -vy;                                   // dot((0,-1,0),(vx,vy,vz))
   if (dot > 0.9999) return Quaternion.Identity();
   if (dot < -0.9999) return Quaternion.RotationAxis(new Vector3(1, 0, 0), Math.PI);
@@ -64,10 +64,10 @@ export class Player {
   readonly root: TransformNode;
 
   // short arms whose hands reach out to hold/dribble/pass/shoot the ball
-  private readonly armPivotL: TransformNode;
-  private readonly armPivotR: TransformNode;
-  private elbowL!: TransformNode;   // upper-arm ↔ forearm joint (bent at rest, straight to reach)
-  private elbowR!: TransformNode;
+  readonly armPivotL: TransformNode;
+  readonly armPivotR: TransformNode;
+  elbowL!: TransformNode;   // upper-arm ↔ forearm joint (bent at rest, straight to reach)
+  elbowR!: TransformNode;
 
   // floating name tag, redrawn when the name changes
   private nameTex!: DynamicTexture;
@@ -85,28 +85,28 @@ export class Player {
   private numHumanMinus!: Mesh;
   private numAcornPlus!: Mesh;
   private numAcornMinus!: Mesh;
-  private numberSide = 1;   // which local Z side currently shows the number
+  numberSide = 1;   // which local Z side currently shows the number
   private sideApplied = false; // Game hasn't picked a back side yet — keep shells hidden
 
   // Upper body carrier: chest, head, arms and the jersey number ride this and
   // TWIST toward the play (twistToward), while the root — and with it the legs
   // and feet — faces the direction of travel. Lets a player keep running one
   // way with his chest turned to receive, pass, or shadow a driver.
-  private torsoNode!: TransformNode;
-  private torsoTwist = 0;   // smoothed twist (rad), clamped to ±TWIST_MAX
-  private headNode!: TransformNode;   // head carrier — yaws on TOP of the chest twist
-  private headYaw = 0;      // smoothed head turn (rad) relative to the chest, ±HEAD_MAX
+  torsoNode!: TransformNode;
+  torsoTwist = 0;   // smoothed twist (rad), clamped to ±TWIST_MAX
+  headNode!: TransformNode;   // head carrier — yaws on TOP of the chest twist
+  headYaw = 0;      // smoothed head turn (rad) relative to the chest, ±HEAD_MAX
 
   // Both body styles exist from construction; applyModel() shows one and hides
   // the other so the style can be flipped live from the HUD menu.
   private humanNode!: TransformNode;   // rectangular torso (ribbons + caps)
   private acornNode!: TransformNode;   // the acorn figure (chest + waist + shoe feet)
-  private acornWaistPivot!: TransformNode; // waist rides this, at the waist-chest cut —
+  acornWaistPivot!: TransformNode; // waist rides this, at the waist-chest cut —
                                        // sitting folds it 90° forward (the lap)
-  private acornFootL!: TransformNode;  // shoe-shaped feet — asymmetric, so both the
-  private acornFootR!: TransformNode;  // position AND the yaw flip with numberSide
-  private acornLegL!: TransformNode;   // bare-skin leg cylinders bridging waist→shoe
-  private acornLegR!: TransformNode;   // (acorn model only; planted on the root)
+  acornFootL!: TransformNode;  // shoe-shaped feet — asymmetric, so both the
+  acornFootR!: TransformNode;  // position AND the yaw flip with numberSide
+  acornLegL!: TransformNode;   // bare-skin leg cylinders bridging waist→shoe
+  acornLegR!: TransformNode;   // (acorn model only; planted on the root)
   private eyeL!: Mesh;                  // face eyes — sit on the front (-numberSide·Z)
   private eyeR!: Mesh;
   private scene!: Scene;               // kept so hair meshes can be rebuilt later
@@ -155,7 +155,7 @@ export class Player {
   // to settle before he can explode into the next jump or sprint (not fully
   // rooted: he can still shuffle, just can't leap again or take off at speed)
   landT = 0;
-  private landDur = 0;   // the full landing-硬直 length, so accelSpeed can EASE the
+  landDur = 0;   // the full landing-硬直 length, so accelSpeed can EASE the
                          // movement throttle back over it (a long recovery isn't a
                          // flat near-standstill — he gets moving, just can't re-jump)
   private plantDur = 0;  // same, for the crossover/stop plant (動き直し)
@@ -218,26 +218,26 @@ export class Player {
   // pause: "hurt" sells the contact (arms fly out, body rocks back), "and1"
   // is the flex (fists up + a hop) before heading to the line
   foulReactT = 0;
-  private foulReactDur = 0;
-  private foulReactKind: "hurt" | "and1" = "hurt";
-  private flinchPitch = 0;   // extra root pitch while flinching, added in sync()
-  private flinchRoll = 0;    // extra root roll while flinching (directional foul tilt)
+  foulReactDur = 0;
+  foulReactKind: "hurt" | "and1" = "hurt";
+  flinchPitch = 0;   // extra root pitch while flinching, added in sync()
+  flinchRoll = 0;    // extra root roll while flinching (directional foul tilt)
   // defensive-success beat — a brief, purely visual celebration/assertion played
   // right after a WON defensive play so a good stop actually READS on screen:
   // "block" (triumphant fists up + a hop), "steal" (a low double fist-pump),
   // "stop" (held his ground — arms out, braced forward). Ticked in tickCooldown,
   // posed by poseDefWin() after runArms/poseFoulReaction.
   defWinT = 0;
-  private defWinDur = 0;
-  private defWinKind: "block" | "steal" | "stop" = "block";
+  defWinDur = 0;
+  defWinKind: "block" | "steal" | "stop" = "block";
   // direction the contact knocked him (world unit XZ; 0,0 = no info → back-rock),
   // its strength (0..1), and whether it knocked him off balance into a stumble
-  private foulPushX = 0;
-  private foulPushZ = 0;
-  private foulStrength = 0;
-  private foulStumble = false;
-  private foulStaggerX = 0;
-  private foulStaggerZ = 0;
+  foulPushX = 0;
+  foulPushZ = 0;
+  foulStrength = 0;
+  foulStumble = false;
+  foulStaggerX = 0;
+  foulStaggerZ = 0;
 
   // --- conditioning (スタミナ/加速) ---
   // Actual speed achieved last frame (m/s), measured from displacement; the
@@ -289,27 +289,27 @@ export class Player {
   screenSide = 1;   // which side the screen frees the handler toward (-1/+1)
 
   // vertical jump animation (shots, dunks, layups, contests, rebounds)
-  private jumpRemaining = 0;
-  private jumpDur = 0;
-  private jumpHeight = 0;
+  jumpRemaining = 0;
+  jumpDur = 0;
+  jumpHeight = 0;
   // DIAGONAL leap: horizontal travel (metres) spread across the jump, so a
   // contest/block can lunge SIDEWAYS toward a shot that isn't square in front —
   // trading height for reach. Zero for a normal vertical jump. Applied in updateJump.
-  private leapX = 0;
-  private leapZ = 0;
+  leapX = 0;
+  leapZ = 0;
 
   // articulated legs: a hip pivot (thigh) + knee pivot (shin + foot) per side.
   // They swing in a walk/run cycle while playing and fold into a sitting pose on
   // the bench. Driven by updateLegs(); posed by sit()/stand().
   seated = false;
-  private hipL!: TransformNode;
-  private hipR!: TransformNode;
-  private kneeL!: TransformNode;
-  private kneeR!: TransformNode;
+  hipL!: TransformNode;
+  hipR!: TransformNode;
+  kneeL!: TransformNode;
+  kneeR!: TransformNode;
   private footL!: Mesh;
   private footR!: Mesh;
-  private stridePhase = 0;   // accumulates with distance travelled → leg swing
-  private acornWaddle = 0;   // eased penguin body-roll (rad), added to root roll in sync()
+  stridePhase = 0;   // accumulates with distance travelled → leg swing
+  acornWaddle = 0;   // eased penguin body-roll (rad), added to root roll in sync()
 
   constructor(scene: Scene, team: number, idx: number, def: PlayerDef) {
     this.scene = scene;
@@ -832,43 +832,6 @@ export class Player {
   /** Begin a jump of `height` metres lasting `dur` seconds. Optional (leapX,leapZ)
    *  is a horizontal lunge spread across the flight — a DIAGONAL jump toward a shot
    *  that isn't square in front (lower height, but reaches sideways to block it). */
-  jump(height: number, dur: number, leapX = 0, leapZ = 0): void {
-    // still gathering balance from the last landing — can't leap yet
-    if (this.landT > 0) return;
-    // don't restart a bigger jump with a smaller one mid-air
-    if (this.jumpRemaining > 0 && height <= this.jumpHeight) return;
-    this.jumpHeight = height;
-    this.jumpDur = dur;
-    this.jumpRemaining = dur;
-    this.leapX = leapX;
-    this.leapZ = leapZ;
-  }
-
-  updateJump(dt: number): void {
-    if (this.jumpRemaining > 0) {
-      // a diagonal leap carries him horizontally at a steady rate over the flight
-      // (ballistic: constant horizontal velocity), so total travel = (leapX,leapZ)
-      if (this.jumpDur > 0 && (this.leapX !== 0 || this.leapZ !== 0)) {
-        const f = Math.min(dt, this.jumpRemaining) / this.jumpDur;
-        this.pos.x += this.leapX * f;
-        this.pos.z += this.leapZ * f;
-      }
-      this.jumpRemaining = Math.max(0, this.jumpRemaining - dt);
-      if (this.jumpRemaining === 0) {
-        // landing 硬直: the centre of gravity has to settle before he can re-jump or
-        // explode. Driven by クイックネス(敏捷性) AND ジャンプ力 together — both elite
-        // reset FAST (~0.3 s), and it climbs steeply as EITHER drops (both low ≈ 2.5 s
-        // for a full jump). A ジャンプ力 player thus leaps HIGH (jump() heights) AND
-        // gathers quickly for the next one. A bigger leap resets a touch slower, a
-        // little hop faster. Blocks a re-jump and drags the first steps (accelSpeed).
-        const ability = (rate(this.attr.agility) + rate(this.attr.jump)) / 2;   // 1 = elite both
-        const base = 0.3 + Math.pow(1 - ability, 0.85) * 2.2;                    // 0.3 .. 2.5 (full jump)
-        const heightScale = clamp(0.5 + this.jumpHeight * 0.9, 0.45, 1.3);
-        this.landDur = this.landT = clamp(base * heightScale, 0.3, 2.6);
-        this.leapX = this.leapZ = 0;
-      }
-    }
-  }
 
   // Build the hair meshes for a hairstyle onto the (already-created) head. Split
   // out of the constructor so applyLook() can rebuild it when a roster swap gives
@@ -1081,111 +1044,41 @@ export class Player {
 
   // How far the chest can twist away from the hips (either way). Real torsos
   // manage ~60-70° before the feet have to come around.
-  private static readonly TWIST_MAX = 1.15;
+  static readonly TWIST_MAX = 1.15;
 
   /** Twist the upper body so the chest aims at a world point while the root
    *  (legs, feet) keeps its own facing — receiving on the run, shading a driver
    *  while sprinting alongside. Clamped to TWIST_MAX and eased; aiming near the
    *  root's own facing (or standing square) unwinds it back to zero. */
-  twistToward(x: number, z: number, dt: number, maxTwist = Player.TWIST_MAX, rate = 10): void {
-    const s = this.numberSide;
-    const fx = x - this.pos.x, fz = z - this.pos.z;
-    let want = 0;
-    if (Math.abs(fx) + Math.abs(fz) >= 0.05) {
-      let d = Math.atan2(-s * fx, -s * fz) - this.root.rotation.y;
-      while (d > Math.PI) d -= 2 * Math.PI;
-      while (d < -Math.PI) d += 2 * Math.PI;
-      want = clamp(d, -maxTwist, maxTwist);
-    }
-    const step = rate * 0.5 * dt;   // the upper body turns at HALF rate — it takes twice
-                                     // as long to twist the chest to a new facing
-    this.torsoTwist += clamp(want - this.torsoTwist, -step, step);
-    this.torsoNode.rotation.y = this.torsoTwist;
-  }
 
   // How far the HEAD can turn past the chest (on top of the torso twist).
-  private static readonly HEAD_MAX = 0.95;   // ~54°
+  static readonly HEAD_MAX = 0.95;   // ~54°
 
   /** Turn the HEAD to look at a world point, ON TOP of the chest twist — so a
    *  player moving/turned one way can still watch the ball (or his man). Clamped
    *  to HEAD_MAX beyond the chest and eased; looking where the chest already
    *  points unwinds it back to zero. */
-  lookToward(x: number, z: number, dt: number, rate = 11): void {
-    const s = this.numberSide;
-    const fx = x - this.pos.x, fz = z - this.pos.z;
-    let want = 0;
-    if (Math.abs(fx) + Math.abs(fz) >= 0.05) {
-      let d = Math.atan2(-s * fx, -s * fz) - this.root.rotation.y - this.torsoTwist;
-      while (d > Math.PI) d -= 2 * Math.PI;
-      while (d < -Math.PI) d += 2 * Math.PI;
-      want = clamp(d, -Player.HEAD_MAX, Player.HEAD_MAX);
-    }
-    this.headYaw += clamp(want - this.headYaw, -rate * dt, rate * dt);
-    this.headNode.rotation.y = this.headYaw;
-  }
 
   /** Orient the CHEST to face (x,z) NOW (no easing) — a two-handed pass is thrown
    *  chest-on to the target. The torso twists there; the feet only turn by the
    *  part the torso can't cover (|twist| capped at TWIST_MAX), so the feet may lag
    *  ("足はズレていても") while the upper body lands on the receiver. */
-  faceChestToward(x: number, z: number): void {
-    const s = this.numberSide;
-    const fx = x - this.pos.x, fz = z - this.pos.z;
-    if (Math.abs(fx) + Math.abs(fz) < 0.05) return;
-    const want = Math.atan2(-s * fx, -s * fz);       // desired chest world yaw
-    let twist = want - this.root.rotation.y;
-    while (twist > Math.PI) twist -= 2 * Math.PI;
-    while (twist < -Math.PI) twist += 2 * Math.PI;
-    if (Math.abs(twist) > Player.TWIST_MAX) {          // beyond the torso's reach → turn the feet the excess
-      this.root.rotation.y += twist - Math.sign(twist) * Player.TWIST_MAX;
-      twist = Math.sign(twist) * Player.TWIST_MAX;
-    }
-    this.torsoTwist = twist;
-    this.torsoNode.rotation.y = twist;
-  }
 
   /** Signed angle (rad) between where the CHEST currently points and the direction
    *  to a world point. 0 = the target is dead in front of the chest; ±π/2 = at his
    *  side; beyond ±π/2 = BEHIND his upper body (a pass there needs him to turn). */
-  relativeChestAngle(x: number, z: number): number {
-    const s = this.numberSide;
-    const fx = x - this.pos.x, fz = z - this.pos.z;
-    if (Math.abs(fx) + Math.abs(fz) < 1e-4) return 0;
-    const want = Math.atan2(-s * fx, -s * fz);         // world yaw to face the target
-    const chest = this.root.rotation.y + this.torsoTwist;
-    let d = want - chest;
-    while (d > Math.PI) d -= 2 * Math.PI;
-    while (d < -Math.PI) d += 2 * Math.PI;
-    return d;
-  }
 
   /** Square the chest back over the hips instantly (bench seat, resets). */
-  resetTwist(): void {
-    this.torsoTwist = 0;
-    this.torsoNode.rotation.y = 0;
-    this.headYaw = 0;                                   // straighten the head too
-    if (this.headNode) this.headNode.rotation.y = 0;
-    this.torsoNode.rotation.x = 0;   // clear any dejected forward hunch
-    this.torsoNode.position.set(0, 0, 0);   // and the dejected waist-hinge offset
-    if (!this.seated) this.acornWaistPivot.rotation.x = 0;   // waist back to vertical
-  }
 
   /** Yaw the whole figure so the chest (the side opposite the number) points at
    *  a world point — bench players following the ball with their eyes. On-court
    *  bodies never yaw (all game maths assumes it), so this is bench-only. */
-  faceToward(x: number, z: number, yawOffset = 0): void {
-    const fx = x - this.pos.x, fz = z - this.pos.z;
-    if (Math.abs(fx) + Math.abs(fz) < 0.01) return;
-    const s = this.numberSide;
-    // RotationY(θ) maps local +Z to (sinθ, 0, cosθ); the chest is local -s·Z
-    this.root.rotation.y = Math.atan2(-s * fx, -s * fz) + yawOffset;
-  }
 
   // --- bench idle: watching the game with a personality of one's own ---
-  private benchGazeOff = 0;                       // personal gaze offset (rad)
-  private benchGazeT = 0;                         // time to the next re-aim
-  private benchActT = 1 + Math.random() * 5;      // time to the next fidget
-  private benchArmT = 0;                          // current arm gesture time left
+  benchGazeOff = 0;                       // personal gaze offset (rad)
+  benchGazeT = 0;                         // time to the next re-aim
+  benchActT = 1 + Math.random() * 5;      // time to the next fidget
+  benchArmT = 0;                          // current arm gesture time left
 
   /**
    * One frame of sitting on the bench watching the ball: gaze follows it with a
@@ -1194,89 +1087,19 @@ export class Player {
    * Handles its own jump ticking and mesh sync (bench players get no on-court
    * per-frame updates).
    */
-  benchIdle(dt: number, ballX: number, ballZ: number): void {
-    this.benchGazeT -= dt;
-    if (this.benchGazeT <= 0) {
-      this.benchGazeT = rand(0.8, 2.5);
-      this.benchGazeOff = rand(-0.22, 0.22);
-    }
-    this.faceToward(ballX, ballZ, this.benchGazeOff);
-
-    this.updateJump(dt);
-    if (this.benchArmT > 0) {
-      this.benchArmT -= dt;
-      if (this.benchArmT <= 0) this.handsRest();  // gesture over — settle down
-    }
-    this.benchActT -= dt;
-    if (this.benchActT <= 0) {
-      this.benchActT = rand(2.0, 7.0);
-      const roll = Math.random();
-      if (roll < 0.35) {
-        this.jump(rand(0.06, 0.16), rand(0.25, 0.4));      // a little hop
-      } else if (roll < 0.6) {
-        this.reach(new Vector3(this.pos.x + rand(-0.4, 0.4), rand(2.1, 2.9),
-          this.pos.z + rand(-0.4, 0.4)));                   // one hand comes up
-        this.benchArmT = rand(0.4, 1.0);
-      } else if (roll < 0.8) {
-        this.armsWide();                                    // arms spread wide
-        this.benchArmT = rand(0.4, 0.9);
-      } else {
-        this.reach(new Vector3(this.pos.x, rand(2.6, 3.2), this.pos.z), true);
-        this.benchArmT = rand(0.35, 0.8);                   // both hands, briefly
-      }
-    }
-    this.sync();
-  }
 
   /** Turn an on-court body toward a world point, easing at up to `maxStep`
    *  radians this frame so a player tracks the play (the ball, or the basket he
    *  attacks) without snapping around. Uses the same chest-facing convention as
    *  faceToward; the arm rig (aimArm) now accounts for the resulting yaw. */
-  faceSmooth(x: number, z: number, maxStep: number): void {
-    const fx = x - this.pos.x, fz = z - this.pos.z;
-    if (Math.abs(fx) + Math.abs(fz) < 0.05) return;   // target on top of us — hold facing
-    const s = this.numberSide;
-    const target = Math.atan2(-s * fx, -s * fz);
-    let d = target - this.root.rotation.y;
-    while (d > Math.PI) d -= 2 * Math.PI;             // shortest angular path
-    while (d < -Math.PI) d += 2 * Math.PI;
-    this.root.rotation.y += clamp(d, -maxStep, maxStep);
-  }
 
   /** Clear any yaw (start of game / bench gaze); the body squares up again on the
    *  next facing update. */
-  resetFacing(): void {
-    this.root.rotation.y = 0;
-    this.root.rotation.x = this.root.rotation.z = 0;   // stand up straight, too
-    this.tiltX = this.tiltZ = 0;
-    this.lean = 0;
-    this.flinchPitch = 0;
-    this.resetTwist();
-  }
 
   /** うなだれ: hips and legs stay upright — only the UPPER BODY hunches forward
    *  (torso pitch) with the arms hanging dead. Trudging back to the bench keeps
    *  this posture (the legs still walk underneath). Hold it by calling every
    *  frame; resetTwist()/sit()/resetFacing() straighten the body back up. */
-  dejectedPose(): void {
-    const Pt = -this.numberSide * 0.42;                    // chest tips forward
-    const cut = Player.ACORN_CUT;
-    this.torsoNode.rotation.x = Pt;
-    this.torsoNode.rotation.y = 0;                         // no play-twist while slumped
-    this.torsoTwist = 0;
-    // hinge the lean at the WAIST cut (not the feet): offset the torso so the
-    // point at the waist stays put and only the upper body leans over it — the
-    // waist and hips stay straight instead of the whole torso slanting.
-    this.torsoNode.position.set(0, cut * (1 - Math.cos(Pt)), -cut * Math.sin(Pt));
-    this.flinchPitch = 0;                                  // root (hips/legs) stays upright
-    // keep the acorn waist itself vertical under the leaning chest
-    this.acornWaistPivot.rotation.x = -Pt;
-    // arms hang straight DOWN in world despite the torso lean (compensate the pitch)
-    this.setArmDir(this.armPivotL, -0.14, -Math.cos(Pt), Math.sin(Pt));
-    this.setArmDir(this.armPivotR, 0.14, -Math.cos(Pt), Math.sin(Pt));
-    this.bendElbow(this.elbowL, 0.05);
-    this.bendElbow(this.elbowR, 0.05);
-  }
 
   /** Tick down the post-pass/shot recovery cooldown. */
   tickCooldown(dt: number): void {
@@ -1311,117 +1134,17 @@ export class Player {
   /** Kick off a foul reaction. `pushX/pushZ` is the world direction the contact
    *  knocked him (0,0 = unknown → a plain back-rock); `strength` (0..1) scales how
    *  hard he rocks, how long it lasts, and the chance it becomes a stumble. */
-  foulReaction(kind: "hurt" | "and1", pushX = 0, pushZ = 0, strength = 0.5): void {
-    this.foulReactKind = kind;
-    const s = clamp(strength, 0, 1);
-    this.foulStrength = s;
-    const pl = Math.hypot(pushX, pushZ);
-    if (pl > 0.01) { this.foulPushX = pushX / pl; this.foulPushZ = pushZ / pl; }
-    else { this.foulPushX = this.foulPushZ = 0; }        // no direction → back-rock
-    // a HARD, off-centre hit can BLOW him back — a little hop off his feet and a
-    // big stagger; a lighter one is just a stumble step; most are neither.
-    const hard = kind === "hurt" && pl > 0.01;
-    const knock = hard && s > 0.45 && chance(0.25 + (s - 0.45) * 1.1);   // blown back
-    // most hard contact makes him GIVE GROUND — a stagger of a few steps (the
-    // stagger drives real speed, so updateLegs actually steps the feet)
-    this.foulStumble = hard && (knock || chance(0.4 + s * 0.5));
-    // a harder hit sells longer; the stagger/knockback needs time to step & land
-    this.foulReactDur = this.foulReactT =
-      kind === "and1" ? 1.1 : knock ? (1.2 + s * 0.5) : (0.85 + s * 0.6);
-    if (kind === "and1") this.jump(0.22, 0.4);           // the flex hop
-    else if (knock) this.jump(0.16 + s * 0.18, 0.5 + s * 0.2);   // popped off the floor
-    if (this.foulStumble) {
-      const step = knock ? (1.1 + s * 1.3) : (0.55 + s * 0.8);   // a few steps back
-      this.foulStaggerX = this.foulPushX * step;
-      this.foulStaggerZ = this.foulPushZ * step;
-    } else { this.foulStaggerX = this.foulStaggerZ = 0; }
-  }
 
   /** One frame of the foul-reaction pose. Call AFTER runArms (it owns the
    *  arms while it runs); ticking happens in tickCooldown. */
-  poseFoulReaction(): void {
-    if (this.foulReactT <= 0) {
-      this.flinchPitch = this.flinchRoll = 0;   // reaction over (or interrupted) — stand back up
-      return;
-    }
-    const k = this.foulReactDur > 0 ? 1 - this.foulReactT / this.foulReactDur : 1;
-    const env = Math.sin(Math.min(1, k * 1.15) * Math.PI);   // swell in, ease out
-    if (this.foulReactKind === "and1") {
-      // the flex: both fists up beside the head, elbows folded hard
-      this.setArmDir(this.armPivotL, -0.7, 0.9, 0);
-      this.setArmDir(this.armPivotR, 0.7, 0.9, 0);
-      this.bendElbow(this.elbowL, 1.35);
-      this.bendElbow(this.elbowR, 1.35);
-      this.flinchPitch = this.flinchRoll = 0;
-    } else {
-      // sold contact: arms fly out low to catch balance
-      this.setArmDir(this.armPivotL, -1, -0.5, 0.25);
-      this.setArmDir(this.armPivotR, 1, -0.5, 0.25);
-      this.elbowL.rotation.set(0, 0, 0); this.elbowR.rotation.set(0, 0, 0);
-      if (this.foulPushX !== 0 || this.foulPushZ !== 0) {
-        // DIRECTIONAL rock: tip the body in the direction the hit sent him, harder
-        // for a stronger contact. World push → yaw-local pitch/roll (same
-        // convention as the lean tilt) so the whole figure leans off the hit.
-        const th = this.root.rotation.y;
-        const c = Math.cos(th), s = Math.sin(th);
-        const m = (0.16 + this.foulStrength * 0.34) * env;   // tilt amount
-        const wx = this.foulPushX * m, wz = this.foulPushZ * m;
-        this.flinchPitch = wx * s + wz * c;                  // tip toward local +Z
-        this.flinchRoll = -(wx * c - wz * s);                // and toward local +X
-      } else {
-        // no direction info → the old straight back-rock
-        this.flinchPitch = this.numberSide * 0.22 * env;
-        this.flinchRoll = 0;
-      }
-    }
-  }
 
   /** Kick off a defensive-success beat (purely visual). Ignored if a foul
    *  reaction is already running (a block-into-foul keeps the contact beat). */
-  defWin(kind: "block" | "steal" | "stop"): void {
-    if (this.foulReactT > 0) return;
-    this.defWinKind = kind;
-    this.defWinDur = this.defWinT = kind === "block" ? 1.25 : kind === "steal" ? 1.0 : 0.8;
-    // a small emphatic hop only if he's grounded — a blocker who is still up on
-    // the swat keeps his existing leap (this must not stomp that bigger jump)
-    if (kind === "block" && !this.airborne) this.jump(0.14, 0.4);
-  }
 
   /** One frame of the defensive-success pose. Call AFTER runArms/poseFoulReaction
    *  (it owns the arms + flinch tilt while it runs); ticking is in tickCooldown.
    *  The caller gates this out while the player has an active ball job (handling,
    *  shooting, still airborne, or scrambling a loose ball). */
-  poseDefWin(): void {
-    if (this.defWinT <= 0) return;
-    const k = this.defWinDur > 0 ? 1 - this.defWinT / this.defWinDur : 1;
-    const env = Math.sin(Math.min(1, k * 1.25) * Math.PI);     // swell in, ease out
-    const pump = Math.max(0, Math.sin(k * Math.PI * 3));       // a quick double-pump
-    if (this.defWinKind === "block") {
-      // triumphant: both fists up beside the head (the rejection flex)
-      this.setArmDir(this.armPivotL, -0.55, 0.95, 0.05);
-      this.setArmDir(this.armPivotR, 0.55, 0.95, 0.05);
-      this.bendElbow(this.elbowL, 1.1 + pump * 0.3);
-      this.bendElbow(this.elbowR, 1.1 + pump * 0.3);
-      this.flinchPitch = this.numberSide * 0.10 * env;          // slight chest-up rock back
-      this.flinchRoll = 0;
-    } else if (this.defWinKind === "steal") {
-      // low double fist-pump — fists clenched at the ribs, a couple of quick pumps
-      this.setArmDir(this.armPivotL, -0.35, -0.15 + pump * 0.25, 0.2);
-      this.setArmDir(this.armPivotR, 0.35, -0.15 + pump * 0.25, 0.2);
-      this.bendElbow(this.elbowL, 1.25);
-      this.bendElbow(this.elbowR, 1.25);
-      this.flinchPitch = -this.numberSide * 0.12 * env;         // lean into it (forward)
-      this.flinchRoll = 0;
-    } else {
-      // STOP / wall: held his ground — arms out low and forward, chest set, braced
-      this.setArmDir(this.armPivotL, -0.9, -0.35, 0.4);
-      this.setArmDir(this.armPivotR, 0.9, -0.35, 0.4);
-      this.bendElbow(this.elbowL, 0.15);
-      this.bendElbow(this.elbowR, 0.15);
-      this.flinchPitch = -this.numberSide * 0.14 * env;         // brace forward into the drive
-      this.flinchRoll = 0;
-    }
-  }
 
   /**
    * Speed available this frame (m/s): accelerates from the measured current
@@ -1619,22 +1342,22 @@ export class Player {
     return Math.sin(k * Math.PI) * this.jumpHeight;  // up then back down
   }
 
-  private tiltX = 0;  // smoothed visual body tilt (rad), applied in sync()
-  private tiltZ = 0;
+  tiltX = 0;  // smoothed visual body tilt (rad), applied in sync()
+  tiltZ = 0;
 
   // Leg geometry / pose constants.
   private static readonly HIP_Y = 0.92;      // hip pivot height (matches makeLeg)
   private static readonly SEAT_HIP = 0.46;   // hips rest at the bench-seat surface when sat
-  private static readonly SIT_HIP = 1.45;    // thigh swings up to ~horizontal (forward)
-  private static readonly SIT_KNEE = -1.55;  // shin folds back down to the floor
+  static readonly SIT_HIP = 1.45;    // thigh swings up to ~horizontal (forward)
+  static readonly SIT_KNEE = -1.55;  // shin folds back down to the floor
   // acorn sitting: the waist folds 90° forward at the waist-chest cut (it
   // reads as the lap) and the shoes tuck under it, standing on the floor
-  private static readonly ACORN_CUT = 0.72;     // waist-chest cut height (the sit hinge)
+  static readonly ACORN_CUT = 0.72;     // waist-chest cut height (the sit hinge)
   private static readonly ACORN_WAIST_R = 0.25; // waist radius (constructor's WR)
-  private static readonly SEAT_SURF = 0.42;     // bench seat surface the folded waist rests on
-  private static readonly SIT_FOLD = 1.15;      // waist fold when sat (~66°, gentler than a hard 90°)
-  private static readonly ACORN_WAIST_LEN = 0.50; // pivot→waist tip length (from the lathe profile)
-  private static readonly ACORN_FOOT_Z = 0.02;  // standing stance: feet sit toward the back
+  static readonly SEAT_SURF = 0.42;     // bench seat surface the folded waist rests on
+  static readonly SIT_FOLD = 1.15;      // waist fold when sat (~66°, gentler than a hard 90°)
+  static readonly ACORN_WAIST_LEN = 0.50; // pivot→waist tip length (from the lathe profile)
+  static readonly ACORN_FOOT_Z = 0.02;  // standing stance: feet sit toward the back
   private static readonly ACORN_SPLAY = 0.30;   // standing stance: toes fan outward (~17° each)
 
   /** Vertical scale for the player's height. */
@@ -1665,150 +1388,9 @@ export class Player {
   // Lowest point of the folded waist below the root (what rests on the seat).
   // Derived from the fold angle so it stays correct as SIT_FOLD changes; reduces
   // to the old (ACORN_CUT - ACORN_WAIST_R)=0.47 at a 90° fold.
-  private static acornSeatDrop(): number {
+  static acornSeatDrop(): number {
     const f = Player.SIT_FOLD;
     return Player.ACORN_CUT - Player.ACORN_WAIST_R * (Math.cos(f) + Math.sin(f));
-  }
-  private foldAcornSeat(): void {
-    const ns = this.numberSide;
-    const fold = Player.SIT_FOLD;                 // gentler than a hard 90°
-    this.acornWaistPivot.rotation.x = fold * ns;
-    const s = this.height / 1.95;
-    // flatter feet planted on the floor read more like sitting than a steep
-    // toe-down. `lift` self-compensates the floor contact for the seat drop and
-    // the toe pitch; z is horizontal, so the foot stays grounded either way.
-    const TILT = 0.30;                     // toe-down pitch (local heel-up is -x for both sides)
-    const toeDrop = 0.28 * Math.sin(TILT); // the pitched toe (z -0.28) dips this far below the node
-    const RAISE = 0.24;                    // lift the feet off the floor (dangling look)
-    const lift = Player.acornSeatDrop() - Player.SEAT_SURF / s + toeDrop + RAISE;
-    this.acornFootL.rotation.x = this.acornFootR.rotation.x = -TILT;
-    this.acornFootL.position.y = this.acornFootR.position.y = lift;
-    // the feet sprout from UNDER the waist bottom (its forward reach shrinks with
-    // a gentler fold), dropping straight to the floor
-    const footZ = -ns * Player.ACORN_WAIST_LEN * Math.sin(fold) * 0.7;
-    this.acornFootL.position.z = this.acornFootR.position.z = footZ;
-    this.syncAcornLegs();
-  }
-  // Back to the standing arrangement (also safe to call in human mode).
-  private unfoldAcornSeat(): void {
-    this.acornWaistPivot.rotation.x = 0;
-    this.acornFootL.rotation.x = this.acornFootR.rotation.x = 0;
-    this.acornFootL.position.y = this.acornFootR.position.y = 0;
-    this.acornFootL.position.z = this.acornFootR.position.z =
-      -this.numberSide * Player.ACORN_FOOT_Z;
-    this.syncAcornLegs();
-  }
-
-  // Bench seat / stand-up. Seated drops the whole rig so the hips meet the seat
-  // and folds the legs (thighs forward, shins down); standing returns them to
-  // the walk cycle.
-  sit(): void {
-    this.seated = true;
-    this.handsRest();
-    this.resetTwist();   // sit square on the bench
-    this.foulReactT = 0;
-    this.defWinT = 0;
-    this.flinchPitch = 0;
-    this.foldSeatedLegs();   // hidden in acorn mode, but keeps the pose consistent
-    if (HUD_OPTS.model === "acorn") this.foldAcornSeat();
-  }
-  // thighs fold toward the front (the court, since bench players face the ball),
-  // shins drop to the floor — keyed to numberSide so both benches fold FORWARD
-  // (over the seat) rather than one folding back through the bench.
-  private foldSeatedLegs(): void {
-    const ns = this.numberSide;
-    this.hipL.rotation.x = this.hipR.rotation.x = Player.SIT_HIP * ns;
-    this.kneeL.rotation.x = this.kneeR.rotation.x = Player.SIT_KNEE * ns;
-  }
-  stand(): void {
-    if (!this.seated) return;
-    this.seated = false;
-    this.root.rotation.x = 0;
-    this.hipL.rotation.x = this.hipR.rotation.x = 0;   // legs straighten
-    this.kneeL.rotation.x = this.kneeR.rotation.x = 0;
-    this.unfoldAcornSeat();  // waist back down, shoes back to the standing stance
-  }
-
-  // One frame of the walk/run cycle: swing the hips fore/aft (opposite phase per
-  // leg) with a stride that grows with speed, and bend the knee on the forward
-  // swing. Below a walking pace the legs ease back to straight. Held still while
-  // seated (sit() owns the pose).
-  updateLegs(dt: number): void {
-    if (this.seated) return;
-    if (HUD_OPTS.model !== "human") { this.updateAcornFeet(dt); return; }
-    const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
-    if (frac < 0.04) {
-      this.stridePhase = 0;
-      const ease = Math.min(1, dt * 12);
-      this.hipL.rotation.x += -this.hipL.rotation.x * ease;
-      this.hipR.rotation.x += -this.hipR.rotation.x * ease;
-      this.kneeL.rotation.x += -this.kneeL.rotation.x * ease;
-      this.kneeR.rotation.x += -this.kneeR.rotation.x * ease;
-      return;
-    }
-    this.stridePhase += this.curSpd * dt * 3.4;   // distance-based → speed sets cadence
-    const amp = 0.32 + frac * 0.5;                // longer strides at a sprint
-    // front is local -numberSide·Z (same as the arms/toes), so the swing and the
-    // knee bend are keyed to numberSide — both teams then walk forward and bend
-    // the knee BACKWARD, whichever end they attack.
-    const ns = this.numberSide;
-    const sL = Math.sin(this.stridePhase), sR = Math.sin(this.stridePhase + Math.PI);
-    this.hipL.rotation.x = sL * amp * ns;          // + phase swings the foot to the front
-    this.hipR.rotation.x = sR * amp * ns;
-    const bend = 0.5 + frac * 0.6;
-    this.kneeL.rotation.x = -Math.max(0, sL) * bend * ns;   // shin trails back on the forward swing
-    this.kneeR.rotation.x = -Math.max(0, sR) * bend * ns;
-  }
-
-  // Penguin patter for the acorn shoes: while moving, the feet alternate quick
-  // toe-up flaps (pivoting at the sole, so the heel stays planted — a pata-pata
-  // waddle whose cadence and lift grow with speed); while airborne both toes
-  // point down as if dangling; at rest they ease back flat. The shared
-  // stridePhase means a mode switch mid-run stays in step.
-  private updateAcornFeet(dt: number): void {
-    const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
-    let tL = 0, tR = 0, tw = 0;
-    if (this.airborne) {
-      tL = tR = -0.55;                              // toes point down off the floor
-    } else if (frac >= 0.04) {
-      // cadence ~3 steps/s at a sprint — any quicker and the easing below blurs
-      // the two feet into flapping together instead of alternating
-      this.stridePhase += this.curSpd * dt * 3.0;
-      const amp = 0.35 + frac * 0.4;
-      tL = Math.max(0, Math.sin(this.stridePhase)) * amp;
-      tR = Math.max(0, Math.sin(this.stridePhase + Math.PI)) * amp;
-      // the body rocks onto the planted foot — away from the lifted toe — which
-      // is the penguin waddle itself; the sway widens a touch with pace.
-      // クイックネス(敏捷性) steadies it: a nimble player barely waddles at all
-      // (99 ≈ level shoulders), a heavy-footed one rocks the full amount.
-      // Purely cosmetic — no speed or balance effect.
-      const wobble = 1 - rate(this.attr.agility);
-      tw = -Math.sin(this.stridePhase) * (0.07 + frac * 0.06) * wobble;
-    } else {
-      this.stridePhase = 0;
-    }
-    const ease = Math.min(1, dt * 22);
-    this.acornFootL.rotation.x += (tL - this.acornFootL.rotation.x) * ease;
-    this.acornFootR.rotation.x += (tR - this.acornFootR.rotation.x) * ease;
-    this.acornWaddle += (tw - this.acornWaddle) * ease;
-    // Flap around the HEEL, not the node origin: a toe-up pitch alone swings the
-    // heel's back corner (local z = heelBotZ 0.18) down through the floor, so
-    // the node rises by exactly that sunk depth — the toe slaps while the heel
-    // stays planted. Toe-down (airborne) needs no lift: the root is in the air.
-    this.acornFootL.position.y = Math.max(0, Math.sin(this.acornFootL.rotation.x)) * 0.18;
-    this.acornFootR.position.y = Math.max(0, Math.sin(this.acornFootR.rotation.x)) * 0.18;
-    this.syncAcornLegs();
-  }
-
-  // Keep each bare-skin leg cylinder glued between the waist and its shoe: the leg
-  // stays vertical (never inherits the foot's toe-flap tilt) and just rides the
-  // foot's lift/stance in y and z, so the top stays tucked up into the waist and
-  // the bottom stays down in the shoe as the feet patter.
-  private syncAcornLegs(): void {
-    this.acornLegL.position.y = this.acornFootL.position.y;
-    this.acornLegL.position.z = this.acornFootL.position.z;
-    this.acornLegR.position.y = this.acornFootR.position.y;
-    this.acornLegR.position.z = this.acornFootR.position.z;
   }
 
   sync(): void {
@@ -1964,31 +1546,7 @@ export class Player {
     this.stintT = 0;
   }
 
-  // elbow bend: forward (toward the chest, -numberSide·Z), matching the arm/leg
-  // convention. Straight (0) whenever the hand must reach the ball.
-  // The FOREARM (elbow) eases toward its bend at the same rate as the upper arm
-  // when a slew is active — so the two segments move independently, the forearm
-  // straightening/folding at its own controlled speed rather than snapping.
-  private bendElbow(node: TransformNode, amount: number): void {
-    node.rotation.y = 0; node.rotation.z = 0;   // clear any cradle-inward yaw from a prior pose
-    const target = amount * this.numberSide;
-    if (this.armRateCap > 0) {
-      const k = 1 - Math.exp(-this.armRateCap * this.lastDt);
-      node.rotation.x += (target - node.rotation.x) * k;
-    } else {
-      node.rotation.x = target;
-    }
-  }
-
   /** Both arms hang at the sides, elbows slightly bent (default pose). */
-  handsRest(): void {
-    this.armPivotL.rotationQuaternion = Quaternion.Identity();
-    this.armPivotR.rotationQuaternion = Quaternion.Identity();
-    this.armPivotL.scaling.set(1, 1, 1);
-    this.armPivotR.scaling.set(1, 1, 1);
-    this.bendElbow(this.elbowL, 0.28);
-    this.bendElbow(this.elbowR, 0.28);
-  }
 
   // Arms for a player who isn't handling the ball. Running forward they pump
   // fore/aft with the stride (opposite the same-side leg, elbows carried bent) —
@@ -1997,120 +1555,24 @@ export class Player {
   // swaps to a balance pose: both arms out low and a touch forward, fluttering
   // in step with the feet. Rests at a walk/standstill. poseHands() calls this
   // for everyone, then overrides ball arms.
-  private backArms = false;   // hysteresis so the style doesn't flicker at the threshold
-  private lastDt = 1 / 60;    // last frame length, for rate-limited arm slews
+  backArms = false;   // hysteresis so the style doesn't flicker at the threshold
+  lastDt = 1 / 60;    // last frame length, for rate-limited arm slews
   // While > 0, setArmDir turns the arm toward its target at this many rad/s instead
   // of snapping — a weak defender re-orients his hands slowly, so a switch lags.
-  private armRateCap = 0;
-  runArms(): void {
-    const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
-    if (frac < 0.16) { this.backArms = false; this.handsRest(); return; }
-    const ns = this.numberSide;
-    // measured velocity against the chest direction (local -ns·Z, yawed by the
-    // root AND the torso twist): clearly negative = running backwards
-    const th = this.root.rotation.y + this.torsoTwist;
-    const chestX = -ns * Math.sin(th), chestZ = -ns * Math.cos(th);
-    const along = this.velX * chestX + this.velZ * chestZ;   // m/s toward the chest
-    this.backArms = this.backArms ? along < -0.2 : along < -0.6;
-    this.armPivotL.scaling.set(1, 1, 1);
-    this.armPivotR.scaling.set(1, 1, 1);
-    if (this.backArms) {
-      const fl = Math.sin(this.stridePhase) * 0.2;   // small alternating flutter
-      this.setArmDir(this.armPivotL, -0.6, -0.85 + fl, -ns * 0.3);
-      this.setArmDir(this.armPivotR, 0.6, -0.85 - fl, -ns * 0.3);
-      this.bendElbow(this.elbowL, 0.2);              // near-straight, hands ready
-      this.bendElbow(this.elbowR, 0.2);
-      return;
-    }
-    const human = HUD_OPTS.model === "human";
-    const amp = (0.3 + frac * 0.55) * (human ? 1 : 0.5);
-    const aL = Math.sin(this.stridePhase + Math.PI) * amp * ns;   // left arm ↔ right leg
-    const aR = Math.sin(this.stridePhase) * amp * ns;
-    this.armPivotL.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), aL);
-    this.armPivotR.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), aR);
-    const carry = (0.6 + frac * 0.5) * (human ? 1 : 0.6);   // elbows carried bent like a runner
-    this.bendElbow(this.elbowL, carry);
-    this.bendElbow(this.elbowR, carry);
-  }
+  armRateCap = 0;
 
   /** Reach the right hand (or both) out so the palm meets `world` — the ball.
    *  Elbows straighten so the palm actually reaches the aimed point. */
-  reach(world: Vector3, both = false): void {
-    this.aimArm(this.armPivotR, world);
-    this.elbowR.rotation.set(0, 0, 0);
-    if (both) { this.aimArm(this.armPivotL, world); this.elbowL.rotation.set(0, 0, 0); }
-    else { this.armPivotL.rotationQuaternion = Quaternion.Identity(); this.bendElbow(this.elbowL, 0.28); }
-  }
 
   /** ディグ(掻き出し): reach with ONE hand, ROTATING THE UPPER BODY toward the
    *  ball so the leading shoulder swings across and the hand extends far out to
    *  the ball. The trailing arm swings back for balance. Used by a defender
    *  stabbing at a poked-loose ball — a committed lunge, not a two-hand grab. */
-  digReach(world: Vector3): void {
-    // twist the chest toward the ball (capped at the torso's reach) — this is
-    // what carries the leading shoulder out and lets the hand reach farther
-    const s = this.numberSide;
-    const fx = world.x - this.pos.x, fz = world.z - this.pos.z;
-    if (Math.abs(fx) + Math.abs(fz) > 0.05) {
-      const want = Math.atan2(-s * fx, -s * fz);
-      let twist = want - this.root.rotation.y;
-      while (twist > Math.PI) twist -= 2 * Math.PI;
-      while (twist < -Math.PI) twist += 2 * Math.PI;
-      twist = clamp(twist, -Player.TWIST_MAX, Player.TWIST_MAX);
-      this.torsoTwist = twist;
-      this.torsoNode.rotation.y = twist;
-    }
-    // lead with the hand on the side the ball now sits (near shoulder), elbow
-    // LOCKED STRAIGHT for maximum extension
-    const right = this.dribbleWithRight(world);
-    const lead = right ? this.armPivotR : this.armPivotL;
-    const leadElbow = right ? this.elbowR : this.elbowL;
-    const back = right ? this.armPivotL : this.armPivotR;
-    const backElbow = right ? this.elbowL : this.elbowR;
-    this.aimArm(lead, world);
-    leadElbow.rotation.set(0, 0, 0);
-    // the trailing arm pulls back behind the hip (counterweight to the lunge)
-    back.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), 0.6);
-    this.bendElbow(backElbow, 0.5);
-  }
 
   /** Two-handed HOLD: the palms cup the ball from BOTH SIDES — one hand on each
    *  side of the ball, a ball's width apart — instead of both arms aiming at the
    *  same point (palms touching THROUGH the ball). Used for the catch and the
    *  gather, so the ball sits BETWEEN the hands and moves WITH the arms. */
-  holdBallHands(world: Vector3, sep = 0.16): void {
-    const dx = world.x - this.pos.x, dz = world.z - this.pos.z;
-    const l = Math.hypot(dx, dz) || 1;
-    let lx = -dz / l, lz = dx / l;                      // horizontal perpendicular to the hold
-    // point the lateral toward the body's RIGHT (local +X → world (cosθ, -sinθ),
-    // the same frame aimArm uses) so the hands never cross
-    const th = this.root.rotation.y + this.torsoTwist;
-    if (lx * Math.cos(th) - lz * Math.sin(th) < 0) { lx = -lx; lz = -lz; }
-    this.aimArm(this.armPivotR, new Vector3(world.x + lx * sep, world.y, world.z + lz * sep));
-    this.aimArm(this.armPivotL, new Vector3(world.x - lx * sep, world.y, world.z - lz * sep));
-    // 抱え込み: the CLOSER the ball is to the body, the more the elbows bend so it's
-    // CRADLED in to the chest rather than held out on straight arms — a ball out in
-    // front (reaching for an incoming pass) keeps the arms extended, then as it
-    // arrives the elbows fold and bring it in close. A ball held OVERHEAD (a jump-
-    // pass wind-up) stays on near-straight arms, not cradled.
-    // MODERATE bend so the elbows are visibly bent yet the HANDS still cup the ball
-    // at its sides (ball sits BETWEEN them) — too tight a fold pulls the palms off
-    // the ball and it floats out front. Reaching for an incoming pass stays straight.
-    const overhead = world.y > 1.5;
-    const bend = overhead ? 0.1 : clamp(1.2 - l * 1.5, 0, 0.55);
-    this.bendElbow(this.elbowR, bend);
-    this.bendElbow(this.elbowL, bend);
-    // 内側へ: swing each forearm toward the CENTRE (the ball) so the two hands cup
-    // it from the sides. The forearm hangs along the elbow's local −Y, so the
-    // left/right swing is rotation.Z (rotation.Y would only roll it about its own
-    // length). Left/right (X) does NOT flip with numberSide — only front/back (Z)
-    // does — so this is a CONSTANT sign per arm, NOT ×numberSide (that ×numberSide
-    // was the team-dependent bug). +rot.z swings −Y toward +X, so the RIGHT arm
-    // (at +X) needs − to come in, the LEFT +.
-    const inward = overhead ? 0 : bend * 0.7;
-    this.elbowR.rotation.z = -inward;
-    this.elbowL.rotation.z = inward;
-  }
 
   /** World point straight out from the CHEST (the side opposite the number) at
    *  `dist` metres — where a two-handed gather holds the ball. Same yaw+twist
@@ -2152,131 +1614,19 @@ export class Player {
   /** Dribble/hold the ball with the hand on the SAME side it sits — so a ball
    *  carried to the left hip is held with the LEFT hand instead of reaching the
    *  right arm across (through) the body, and vice-versa. */
-  reachDribble(world: Vector3, useRight: boolean, rate = 0): void {
-    const near = useRight ? this.armPivotR : this.armPivotL;
-    const nearElbow = useRight ? this.elbowR : this.elbowL;
-    const far = useRight ? this.armPivotL : this.armPivotR;
-    const farElbow = useRight ? this.elbowL : this.elbowR;
-    this.armRateCap = rate;   // > 0 → the hand re-places at dribble-accuracy speed
-    this.aimArm(near, world);
-    this.bendElbow(nearElbow, 0);   // forearm straightens toward the ball, eased
-    this.armRateCap = 0;
-    far.rotationQuaternion = Quaternion.Identity();
-    this.bendElbow(farElbow, 0.28);
-  }
 
   /** Spread both arms out wide — active hands to wall off a side-to-side drive.
    *  `rate` (rad/s) rate-limits the switch; 0 snaps (bench / non-defensive use). */
-  armsWide(rate = 0): void {
-    this.armRateCap = rate;
-    this.setArmDir(this.armPivotL, -1, -0.35, 0.35);
-    this.setArmDir(this.armPivotR, 1, -0.35, 0.35);
-    this.bendElbow(this.elbowL, 0);   // forearms straighten out, eased
-    this.bendElbow(this.elbowR, 0);
-    this.armRateCap = 0;
-  }
 
   /** Cut off a straight drive: the hand nearer the ball goes out FRONT and low to
    *  wall off penetration and stab at the ball (the steal), the off hand rides low
    *  and out for balance in the slide. `rate` rate-limits the re-orient. */
-  guardDrive(world: Vector3, useRight: boolean, rate = 0): void {
-    this.armRateCap = rate;
-    const near = useRight ? this.armPivotR : this.armPivotL;
-    const nearElbow = useRight ? this.elbowR : this.elbowL;
-    const far = useRight ? this.armPivotL : this.armPivotR;
-    const farElbow = useRight ? this.elbowL : this.elbowR;
-    this.aimArm(near, world);                 // front hand on the ball
-    this.bendElbow(nearElbow, 0);             // forearm straightens, eased
-    this.setArmDir(far, useRight ? -0.75 : 0.75, -0.55, 0.15);   // off hand low & out
-    this.bendElbow(farElbow, 0);
-    this.armRateCap = 0;
-  }
 
   /** Deny the pass: one hand thrown out on a DIAGONAL — out to the ball side, up,
    *  and angled back toward the basket — to wall the lane so a pass can't slip
    *  BEHIND him. A swing laterally across his chest is conceded (that's fine). */
-  denyLane(useRight: boolean, rate = 0): void {
-    this.armRateCap = rate;
-    const s = useRight ? 1 : -1;
-    const near = useRight ? this.armPivotR : this.armPivotL;
-    const nearElbow = useRight ? this.elbowR : this.elbowL;
-    const far = useRight ? this.armPivotL : this.armPivotR;
-    const farElbow = useRight ? this.elbowL : this.elbowR;
-    this.setArmDir(near, s * 0.85, 0.35, -0.4);   // out, up, angled behind him
-    this.bendElbow(nearElbow, 0);                  // deny arm straightens, eased
-    this.setArmDir(far, -s * 0.3, -0.5, 0.1);      // trail arm relaxed and low
-    this.bendElbow(farElbow, 0.2);
-    this.armRateCap = 0;
-  }
 
   /** Straight-up shot contest: both hands vertical, challenging without leaving
    *  the floor (an airborne contest reaches for the ball instead). */
-  handsUp(rate = 0): void {
-    this.armRateCap = rate;
-    this.setArmDir(this.armPivotL, -0.14, 1, 0.06);
-    this.setArmDir(this.armPivotR, 0.14, 1, 0.06);
-    this.bendElbow(this.elbowL, 0);   // forearms straighten up, eased
-    this.bendElbow(this.elbowR, 0);
-    this.armRateCap = 0;
-  }
 
-  // Point an arm from its shoulder toward a world point — direction only, so the
-  // arm keeps its fixed length. The root may now carry a yaw (players turn to face
-  // the play), so the shoulder's world position rotates with the body, and the
-  // desired reach — computed in world space — is converted back into the root's
-  // local frame before it becomes the arm's (local) aim. R_y(θ): local +Z →
-  // (sinθ,0,cosθ), local +X → (cosθ,0,-sinθ). At θ=0 this is the old direct maths.
-  private aimArm(pivot: TransformNode, world: Vector3): void {
-    // shoulders ride the twisting torso — their frame is the root yaw + twist
-    const th = this.root.rotation.y + this.torsoTwist;
-    const c = Math.cos(th), s = Math.sin(th);
-    const px = pivot.position.x, py = pivot.position.y * this.root.scaling.y, pz = pivot.position.z;
-    // shoulder world = root + R_y(θ)·(local shoulder offset)
-    const sx = this.root.position.x + (c * px + s * pz);
-    const sy = this.root.position.y + py;
-    const sz = this.root.position.z + (-s * px + c * pz);
-    // reach direction in world → rotate into the root's local frame (R_y(-θ))
-    const wx = world.x - sx, wy = world.y - sy, wz = world.z - sz;
-    this.setArmDir(pivot, c * wx - s * wz, wy, s * wx + c * wz);
-  }
-
-  private setArmDir(pivot: TransformNode, dx: number, dy: number, dz: number): void {
-    const len = Math.hypot(dx, dy, dz) || 1;
-    const target = aimDownTo(dx / len, dy / len, dz / len);
-    const cur = pivot.rotationQuaternion;
-    // Rate-limited (defensive) re-orient: ease the arm toward the target no faster
-    // than armRateCap rad/s, so a low-defence player's hands lag on the switch. A
-    // snap write (armRateCap 0, or no current orientation) keeps ball arms crisp.
-    if (this.armRateCap > 0 && cur) {
-      // Exponential ease — move a fixed FRACTION toward the target each frame, so
-      // small target jitter (a bouncing ball, a read flickering between poses) is
-      // damped too, not only big switches. The fraction (settling speed) scales
-      // with defence: a weak defender's hands drift, an elite one's snap in.
-      const k = 1 - Math.exp(-this.armRateCap * this.lastDt);
-      pivot.rotationQuaternion = Quaternion.Slerp(cur, target, k);
-    } else {
-      pivot.rotationQuaternion = target;
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Ball — a sphere whose position is fully driven by the simulation.
-// ---------------------------------------------------------------------------
-export class Ball {
-  readonly mesh: Mesh;
-  readonly pos = new Vector3(0, 1, 0);
-  readonly vel = new Vector3();   // used while the ball is loose (free-flight)
-
-  constructor(scene: Scene) {
-    this.mesh = MeshBuilder.CreateSphere("ball", { diameter: 0.24, segments: 12 }, scene);
-    const mat = new StandardMaterial("ballmat", scene);
-    mat.diffuseColor = new Color3(0.85, 0.4, 0.12);
-    mat.specularColor = new Color3(0.25, 0.2, 0.15);
-    this.mesh.material = mat;
-  }
-
-  sync(): void {
-    this.mesh.position.copyFrom(this.pos);
-  }
 }

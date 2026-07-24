@@ -3695,3 +3695,312 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - 修正: コースト対象に pass/inbound を追加。pass は軌道が出切るよう窓を長め(1.4s)、他は0.8s。コースト中は switch の updatePass/updateLive が動くのでボール・選手は動き続ける。着弾で held に移っても coastT 継続。
 - 留意: 実機未検証。pass 1.4s/他0.8s は調整可。shot/charge は従来通りバズビーター続行。
 - 検証: tsc✓ / vite build✓。
+
+## 2026-07-22 (275) game.ts分割 Phase1: 純粋評価プリミティブを eval.ts へ抽出
+
+- 目的: game.ts(6744行)の機能別分割(workPlan.md に設計・移行順を明文化)。第一弾は this 状態非依存の純粋関数。
+- 抽出(src/eval.ts 新規): rimProtect / perimContest / palmRadius / twWeight / reactionLag / shootRangeOf / gatherFor / deepThreeOK / effShootRange / shotWindupFor / wontLoadUp。引数＋rate/clamp/rand＋定数(THREE_DIST,RIM.z)のみ。相互呼び出しは module 内直呼び。
+- game.ts: 定義(769-882)削除、呼び出し45箇所を this.X(→X( に置換、import 追加(shootRangeOf は game.ts直接未使用のため import 除外)。static SHOOT_ARC/SHOOT_HALF は削除ブロック内のみだったので eval.ts の module const に移設。
+- 挙動不変確認: tsc✓ / vite build✓ / headless合算得点 29.4(直前の spacing 変更後と同値=リファクタで挙動変化なし)。
+- 行数: game.ts 6744→約6632(−112)、eval.ts 130。
+- 留意: 実機未検証(純粋関数移動のみで表示影響なし)。次は resolution(効果)の抽出予定。
+
+## 2026-07-22 (276) game.ts分割 Phase2a: シュート成功率を resolution/shot-outcome へ抽出
+
+- 目的: 「効果(判定ルール)」層の第一歩。releaseShot の make% 計算を純粋関数化。
+- 抽出(src/resolution/shot-outcome.ts 新規, 日本語コメント): jumpShotMakeProbability(h, dHoop, dDef, ctx)。ctx で最寄り守備者/ヘルプ人数(2.4m)/クラッチ値/ブザー有無/手のひら判定フラグを受け取り、確率のみ返す(0.02〜0.93)。perimContest/palmRadius は eval.ts を利用。
+- game.ts: releaseShot の make% ブロック(約52行)を関数呼び出し(約10行)に置換。状態変更(shotMade=chance(p)/tryBlock/foul/ballMode)は game.ts に残す=効果と発動の分離。perimContest は未使用化で eval import から除外、PALM_HITBOX は他4箇所で使うため game.ts に残し引数で渡す。
+- 挙動不変確認: tsc✓ / vite build✓ / headless合算得点 28.2/28.3/29.4/29.2(シード無し乱数分散の範囲、計算式同一=回帰なし)。
+- 行数: game.ts 6632→6591(−41)、shot-outcome.ts 78。
+- 留意: 実機未検証(計算移動のみ)。次は finishAtRim の make% も同モジュールへ寄せる/パスリスク群の抽出が候補。
+
+## 2026-07-22 (277) game.ts分割 Phase2a続き: finishAtRim の成功率を shot-outcome へ
+
+- 抽出(resolution/shot-outcome.ts に追加): rimFinishOutcome(h, dDef, ctx) → {dunk, p}。ダンク抽選(chance)と成功率(0.05〜0.97)を算出。dunk は下流のアニメ/演出で使うため一緒に返す。rimProtect は eval.ts を利用。
+- game.ts finishAtRim: make%ブロック(約45行)を関数呼び出し(約8行)に置換。dunk と p を受け取り this.shotWasDunk/shotMade をセット。状態変更・アニメは game.ts に残す。rimProtect は未使用化で eval import から除外。
+- ミス修正: shot-outcome.ts で chance の import 漏れ→ util から追加(tscで検出、esbuildは素通しでheadlessが無出力になり発覚)。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 30.2(28〜31の乱数分散範囲、回帰なし)。
+- 行数: game.ts 6591→6555(−36)、shot-outcome.ts 64→113。
+- 現構成: eval.ts / resolution/shot-outcome.ts(jumpShotMakeProbability, rimFinishOutcome) / game.ts。
+
+## 2026-07-22 (278) game.ts分割 Phase2a続き: ブロック確率を resolution/contest-block へ
+
+- 抽出(src/resolution/contest-block.ts 新規, 日本語コメント): bestBlocker(defenders, shooter, isFinish, shotWindup, palmHitbox) → 最も止められる守備者と確率{def,p}(抽選なし)。evadeBlockProbability(shooter, blocker) → ダブルクラッチでかわす確率。両者純粋関数。palmRadius は eval.ts を利用。
+- game.ts tryBlock: 確率算出ループ(約40行)を bestBlocker 呼び出しに置換。抽選(chance)と状態変更(evade/evadeDir/jump/shotMade)は game.ts に残す。chance の呼び出し順序は不変(cand.p→pEvade→0.18*...)。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 30.4(乱数分散範囲、回帰なし)。
+- 行数: game.ts 6555→6514(−41)、contest-block.ts 60。
+- 累計: game.ts 6744→6514(−230)。構成: eval.ts / resolution/{shot-outcome, contest-block} / game.ts。
+
+## 2026-07-22 (279) game.ts分割 Phase2a続き: ファウル確率を resolution/foul へ
+
+- 抽出(src/resolution/foul.ts 新規, 日本語コメント): shootingFoulChance(h, dDef, layup, onBallDef) → シューティングファウル確率。reachInFoulRate(press, close) → リーチインの毎秒レート(呼び出し側でdt乗算)。両者純粋。
+- game.ts: tryShootingFoul の確率計算を shootingFoulChance に置換(od は突き飛ばし演出で再利用のため取得は残す)。defendOnBall の reach-in インライン確率を reachInFoulRate(press,close)*dt に置換。抽選・状態変更は game.ts。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 29.0(乱数分散範囲、回帰なし)。
+- 行数: game.ts 6514→6511(−3、小規模)、foul.ts 22。
+- 累計: game.ts 6744→6511(−233)。resolution/{shot-outcome, contest-block, foul}。シュート系の効果(成功率/ブロック/ファウル)分離が一区切り。
+
+## 2026-07-22 (280) game.ts分割 Phase2a続き: パスリスク群を resolution/pass-risk へ
+
+- 抽出(src/resolution/pass-risk.ts 新規, 日本語コメント): laneBlock / interceptChance / longBallBest / longBallRead / laneVetoed / passRisk / evalInterception。全て純粋関数化(第1引数 defenders=パサーの相手チームを渡す、evalInterception は passStyle も引数)。内部相互呼び出しは module 内直呼び。
+- game.ts: 定義群(3795-3904)削除。呼び出し10箇所を X(this.oppTeam(from), from, to, ...) に更新。ヘルパー oppTeam(p)=teamPlayers(1-p.team) 追加。LANE_W は laneOpenness(未抽出)でも使うため config.ts に export 移設し両者で共有(game.ts のローカル const 削除)。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.7(乱数分散範囲、回帰なし)。
+- 行数: game.ts 6511→6403(−108)、pass-risk.ts 112。累計 game.ts 6744→6403(−341)。
+- 構成: eval.ts / resolution/{shot-outcome, contest-block, foul, pass-risk} / game.ts。
+
+## 2026-07-22 (281) game.ts分割: ルーズ確保確率を resolution/rebound へ / stripEdge を eval へ
+
+- 抽出1(src/resolution/rebound.ts 新規): looseSecureChance(p, defending, looseTips) → ルーズボール確保確率(0.1〜0.96)。contactLooseBall の確率計算を置換、抽選・確保/はじき処理は game.ts。
+- 抽出2(eval.ts に追加): stripEdge(d, h) → 剥がしの優位度(守備の手 − 保持力)。純粋評価プリミティブ。game.ts の2呼び出し(swarmStrips/catchStrips)を this.stripEdge→stripEdge に。
+- steal(d) はボール物理設定が主で抽出価値低=残置。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.3(乱数分散範囲、回帰なし)。
+- 行数: game.ts 6403→6391(−12)。累計 6744→6391(−353)。
+- 構成: eval.ts(12関数) / resolution/{shot-outcome, contest-block, foul, pass-risk, rebound} / game.ts。
+
+## 2026-07-22 (282) game.ts分割: jukeDeception/jukeDiscipline を eval へ
+
+- 抽出(eval.ts): jukeDeception(h)=揺さぶり量, jukeDiscipline(d)=守備の粘り。純粋評価プリミティブ。driveDecision/stepBack の5呼び出しを this.→直呼びに。
+- driveDecision の speedEdge/powerEdge/pPower は認知(攻め方判断)と状態変更が密結合のため今回は据え置き(無理に割ると分断)。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.9(乱数分散範囲、回帰なし)。
+- 行数: game.ts 6391→6380(−11)。累計 6744→6380(−364)。eval.ts 14関数。
+- メモ: 低リスクな純粋抽出はほぼ出尽くし。次の本命は Phase2b(ステートフル機能のモジュール化)で、GameState設計を伴う一段重い作業。
+
+## 2026-07-22 (283) game.ts分割 Phase2b: フリースローを systems/freethrow.ts へ(方式A初適用)
+
+- 方式A(Game参照をサブシステムへ渡す)の初適用。src/systems/freethrow.ts に FreeThrowSystem クラスを新規作成(日本語コメント)。
+- FT固有状態を FreeThrowSystem が所有: shooter/remaining/team/t/made/target/missKind(旧 ft* フィールドを Game から撤去)。
+- FT処理6メソッド(start/lineUp/beginAttempt/update/resolve/startRebound)を移設。共有状態・フローは this.game.X 経由。
+- Game 側で共有メンバーを public 化(サブシステム共通のコアサービス): フィールド handler/ballMode/ballFalling、メソッド attackSign/attackRim/attackFloor/clutchFactor/benchCheer/swishNet/setEvent/pauseThen/withSubs/startInbound/goLoose/isBig(計15)。
+- Game に readonly ft = new FreeThrowSystem(this)。呼び出し更新: update()の case freethrow→ft.update、tryShootingFoul/and-one→ft.start、poseHands の ftT/ftShooter→ft.t/ft.shooter。
+- 循環参照: freethrow.ts は import type { Game } のみ(実行時依存なし)なので安全。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 29.5・40試合完走(FTフロー end-to-end 動作)。
+- 行数: game.ts 6380→6219(−161)、freethrow.ts 約185。累計 game.ts 6744→6219(−525)。
+- 学び: 方式Aは機能する。コストは共有メンバーの public 化(今後の他サブシステムでも再利用される「コアサービス」なので投資として妥当)。
+
+## 2026-07-22 (284) game.ts分割 Phase2b: ティップオフを systems/tipoff.ts へ(方式A)
+
+- src/systems/tipoff.ts に TipoffSystem クラス新規(日本語コメント)。固有状態 t/winner/guard/jumped を所有(旧 tipoffT/tipWinner/tipGuard/tipJumped を Game から撤去)。start()/update() を移設。
+- winner/guard は外部参照あり(chaseLoose の団子回避、ポゼッション矢印)のため public フィールドで公開。
+- Game 追加 public 化: placeFormation/teamPlayers/homeSpotIdx(コアサービス)。
+- Game に readonly tipoff = new TipoffSystem(this)。呼び出し更新: reset→tipoff.start、update loop case tipoff→tipoff.update、chaseLoose this.tipGuard→tipoff.guard(2)、ポゼッション矢印 this.tipWinner→tipoff.winner(2)。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.9・40試合完走(ティップ→ルーズ確保→試合開始が動作)。
+- 行数: game.ts 6219→6144(−75)、tipoff.ts 約95。累計 game.ts 6744→6144(−600)。
+- 構成: game.ts / eval.ts / resolution×5 / systems/{freethrow, tipoff}。
+
+## 2026-07-22 (285) game.ts分割 Phase2b: スローイン/インバウンドを systems/inbound.ts へ(方式A)
+
+- src/systems/inbound.ts に InboundSystem クラス新規(日本語コメント)。固有状態 t/receiver/oobWalker/oobSpot/oobTeam/oobShotClock を所有(旧 inbound*/oob* を Game から撤去)。
+- 移設メソッド: start(startInbound)/startAt(startInboundAt)/finishOOB/pickReceiver(pickInboundReceiver)/update(updateInbound)。
+- throwIn はパス飛行の内部フィールド(passFrom/passTo/passer/passT/passDur/passSteal 等)を操作するため Game に残し public 化。update() から this.game.throwIn を呼ぶ=パス機構の公開面膨張を回避。
+- Game 側 public 化(コアサービス): resetMotion/formationSpots/clampCourt/runDefenseDuringDeadish/throwIn/lastTouch/looseOff/looseFromRim。
+- 外部書き込み更新: startQuarterInbound/sideInbound の inboundT/inboundReceiver→inbound.t/receiver、reset の oobWalker→inbound.oobWalker、updatePause の oobWalker/oobSpot→inbound.*。呼び出し: update loop→inbound.update、resolveShot→inbound.start、OOB系→inbound.startAt、freethrow.ts の g.startInbound→g.inbound.start。
+- t/receiver/oobWalker/oobSpot は外部参照ありのため public フィールド、oobTeam/oobShotClock は private。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.2・40試合完走(スローイン/OOB/ゴール後インバウンドが動作)。
+- 行数: game.ts 6144→6012(−132)、inbound.ts 約145。累計 game.ts 6744→6012(−732)。
+- 構成: game.ts / eval.ts / resolution×5 / systems/{freethrow, tipoff, inbound}。
+
+## 2026-07-22 (286) game.ts分割 Phase2b: スクリーン(ピック&ロール)を systems/screen.ts へ(方式A)
+
+- src/systems/screen.ts に ScreenSystem 新規(日本語コメント)。攻守両面を扱う: 攻撃側(start/update/countScreening/handlerPressured/goodScreener)と守備側カバレッジ(resolveCoverage/chooseCoverage/tickCoverage/defend)。
+- カバレッジ状態 cov/screenerDef/handlerDef は runDefense が読むため public フィールド。t/screener は private。
+- tactics は TACTICS(attributes)を直接 import して公開回避。
+- Game 側 public 化: teamHas/onBallDefender/setDriveSide/defEffort/defendOnBall/bestOpenSpot。
+- runDefense の pnr tick→this.screen.tickCoverage(dt)、ディスパッチ→this.screen.cov/screenerDef/handlerDef + this.screen.defend。offense 呼び出し(pickOffBallAction/updateOffBallMotion)→this.screen.X。clearPnr(reset/possession終了)→this.screen.clear。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.5・40試合完走(スクリーン/カバレッジ動作)。
+- 行数: game.ts 6012→5810(−202)、screen.ts 約210。累計 game.ts 6744→5810(−934、約14%減)。
+- 構成: game.ts / eval.ts / resolution×5 / systems/{freethrow, tipoff, inbound, screen}。
+
+## 2026-07-22 (287) game.ts分割 Phase2b: 交代判断ロジックを systems/subs.ts へ(関数モジュール)
+
+- 交代の「判断」(subDesire/matchupSubs/planSubs、約180行)を systems/subs.ts の関数群(game引数)へ切り出し。walker機構・substitute・updateSubs・withSubs・benchCheer は Game に残す(クォーター遷移・アニメループと共有のため)。
+- withSubs は planSubs(this, exclude) を呼ぶ形に。
+- Game 側 public 化: roster(既存public)/subWalkers/tactics(readonly)/onCourt/roleFit/overallOf/substitute。onCourt/roleFit/overallOf は交代以外でも使う汎用ヘルパーなので Game に残置し public 化。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 29.7・40試合完走(疲労/マッチアップ/復帰交代が動作)。
+- 行数: game.ts 5810→5648(−162)。累計 game.ts 6744→5648(−1096、約16%減)。
+- 構成: game.ts / eval.ts / resolution×5 / systems/{freethrow, tipoff, inbound, screen, subs}。
+- メモ: 残る game.ts の大半は中核エンジン(オフェンス判断/ディフェンス/オフボール移動/ポーズ/updateループ/セットアップ＋交代のwalker機構)。Phase3/4相当で深くステートフル。
+
+## 2026-07-22 (288) game.ts分割 Option B開始: ディフェンススキームを core/defense-schemes.ts へ(関数モジュール)
+
+- 方針変更: 中核エンジンは Option B(Game=状態器、中核は game を受け取る関数モジュール)で進める(ユーザー選択)。第一歩としてゾーン/プレス/スキーム選択を core/defense-schemes.ts へ。
+- 関数化: pickDefScheme(game) / runZoneDefense(game,dt) / runPress(game,dt)（zoneHomes は module内 private）。man ディフェンス本体(runDefense)は Game に残し、そこから分岐呼び出し。
+- Game 側 public 化(状態器化): zoneScheme/pressOn/pressTrapper/schemePoss(フィールド)、getBackOnDefense/steal(メソッド)。zoneScheme はオフェンス/ポーズも読むため元々 Game フィールドのまま public 化。
+- runDefense の呼び出しを pickDefScheme(this)/runPress(this,dt)/runZoneDefense(this,dt) に。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.7・40試合完走(ゾーン/プレス動作)。
+- 行数: game.ts 5648→5455(−193)。累計 6744→5455(−1289、約19%減)。
+- 構成: game.ts / eval.ts / resolution×5 / systems×5 / core/defense-schemes。
+
+## 2026-07-22 (289) game.ts分割 Option B: man ディフェンス本体を core/defense.ts へ
+
+- man ディフェンス7関数を core/defense.ts へ関数化: runDefense/defEffort/denyIntensity/denySmother/defendOnBall/getBackOnDefense/runDefenseDuringDeadish(game引数)。resolveCollisions/holdWeight(物理)は Game 残置。
+- PALM_HITBOX を config.ts へ export 移設(core/defense も使う、game.ts は import)。
+- Game 側 public 化: frontT/passSteal(フィールド)、pickSide/steerAround/contestLeap/defensiveFoul(メソッド)。defEffort/defendOnBall/getBackOnDefense は module へ移動(Gameから撤去)。
+- クロスモジュール更新: defense-schemes.ts / screen.ts が defEffort/defendOnBall(/getBackOnDefense)を core/defense から import して関数呼び出しへ。inbound.ts が runDefenseDuringDeadish を import。game.ts の runDefense/denySmother/runDefenseDuringDeadish 呼び出しを関数化。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 29.2・40試合完走(man/zone/press/PnR/スティール/ファウル動作)。
+- 行数: game.ts 5455→5027(−428)。累計 6744→5027(−1717、約25%減)。
+- 構成: game.ts / eval.ts / resolution×5 / systems×5 / core/{defense-schemes, defense}。ディフェンスは完全にモジュール化。
+
+## 2026-07-22 (290) game.ts分割 Option B: パス処理を core/passing.ts へ
+
+- パス4関数を core/passing.ts へ関数化: chooseReceiver/pass/passToReceiver/updatePass(game引数)。パスリスクは resolution/pass-risk、守備は core/defense を import。
+- MAX_PASS を config.ts へ export 移設。
+- Game 側 public 化(状態器化): パス飛行16フィールド(passFrom/passCatch/passMiss/passMissY/passTo/passT/passDur/passer/passQ/pendingPass*/noLookPass/turnReleased/assistFrom/assistTo)＋8メソッド(doubleTeamed/leakOut/maybeStartPush/nearestDefenderDist/oppTeam/setDrive/turnover/updateOffBallMotion)。
+- 呼び出し16箇所を pass(this,h)/passToReceiver(this,...)/updatePass(this,dt) に。game.ts の不要 import(defense-schemes3関数/evalInterception/longBallRead)除去。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.4/29.5・40試合完走(パス/インターセプト/受球/アシスト動作)。
+- 行数: game.ts 5027→4566(−461)。累計 6744→4566(−2178、約32%減)。
+- 構成: game.ts / eval.ts / resolution×5 / systems×5 / core/{defense-schemes, defense, passing}。
+
+## 2026-07-22 (291) game.ts分割 Option B: オフボール移動を core/offball.ts へ
+
+- オフボール13関数を core/offball.ts へ関数化: updateOffBallMotion/pickOffBallAction/countCutting/nearestTeammateDist/spacingNudge/ballSpacingNudge/isoHandler/isoSpreadTarget/clearDriveLane/cutLaneClear/bestOpenSpot/laneOpenness/clogPenalty。
+- Game 側 public 化: prefersPost/trapReliever/trapReliefSpot/tightlyTrapped(メソッド)、pushT(フィールド)。
+- bestOpenSpot は passing/screen も使うため core/offball へ移し、両モジュールが import。updateOffBallMotion は passing/runOffense が呼ぶ。
+- 呼び出し更新: game.ts runOffense→updateOffBallMotion(this,...)、passing.ts→updateOffBallMotion(game,...)/bestOpenSpot(game,...)、screen.ts→bestOpenSpot(g,...)。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 29.8/28.4・40試合完走(トラップ救済/カット/スペーシング/iso/ダンカースライド動作)。
+- 行数: game.ts 4566→4106(−460)。累計 6744→4106(−2638、約39%減)。
+- 構成: core/{defense-schemes, defense, passing, offball}。
+
+## 2026-07-23 (292) game.ts分割 Option B: オフェンス判断エンジンを core/offense.ts へ
+
+- オフェンス19関数を core/offense.ts へ関数化(game引数): runOffense/decide/openSide/bringUpLane/doubleTeamApproaching/betterOptionAvailable/mustKeepDribble/keepDribbleDecide/postMove/outletTo/advanceSafely/trapKickOut/retreatFromTrap/pushBreak/canIso/driveDecision/stepBack/driveImpeder/laneClear。最難関(decide 約400行・分岐多数、driveDecision 約164行)のため手転記せず、ブレースカウントで各メソッド全域(コメント含む)を切り出す Node スクリプトで機械変換(this.→game./this.移動名→名(game,/(this,→(game,)。
+- 循環回避: pickSide/setDriveSide/setDrive は Game 残置(defense が game 経由で使用)。offense は denySmother(core/defense)/pass・passToReceiver(core/passing)/updateOffBallMotion・bestOpenSpot(core/offball) を import。
+- 定数 TRAP_MEMORY/KEEP_DRIBBLE_THRESH は移動対象内でのみ使用のため offense.ts へ移設(config 変更・循環なし)。
+- Game 側 public 化: ballInHand/shoot/finishAtRim(3メソッド)。staying→moving 呼び出しは runOffense(this,dt,h) の1箇所のみ。
+- 追加 import(offense.ts): PALM_HITBOX/MAX_PASS(config)、palmRadius(eval)、laneVetoed/passRisk(resolution/pass-risk)。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 27.7・28.4・29.9・28.8(4回平均~28.7)・40試合完走(基準28-31内)。
+- 行数: game.ts 4106→3129(−977)、offense.ts 985新規。累計 6744→3129(−3615、約54%減)。
+- 構成: core/{defense-schemes, defense, passing, offball, offense}。
+
+## 2026-07-23 (293) game.ts分割 Option B: シュート機構を core/shooting.ts へ
+
+- シュート14関数を core/shooting.ts へ関数化(game引数): shoot/chargeBallY/updateCharge/stripGather/releaseShot/finishAtRim/contestJump/tryBlock/swatShot/tryShootingFoul/aimShotTarget/updateShot/resolveShot/assistCreditFor。offense.ts と同じくブレースカウント抽出＋機械変換。
+- 静的定数 SHOT_SET_Y(2.1)/SHOT_GATHER_Y(1.2) を Game static から config.ts へ export 移設(import type の Game を値使用できないため／両ファイルが config から import＝循環なし)。
+- contestLeap は defense からも呼ぶため Game 残置(game.contestLeap 経由)。
+- Game 側 public 化(状態器化): shot 関連 private 31個(shooter/chargeShooter/chargeDHoop/chargeDDef/chargeT/shotWindup/shotMade/shotFrom/shotT/shotDur/shotApex/shotTarget/shotPoints/shotWasDunk/longShot/longShotHoldT/shooterFinishing/finishSpot/finishVX/finishVZ/evadedFinish/evadeDirX/evadeDirZ/blockHoldT/blockHoldVel/pendingAssist/pendingAndOne/nearestDefender/defendersWithin/endQuarter/startRebound/crashBoards)。
+- 呼び出し更新: game.ts 更新ループ updateCharge(this,dt)/updateShot(this,dt)、offense.ts の game.shoot/game.finishAtRim を shoot(game,)/finishAtRim(game,) に(13箇所)＋import 追加。offense→shooting は一方向(循環なし)。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.3・28.4・28.5・30.1(4回平均~28.8)・40試合完走(チャージ/放ち/飛翔/着弾/リムフィニッシュ/ブロック/ファウル/アシスト動作)。
+- 行数: game.ts 3129→2663(−466)、shooting.ts 482新規。累計 6744→2663(−4081、約60%減)。
+- 構成: core/{defense-schemes, defense, passing, offball, offense, shooting}。
+
+## 2026-07-23 (294) game.ts分割 Option B: ポーズ/腕アニメを core/poses.ts へ
+
+- ポーズ7関数を core/poses.ts へ関数化(game引数): poseHands/raiseAirborne/defArmRate/dribArmRate/poseOnBallHands/poseDenyHands/festivePose。無引数の poseHands は変換後の空引数 (game, ) を (game) へ補正。
+- Game 側 public 化: looseStealBy/looseStealVictim。
+- 呼び出し更新: game.ts フレーム処理 poseHands(this)、finale festivePose(this,p,dt,amp)。ballInHand/swarmStrips は汎用/守備寄りのため Game 残置。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 29.4・28.7・29.7(平均~29.3)・40試合完走。
+- 行数: game.ts 2663→2408(−255)、poses.ts 265新規。累計 6744→2408(−4336、約64%減)。
+- 構成: core/{defense-schemes, defense, passing, offball, offense, shooting, poses}。計画分割(offense/shooting/poses)完了。
+
+## 2026-07-23 (295) game.ts分割 Option B: ルーズボール物理を core/looseball.ts へ
+
+- ルーズボール内部物理6関数を core/looseball.ts へ関数化(game引数): stepBallFreeFlight/updateLoose/chaseLoose/resolveLooseContact/contactLooseBall/secureLoose。
+- 多所から使うエントリ点(goLoose/startRebound/leakOut/crashBoards)は Game 残置(passing/shooting/freethrow が game 経由で使用、循環回避)。
+- Game 側 public 化: looseAge/looseFromTip/looseGrabAfter/looseIsRebound/looseT/looseTips。
+- 追加 import(looseball.ts): SHOT_CLOCK/SHOT_CLOCK_PARTIAL(config)、rate(attributes)。
+- 呼び出し更新: game.ts 更新ループ updateLoose(this,dt)、updatePause 内 stepBallFreeFlight(this,...)。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 27.8・28.4・29.2(平均~28.5)・40試合完走。
+- 行数: game.ts 2408→2215(−193)、looseball.ts 204新規。累計 6744→2215(−4529、約67%減)。
+- 構成: core/{defense-schemes, defense, passing, offball, offense, shooting, poses, looseball}。
+
+## 2026-07-23 (296) game.ts分割 Option B: スティール/ストリップを core/defense.ts へ集約
+
+- 守備のはたき/コンテスト4関数を core/defense.ts へ追記(game引数): swarmStrips/catchStrips/deflectCatch/stealLunge。奪取確定 steal は多所(defense-schemes/defense)から使うため Game 残置。
+- 追加 import(defense.ts): stripEdge(eval)。
+- 呼び出し更新: game.ts updateLive ループ catchStrips(this,dt)/swarmStrips(this,dt)、import に catchStrips/swarmStrips 追加。private 公開は不要(既存 public のみ使用)。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 29.6・28.9・30.0(平均~29.5)・40試合完走。
+- 行数: game.ts 2215→2105(−110)、defense.ts 341→456。累計 6744→2105(−4639、約69%減)。
+
+## 2026-07-23 (297) game.ts分割 Option B: ゲームフロー(クォーター終了/フィナーレ)を core/gameflow.ts へ
+
+- 進行管理6関数を core/gameflow.ts へ関数化(game引数): endQuarter/startFinale/updateFinale/quarterWalkOff/quarterWalkOn/quarterStartTeam。secondHalf は attackSign が使うため Game 残置。
+- 静的定数 FINALE_DUR(6.0) を Game static から gameflow.ts の module const へ移設。
+- Game 側 public 化: applyNumberSides/startQuarterInbound/cheerT/coastT/finaleT/finaleTrudge/finaleWalkers/finaleWinner/subNext/subT。
+- 追加 import(gameflow.ts): SHOT_CLOCK/COURT(config)、dist2DTo(util)、festivePose(core/poses)。
+- 呼び出し更新: game.ts 更新ループ endQuarter(this)/updateFinale(this,dt)、shooting.ts の game.endQuarter を endQuarter(game) に(2箇所)＋import。gameflow は offense/shooting/passing を呼ばず循環なし。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.4・29.8・28.7(平均~29.0)・40試合完走。
+- 行数: game.ts 2105→1887(−218)、gameflow.ts 232新規。累計 6744→1887(−4857、約72%減)。
+- 構成: core/{defense-schemes, defense, passing, offball, offense, shooting, poses, looseball, gameflow}。
+
+## 2026-07-23 (298) game.ts分割 Option B: ビジュアル同期を core/visuals.ts へ
+
+- 毎フレーム描画4関数を core/visuals.ts へ関数化(game引数): swishNet/tickSwish/updateFacing/syncAll。applyModelAll/applyUniforms/syncVisuals は main.ts 向け public API のため Game 残置。
+- Game 側 public 化: hoops/netSwish/ring(readonly)/swishTeam。
+- 追加 import(visuals.ts): hoopIndex(court)、poseHands(core/poses)、TEAM_COLORS 他。
+- 呼び出し更新: game.ts 更新ループ syncAll(this)/updateFacing(this,dt)/tickSwish(this,dt)、syncVisuals→syncAll(this)。shooting.ts/freethrow.ts の swishNet を swishNet(game|g,) に＋import。visuals は offense/shooting/passing を呼ばず循環なし。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.2・29.2・29.2(平均~28.9)・40試合完走。※updateFacing/syncAll は描画専用で headless 非実行 → 見た目は実機未検証(機械変換でロジック保存)。
+- 行数: game.ts 1887→1703(−184)、visuals.ts 197新規。累計 6744→1703(−5041、約75%減)。
+- 構成: core/{defense-schemes, defense, passing, offball, offense, shooting, poses, looseball, gameflow, visuals}。
+
+## 2026-07-23 (299) game.ts分割 Option B: デッドボール解決を core/deadball.ts へ
+
+- ターンオーバー/ファウル解決4関数を core/deadball.ts へ関数化(game引数): turnover/shotClockViolation/defensiveFoul/sideInbound。共有インフラの pauseThen/updatePause は多所参照のため Game 残置。
+- 呼び出し更新: game.ts updateLive の shotClockViolation(this)、passing.ts の game.turnover→turnover(game,)、defense.ts の game.defensiveFoul→defensiveFoul(game,)＋各import。deadball は offense/shooting/passing/defense を呼ばず循環なし。
+- 追加 import(deadball.ts): COURT/SHOT_CLOCK/SHOT_CLOCK_PARTIAL/teamShort(config)、clamp/dist2D(util)、rate(attributes)。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 29.4・28.6・29.4(平均~29.1)・40試合完走(TO/ショットクロック違反/ファウル/スローイン)。
+- 行数: game.ts 1703→1627(−76)、deadball.ts 86新規。累計 6744→1627(−5117、約76%減)。
+- 構成: core/{defense-schemes, defense, passing, offball, offense, shooting, poses, looseball, gameflow, visuals, deadball}。
+
+## 2026-07-23 (300) game.ts分割 Option B: 選手衝突解決を core/collision.ts へ
+
+- 衝突物理2関数を core/collision.ts へ関数化(game引数): resolveCollisions/holdWeight。game.ts updateLive のみが呼び、cross-module・循環なし。
+- 追加 import(collision.ts): clamp/dist2D/rand(util)、rate(attributes)。private 公開は不要。
+- 呼び出し更新: game.ts updateLive の resolveCollisions(this)＋import。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.5・29.6・28.9(平均~29.0)・40試合完走。
+- 行数: game.ts 1627→1566(−61)、collision.ts 69新規。累計 6744→1566(−5178、約77%減)。
+- 構成: core/{defense-schemes, defense, passing, offball, offense, shooting, poses, looseball, gameflow, visuals, deadball, collision}。
+
+## 2026-07-23 (301) game.ts分割 Option B: ベンチ演出を core/bench.ts へ
+
+- ベンチ4関数を core/bench.ts へ関数化(game引数): benchSeat/seatOnBench/benchCheer/updateBenchCheer。着席位置と得点/勝利の歓声アニメ。循環なし。
+- Game 側 public 化: cheerAmp。
+- 追加 import(bench.ts): Vector3、COURT(config)、clamp/rand/chance(util)。
+- 呼び出し更新: game.ts の staying 呼び出し(substitute→benchSeat/applyRoster→seatOnBench/loop→updateBenchCheer)を func(this,)＋import。shooting.ts/freethrow.ts の benchCheer を benchCheer(game|g,)＋import。
+- 挙動不変確認: tsc✓ / vite build✓ / headless 28.4・29.9・29.3(平均~29.2)・40試合完走。
+- 行数: game.ts 1566→1505(−61)、bench.ts 71新規。累計 6744→1505(−5239、約78%減)。
+- 構成: core/{defense-schemes, defense, passing, offball, offense, shooting, poses, looseball, gameflow, visuals, deadball, collision, bench}。
+
+## 2026-07-23 (302) オブジェクト/アニメーション分離: Ball・Player本体・Playerアニメを別ファイルへ
+
+- ユーザー指摘（オブジェクトとアニメーションも別ファイル化）に対応。game.ts のロジック分割に集中して entities.ts(選手/ボール本体+アニメ)を放置していた分を実施。
+- **オブジェクト**: Ball を src/ball.ts へ分離。entities.ts→player.ts へリネーム(import 30ファイルを /entities"→/player" 一括更新)。コート/リング/ゴールボード/ベンチは既に court.ts。
+- **アニメーション(プロトタイプ拡張)**: Player の ~35 アニメメソッドを4ファイルへ紐づけ分離。方式=ユーザー選択の `Player.prototype.X = function(){...}` + `declare module "./player" { interface Player {...} }` 型マージ。**本体は逐語移動(this は Player のまま)＝ロジック不変**、呼び出し側 p.runArms() 等は全て不変(cross-module 波及ゼロ)。
+  - player-arms.ts(249): bendElbow/handsRest/runArms/reach/digReach/holdBallHands/reachDribble/armsWide/guardDrive/denyLane/handsUp/aimArm/setArmDir
+  - player-facing.ts(116): twistToward/lookToward/faceChestToward/relativeChestAngle/resetTwist/faceToward/faceSmooth/resetFacing
+  - player-legs.ts(206): jump/updateJump/updateLegs/updateAcornFeet/syncAcornLegs/foldSeatedLegs/sit/stand/foldAcornSeat/unfoldAcornSeat
+  - player-react.ts(176): benchIdle/dejectedPose/foulReaction/poseFoulReaction/defWin/poseDefWin
+- 注入: game.ts が4ファイルを副作用 import(`import "./player-arms"` 等)。prototype 代入は import 評価時＝Player 構築前に実行。aimDownTo/limb ノード(armPivotL/elbowL/hipL/kneeL/headNode/torsoNode 等 ~45個)と静的定数(TWIST_MAX/HEAD_MAX/ACORN_*/SIT_*/SEAT_SURF)を public 化。
+- 検証: tsc✓ / vite build✓ / headless 28-30・40試合完走(foulReaction 等は sim 中に実行され注入も検証)。**vite 束(dist)にも prototype.runArms/handsUp/foulReaction/twistToward/updateLegs を確認=ブラウザでも tree-shake されず注入有効**。※見た目そのものは実機未検証(逐語移動でロジック保存)。
+- 行数: entities.ts 2282→player.ts 1632。新規: ball.ts 20 / player-arms 249 / player-facing 116 / player-legs 206 / player-react 176。
+
+## 2026-07-24 (303) game.ts分割 継続: コーチング/ラインナップ層を systems/lineups.ts へ
+
+- ユーザー指示「game.ts のリファクタリング（コーチング層のみ・安全側）」に対応。残る game.ts は意図的なエンジンコアだが、自己完結したコーチング判断4関数をクリーンに切り出せると確認。
+- コーチング4関数を systems/lineups.ts(121行)へ抽出:
+  - `overallOf(p)` / `roleFit(p, slot)`: Player・PlayerDef を受ける純ヘルパ(this不使用のため引数化不要、そのまま関数化)。
+  - `refreshChoiceRanks(game, team)`: 旧 private。choiceRank→offPriority(ユーセージ)導出。game 引数化。
+  - `optimizeLineups(game)`: 対戦相手認識の先発選抜。旧 public API(main.ts)。this.tactics→game.tactics / this.roleFit→roleFit(自モジュール) に機械変換、ロジック逐語不変。
+- 呼び出し更新: game.ts の `this.refreshChoiceRanks(t)` 3箇所(substitute/reset/applyRoster)→`refreshChoiceRanks(this,t)`。main.ts `game.optimizeLineups()`→`optimizeLineups(game)`(import追加)。systems/subs.ts の `game.roleFit`(3)/`game.overallOf`(2)→lineups から import して直接呼び。
+- game.ts の attributes import から移動で不要化した scoringPower/usageFromRank/EXTRA_POSITIONS/PlayerDef を除去(全て移動対象内のみで使用と grep 確認)。循環なし(lineups は attributes/util + type Game のみ import)。
+- 検証: tsc✓ / vite build✓(built in 22.5s) / headless 40試合 28.6(min18/max42、基準28-30内)・NaN/タイムアウトなし全完走。
+  - 付随修正: headless_sim/keep.ts の古い `../src/entities` import を `../src/player` へ(entities→player リネーム後の未修正、ハーネスが壊れていた)。keep.mjs を esbuild で再ビルドして実測。
+- 行数: game.ts 1510→1398(−112)。lineups.ts 121新規。累計 6744→1398(約79%減)。
+- 構成(systems): subs, screen, tipoff, inbound, freethrow, **lineups**。
+- ⚠️ HEAD はリファクタ前6744行版のまま(ユーザー指示によりコミットは触らず)。描画系は headless 非実行のため見た目は実機未検証(今回は非描画のコーチング判断のみで影響なし)。
+
+## 2026-07-24 (304) game.ts分割 継続: ライブプレイ(updateLive)を core/liveball.ts へ + デッドimport一掃
+
+- workPlan Phase4「update ループ / ライブプレイの整理」に相当。game.ts 最大メソッド updateLive(~160行)を core/liveball.ts(171行)へ関数化(game引数)。ballMode "held" の毎フレーム tick: ドリブルのケイデンス前進、runOffense/runDefense/はたきの進行、キャリー/ギャザー/ピックアップのボール位置決め。逐語移動+this→game 機械変換でロジック不変。
+- ballInHand は core/defense・core/offense が `game.ballInHand(h)` で使う共有ヘルパのため Game 残置(メモリ [[game-split-optionb]] の規定どおり)。
+- 循環なし: liveball は offense/defense/passing + attributes/util + type Game を import。呼び出しは game.ts の update switch "held" のみ(`updateLive(this,dt)`)。offense/defense/passing は liveball を呼ばない。
+- 呼び出し更新: game.ts switch `this.updateLive(dt)`→`updateLive(this,dt)`、import 追加。
+- **付随: game.ts のデッドimport一掃**(過去の分割で蓄積、tsc の ts(6133)「未読」で証明済み・全34シンボルが import 内のみと grep 確認)。除去: court(hoopIndex)、config(THREE_DIST/LANE_W/PALM_HITBOX/MAX_PASS/SHOT_CLOCK_PARTIAL/TEAM_COLORS)、eval(palmRadius/twWeight/gatherFor/deepThreeOK/effShootRange/shotWindupFor/wontLoadUp/stripEdge/jukeDeception/jukeDiscipline — reactionLag のみ残)、rebound(looseSecureChance)、passing(pass)、offball(updateOffBallMotion)、shooting(shoot/finishAtRim)、poses(poseHands/festivePose)、deadball(turnover/defensiveFoul)、bench(benchCheer)、resolution/{shot-outcome,contest-block,foul,pass-risk} 全行。updateLive 抽出で新規に死んだ defense行(runDefense/denySmother/catchStrips/swarmStrips)/passing(passToReceiver)/offense(runOffense) もここで除去。
+- 検証: tsc✓ / vite build✓(13.97s) / headless 40試合 30.2(min20/max40、過去も29.9/30.1実績のRNG分散内)・NaN/タイムアウトなし全完走。
+- 行数: game.ts 1398→1227(−171: updateLive −160 + デッドimport約11)。liveball.ts 171新規。累計 6744→1227(約82%減)。
+- 構成(core): defense-schemes, defense, passing, offball, offense, shooting, poses, looseball, **liveball**, gameflow, visuals, deadball, collision, bench。
+- ⚠️ HEAD はリファクタ前6744行版のまま(ユーザー指示によりコミット未実施)。描画系(ボール位置決め含む)は headless 非実行のため見た目は実機未検証(逐語移動でロジック保存)。
+
+## 2026-07-24 (305) game.ts のコメントを日本語化
+
+- ユーザー指示（コード内コメントは日本語 / [[feedback-japanese-comments]]）に対応。game.ts の英語コメントを全て日本語へ翻訳。既に日本語の箇所(方式A注記・座標系ノート等)はそのまま。
+- **コードは1文字も変更なし**を機械検証: バックアップ(scratchpad/game.before.ts)と新版から block/line コメントを除去して比較 → 完全一致(node スクリプト)。cSpell 警告も英語コメント由来(offence/defence/bigs/frontcourt 等)は全消え、残るは import パス/変数名(freethrow/liveball/gameflow/deadball/playmaking/opps/Mult 等)のみ。
+- 検証: tsc✓ / vite build✓(13.82s) / headless 40試合 27.3(コメントのみ変更=ロジック不変のためRNG分散、min14/max37)。
+- 対象: フィールド宣言のインラインコメント、メソッドの JSDoc/ブロックコメント、区切りコメント(// ---- ... ----)全て。バスケ用語・能力値名(D精度/反応/精神/ロング等)や NBA ルール参照は原義を保って翻訳。

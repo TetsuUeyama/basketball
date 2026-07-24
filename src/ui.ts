@@ -16,7 +16,7 @@ type Phase = "title" | "pregame" | "playing" | "result";
 
 // Stats that pop a floating "＋" badge over a player's icon the moment he earns
 // them (score / assist / rebound / steal / block / turnover).
-const POP_STATS: { key: keyof import("./entities").Stats; label: string; color: string }[] = [
+const POP_STATS: { key: keyof import("./player").Stats; label: string; color: string }[] = [
   { key: "pts", label: "P", color: "#63e08c" },
   { key: "ast", label: "A", color: "#5ec8ff" },
   { key: "reb", label: "R", color: "#ffd85e" },
@@ -65,13 +65,13 @@ export class UI {
   private iconTabs: HTMLButtonElement[][] = [[], []];
   private showBench: boolean[] = [false, false];
   private iconKey: string[] = ["", ""];
-  private iconEl = new Map<import("./entities").Player, HTMLDivElement>(); // player → its current icon element
-  private iconStamina = new Map<import("./entities").Player, { bar: HTMLDivElement; fill: HTMLDivElement }>(); // player → its icon stamina bar
-  private iconRole = new Map<import("./entities").Player, HTMLDivElement>();   // player → its offence/defence role pill
+  private iconEl = new Map<import("./player").Player, HTMLDivElement>(); // player → its current icon element
+  private iconStamina = new Map<import("./player").Player, { bar: HTMLDivElement; fill: HTMLDivElement }>(); // player → its icon stamina bar
+  private iconRole = new Map<import("./player").Player, HTMLDivElement>();   // player → its offence/defence role pill
   private staminaBtn: HTMLButtonElement | null = null;   // HUD toggle: gauge on name tag ⇄ face icon
   private namesBtn: HTMLButtonElement | null = null;     // HUD toggle: on-court name tags on ⇄ off
   private modelBtn: HTMLButtonElement | null = null;     // HUD toggle: 人型 ⇄ どんぐり体形
-  private statSnap = new Map<import("./entities").Player, number[]>();     // last-seen POP_STATS values
+  private statSnap = new Map<import("./player").Player, number[]>();     // last-seen POP_STATS values
   private controls!: HTMLDivElement;      // speed / RESTART row
   private menuBtn!: HTMLButtonElement;    // ☰ hamburger — rides the top edge until the scoreboard reaches it
   private camHint!: HTMLDivElement;       // "drag: orbit" hint — kept level with the ☰ on the left
@@ -382,7 +382,7 @@ export class UI {
 
   // Hover a player icon → show his live box score, floated ABOVE the icon (the
   // icons sit near the bottom of the screen).
-  private showStatTip(player: import("./entities").Player, anchor: HTMLElement): void {
+  private showStatTip(player: import("./player").Player, anchor: HTMLElement): void {
     // cancel a stale grace-period hide from the icon just left (see showTextTip)
     if (this.tipHideT) { window.clearTimeout(this.tipHideT); this.tipHideT = 0; }
     this.tipTitle.style.color = colorOf(player.team);
@@ -2915,7 +2915,7 @@ export class UI {
   }
 
   // The box-score columns. FG / 3P / FT show makes ● of attempts ● ("3/8").
-  private static readonly BOX_COLS: { label: string; w: number; get: (s: import("./entities").Stats) => string }[] = [
+  private static readonly BOX_COLS: { label: string; w: number; get: (s: import("./player").Stats) => string }[] = [
     { label: "MIN", w: 40, get: (s) => (s.min / 60).toFixed(1) },
     { label: "PTS", w: 34, get: (s) => String(s.pts) },
     { label: "FG", w: 48, get: (s) => `${s.fgm}/${s.fga}` },
@@ -2967,7 +2967,7 @@ export class UI {
   // Team-vs-team comparison: totals side by side (team0 on the left, team1 on
   // the right, the stat name between) so the two squads read against each other.
   private teamCompare(game: Game): HTMLDivElement {
-    type S = import("./entities").Stats;
+    type S = import("./player").Stats;
     const total = (t: number): S => {
       const a = { pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, min: 0 };
       for (const pl of game.allPlayers(t)) for (const k in a) (a as any)[k] += (pl.stats as any)[k];
@@ -3209,7 +3209,7 @@ export class UI {
   // A small face avatar: team-coloured disc, a simple generated head, and the
   // jersey number, with the player's name beneath. No portrait art exists, so
   // the face is drawn procedurally and the number/name identify the player.
-  private makeFaceIcon(player: import("./entities").Player, posText: string): HTMLDivElement {
+  private makeFaceIcon(player: import("./player").Player, posText: string): HTMLDivElement {
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {
       position: "relative",   // so the position badge can overlay the (clipped) face
@@ -3322,7 +3322,7 @@ export class UI {
     }
   }
 
-  private drawFace(canvas: HTMLCanvasElement, player: import("./entities").Player): void {
+  private drawFace(canvas: HTMLCanvasElement, player: import("./player").Player): void {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const W = canvas.width, H = canvas.height;
@@ -3457,7 +3457,7 @@ export class UI {
       // the badge shows the FIELD position (which slot he plays) for the on-court
       // five; the bench (no field spot) shows each man's natural role instead.
       const SLOT_POS = ["PG", "SG", "SF", "PF", "C"];
-      const posOf = (p: import("./entities").Player) =>
+      const posOf = (p: import("./player").Player) =>
         this.showBench[t] ? p.role : (SLOT_POS[p.slot] ?? p.role);
       // rebuild only when the shown set (or a name / tab / 評価ロール / slot) changes —
       // names are in the key so a tip-off applyRoster rename rebuilds at once, and
@@ -3518,7 +3518,7 @@ export class UI {
     }
   }
 
-  private popStat(player: import("./entities").Player, label: string, delta: number,
+  private popStat(player: import("./player").Player, label: string, delta: number,
                   color: string, stack: number): void {
     const icon = this.iconEl.get(player);
     if (!icon || !icon.isConnected) return;   // only when the icon is actually on screen
