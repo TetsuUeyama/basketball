@@ -2,7 +2,7 @@
 // などを算出する。ゲーム状態は一切持たず、入力は全て引数で受け取る。これにより
 // 認知層(decide*)と効果層(シュート成否・コンテスト)が同一の計算式を共有できる。
 // game.ts からレイヤ分割の第一弾として抽出（workPlan.md 参照）。
-import { Player } from "./player";
+import { Player } from "./objects/player/player";
 import { RIM, THREE_DIST } from "./config";
 import { rate } from "./attributes";
 import { clamp, rand } from "./util";

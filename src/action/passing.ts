@@ -1,6 +1,6 @@
 // パス処理（受け手選択・投球・飛行/受球）。Option B: 状態は Game(=GameState)が持ち、
 // ここは game を受け取る関数群。パスのリスク/インターセプト計算は resolution/pass-risk。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { COURT, PASS_SPEED, MAX_PASS, SHOT_CLOCK } from "../config";
 import { rate } from "../attributes";
 import { clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";

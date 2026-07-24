@@ -5,7 +5,7 @@
 import { TEAM_COLORS } from "../config";
 import { dist2D, dist2DTo } from "../util";
 import { rate } from "../attributes";
-import { hoopIndex } from "../court";
+import { hoopIndex } from "../objects/court";
 import { poseHands } from "./poses";
 import type { Game } from "../game";
 

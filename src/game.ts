@@ -1,11 +1,14 @@
 import { Scene, Vector3, Mesh } from "@babylonjs/core";
-import { Player } from "./player";
-import { Ball } from "./ball";
-import "./player-arms";   // Player.prototype にアニメを注入
-import "./player-facing";
-import "./player-legs";
-import "./player-react";
-import { makeHandlerRing, type Hoops } from "./court";
+import { Player } from "./objects/player/player";
+import { Ball } from "./objects/ball";
+import "./objects/player/player-move";    // Player.prototype に移動/物理/クエリ/状態を注入
+import "./objects/player/player-query";
+import "./objects/player/player-state";
+import "./objects/player/player-arms";    // Player.prototype にアニメを注入
+import "./objects/player/player-facing";
+import "./objects/player/player-legs";
+import "./objects/player/player-react";
+import { makeHandlerRing, type Hoops } from "./objects/court";
 import {
   COURT, RIM, PASS_SPEED, SHOT_CLOCK, QUARTER_TIME, QUARTERS, teamShort,
 } from "./config";

@@ -1,7 +1,7 @@
 // オフボール移動・スペーシング。Option B: 状態は Game(=GameState)が持ち、ここは game を
 // 受け取る関数群。スクリーンは ScreenSystem、トラップ救済等は Game 側のヘルパーを使う。
 import { Vector3 } from "@babylonjs/core";
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { RIM, THREE_DIST, LANE_W } from "../config";
 import { rate } from "../attributes";
 import { clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";

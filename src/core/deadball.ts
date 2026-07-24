@@ -2,7 +2,7 @@
 // クロック違反(shotClockViolation)、ディフェンシブファウル(defensiveFoul)と、その後の
 // サイドスローイン(sideInbound)。ポゼッション交代とスローイン再開を司る。共有インフラの
 // pauseThen/updatePause は Game 残置(多所参照)。状態は Game に集約し game を受け取る。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { COURT, SHOT_CLOCK, SHOT_CLOCK_PARTIAL, teamShort } from "../config";
 import { clamp, dist2D } from "../util";
 import { rate } from "../attributes";

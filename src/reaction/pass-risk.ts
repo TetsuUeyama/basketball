@@ -1,7 +1,7 @@
 // パスの「効果」= レーン妨害・インターセプト確率の算出（判定ルール）。状態は変更
 // しない純粋関数。`defenders` には from(パサー)の相手チームを渡す。抽選(chance)を含む
 // 関数(longBallRead/evalInterception)は結果のみ返し、発生時の状態変更は game.ts に残す。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { LANE_W, PASS_SPEED } from "../config";
 import { rate } from "../attributes";
 import { clamp, dist2D, chance } from "../util";

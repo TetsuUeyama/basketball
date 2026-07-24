@@ -1,6 +1,6 @@
 // ファウルの「効果」= 発生確率の算出（判定ルール）。抽選(chance)と発生時の処理
 // (フリースロー移行・演出など)は game.ts 側に残す。純粋関数のみ。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { clamp, dist2D } from "../util";
 
 // シューティングファウルの発生確率。レイアップは接触が多く、密着コンテストほど増える。

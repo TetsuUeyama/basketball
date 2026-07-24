@@ -1,7 +1,7 @@
 // ベンチ演出（方式B: GameState 集約）。ベンチ選手の着席位置(benchSeat/seatOnBench)と、
 // 得点/勝利時の歓声アニメ(benchCheer/updateBenchCheer)。状態は Game に集約し game を受け取る。
 import { Vector3 } from "@babylonjs/core";
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { COURT } from "../config";
 import { rand, chance } from "../util";
 import type { Game } from "../game";

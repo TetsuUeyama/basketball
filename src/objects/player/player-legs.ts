@@ -1,8 +1,8 @@
 // 選手の脚・ジャンプ・着席の移動/姿勢アニメーション（プロトタイプ拡張で Player に紐づけ）。本体は entities.ts から逐語移動
 // （this は Player インスタンスのまま）。呼び出し側は不変。game.ts が副作用 import する。
-import { HUD_OPTS } from "./config";
-import { clamp } from "./util";
-import { rate } from "./attributes";
+import { HUD_OPTS } from "../../config";
+import { clamp } from "../../util";
+import { rate } from "../../attributes";
 import { Player } from "./player";
 
 declare module "./player" {

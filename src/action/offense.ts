@@ -3,7 +3,7 @@
 // 状態は Game に集約し、各関数は第一引数 game を受け取る。循環回避のため
 // pickSide/setDriveSide/setDrive は Game 側に残置し game.X 経由で呼ぶ。
 import { Vector3 } from "@babylonjs/core";
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { COURT, THREE_DIST, SHOT_CLOCK, PALM_HITBOX, MAX_PASS } from "../config";
 import { clamp, dist2D, dist2DTo, moveToward2D, chance, rand } from "../util";
 import { twWeight, gatherFor, effShootRange, wontLoadUp, reactionLag, palmRadius, jukeDeception, jukeDiscipline } from "../eval";

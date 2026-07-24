@@ -3,7 +3,7 @@
 // 純粋な読み取り関数。passing/offense/offball が game 経由で使う。game.ts から分離
 // （workPlan.md の cognition 層 / [[game-split-optionb]] 参照）。
 import { Vector3 } from "@babylonjs/core";
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { COURT } from "../config";
 import { clamp, dist2D } from "../util";
 import type { Game } from "../game";

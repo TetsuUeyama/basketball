@@ -1,7 +1,7 @@
 // ディフェンスの特殊スキーム（ゾーン / フルコートプレス / スキーム選択）。Option B:
 // 状態は Game(=GameState)が持ち、ここは game を受け取る関数群。man ディフェンス本体は
 // runDefense(game 側)に残し、そこからスキーム時にこれらへ分岐する。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { RIM } from "../config";
 import { rate } from "../attributes";
 import { clamp, chance, dist2D, moveToward2D } from "../util";

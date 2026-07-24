@@ -2,7 +2,7 @@
 // (subDesire/matchupSubs/planSubs)に加え、実際の入れ替え(substitute)・歩行アニメ
 // (subWalkers/updateSubs)・凍結ゲート(withSubs)もここへ集約（エントリ307で Game 残置
 // から移設）。game.ts から分離（workPlan.md 参照）。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { QUARTERS } from "../config";
 import { STARTERS, rate, scoringPower } from "../attributes";
 import { clamp, dist2DTo, moveToward2D, rand } from "../util";

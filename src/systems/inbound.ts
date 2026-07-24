@@ -3,7 +3,7 @@
 // はパス飛行の内部機構を使うため Game 側に残し、update() から this.game.throwIn を呼ぶ。
 // t/receiver/oobWalker/oobSpot は外部(クォーター開始・サイドイン・reset・updatePause)も参照。
 import { Vector3 } from "@babylonjs/core";
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { COURT, RIM, SHOT_CLOCK, SHOT_CLOCK_PARTIAL, teamShort } from "../config";
 import { clamp, rand, dist2DTo, moveToward2D } from "../util";
 import { runDefenseDuringDeadish } from "../action/defense";

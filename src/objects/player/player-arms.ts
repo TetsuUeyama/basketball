@@ -3,8 +3,8 @@
 // 等は不変。副作用 import で prototype を注入するため、game.ts / main.ts が本ファイルを
 // import する。
 import { TransformNode, Vector3, Quaternion } from "@babylonjs/core";
-import { HUD_OPTS } from "./config";
-import { clamp } from "./util";
+import { HUD_OPTS } from "../../config";
+import { clamp } from "../../util";
 import { Player, aimDownTo } from "./player";
 
 declare module "./player" {

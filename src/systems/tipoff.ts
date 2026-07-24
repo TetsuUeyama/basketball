@@ -1,7 +1,7 @@
 // ティップオフ（開幕ジャンプボール）機能。方式A: Game 参照を受け取るサブシステム。
 // 固有状態(進行時間/勝者/タップ先ガード/跳んだか)はこのクラスが所有し、共有状態・
 // フローは game 経由で呼ぶ。winner/guard は外部(団子回避・ポゼッション矢印)も参照。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { chance, rand } from "../util";
 import type { Game } from "../game";
 

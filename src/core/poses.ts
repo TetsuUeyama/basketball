@@ -2,7 +2,7 @@
 // ターゲット姿勢（オンボール保持/ディナイ/コンテスト挙上/勝利セレブレーション）を
 // 決める描画寄りの処理。状態は Game に集約し各関数は第一引数 game を受け取る。
 import { Vector3 } from "@babylonjs/core";
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { MAX_PASS } from "../config";
 import { dist2D, rand, chance } from "../util";
 import { rate } from "../attributes";

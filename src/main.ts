@@ -3,11 +3,11 @@ import {
   HemisphericLight, DirectionalLight, ShadowGenerator,
   UniversalCamera, Viewport, MeshBuilder, StandardMaterial,
 } from "@babylonjs/core";
-import { buildCourt } from "./court";
+import { buildCourt } from "./objects/court";
 import { BroadcastCamera } from "./camera";
 import { Game } from "./game";
 import { optimizeLineups } from "./systems/lineups";
-import { Player } from "./player";
+import { Player } from "./objects/player/player";
 import { ROSTER } from "./attributes";
 import { UI } from "./ui";
 import { TEAM_NAMES, TEAM_COLORS } from "./config";

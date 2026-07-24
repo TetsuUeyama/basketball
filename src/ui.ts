@@ -16,7 +16,7 @@ type Phase = "title" | "pregame" | "playing" | "result";
 
 // 選手がスタッツを記録した瞬間に、彼のアイコン上へ浮遊する「＋」バッジをポップ
 // させる対象スタッツ（得点 / アシスト / リバウンド / スティール / ブロック / ターンオーバー）。
-const POP_STATS: { key: keyof import("./player").Stats; label: string; color: string }[] = [
+const POP_STATS: { key: keyof import("./objects/player/player").Stats; label: string; color: string }[] = [
   { key: "pts", label: "P", color: "#63e08c" },
   { key: "ast", label: "A", color: "#5ec8ff" },
   { key: "reb", label: "R", color: "#ffd85e" },
@@ -65,13 +65,13 @@ export class UI {
   private iconTabs: HTMLButtonElement[][] = [[], []];
   private showBench: boolean[] = [false, false];
   private iconKey: string[] = ["", ""];
-  private iconEl = new Map<import("./player").Player, HTMLDivElement>(); // 選手 → 現在のアイコン要素
-  private iconStamina = new Map<import("./player").Player, { bar: HTMLDivElement; fill: HTMLDivElement }>(); // 選手 → アイコンの体力バー
-  private iconRole = new Map<import("./player").Player, HTMLDivElement>();   // 選手 → オフェンス/守備ロールのピル
+  private iconEl = new Map<import("./objects/player/player").Player, HTMLDivElement>(); // 選手 → 現在のアイコン要素
+  private iconStamina = new Map<import("./objects/player/player").Player, { bar: HTMLDivElement; fill: HTMLDivElement }>(); // 選手 → アイコンの体力バー
+  private iconRole = new Map<import("./objects/player/player").Player, HTMLDivElement>();   // 選手 → オフェンス/守備ロールのピル
   private staminaBtn: HTMLButtonElement | null = null;   // HUD トグル: ゲージを名前タグ上 ⇄ 顔アイコン
   private namesBtn: HTMLButtonElement | null = null;     // HUD トグル: コート上の名前タグ 表示 ⇄ 非表示
   private modelBtn: HTMLButtonElement | null = null;     // HUD トグル: 人型 ⇄ どんぐり体形
-  private statSnap = new Map<import("./player").Player, number[]>();     // 最後に確認した POP_STATS の値
+  private statSnap = new Map<import("./objects/player/player").Player, number[]>();     // 最後に確認した POP_STATS の値
   private controls!: HTMLDivElement;      // 速度 / RESTART の行
   private menuBtn!: HTMLButtonElement;    // ☰ ハンバーガー — スコアボードが届くまでは上端に乗る
   private camHint!: HTMLDivElement;       // 「drag: orbit」ヒント — 左側で ☰ と同じ高さに保つ
@@ -382,7 +382,7 @@ export class UI {
 
   // 選手アイコンをホバー → 彼のライブなボックススコアを、アイコンの上に浮かせて
   // 表示する（アイコンは画面下部付近にある）。
-  private showStatTip(player: import("./player").Player, anchor: HTMLElement): void {
+  private showStatTip(player: import("./objects/player/player").Player, anchor: HTMLElement): void {
     // 直前に離れたアイコンからの古い猶予期間つき非表示をキャンセル（showTextTip 参照）
     if (this.tipHideT) { window.clearTimeout(this.tipHideT); this.tipHideT = 0; }
     this.tipTitle.style.color = colorOf(player.team);
@@ -2800,7 +2800,7 @@ export class UI {
   }
 
   // ボックススコアの列。FG / 3P / FT は 成功 ● / 試投 ● を表示（「3/8」）。
-  private static readonly BOX_COLS: { label: string; w: number; get: (s: import("./player").Stats) => string }[] = [
+  private static readonly BOX_COLS: { label: string; w: number; get: (s: import("./objects/player/player").Stats) => string }[] = [
     { label: "MIN", w: 40, get: (s) => (s.min / 60).toFixed(1) },
     { label: "PTS", w: 34, get: (s) => String(s.pts) },
     { label: "FG", w: 48, get: (s) => `${s.fgm}/${s.fga}` },
@@ -2852,7 +2852,7 @@ export class UI {
   // チーム対チームの比較: 合計を左右に並べる（team0 が左、team1 が右、その間に
   // スタッツ名）ので、2つのスカッドが互いに対比して読める。
   private teamCompare(game: Game): HTMLDivElement {
-    type S = import("./player").Stats;
+    type S = import("./objects/player/player").Stats;
     const total = (t: number): S => {
       const a = { pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, min: 0 };
       for (const pl of game.allPlayers(t)) for (const k in a) (a as any)[k] += (pl.stats as any)[k];
@@ -3094,7 +3094,7 @@ export class UI {
   // 小さな顔アバター: チームカラーの円盤、生成された簡単な頭部、そして背番号。
   // その下に選手名。肖像画のアートは存在しないため、顔は手続き的に描かれ、
   // 番号/名前が選手を識別する。
-  private makeFaceIcon(player: import("./player").Player, posText: string): HTMLDivElement {
+  private makeFaceIcon(player: import("./objects/player/player").Player, posText: string): HTMLDivElement {
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {
       position: "relative",   // ポジションバッジが（クリップされた）顔に重ねられるように
@@ -3207,7 +3207,7 @@ export class UI {
     }
   }
 
-  private drawFace(canvas: HTMLCanvasElement, player: import("./player").Player): void {
+  private drawFace(canvas: HTMLCanvasElement, player: import("./objects/player/player").Player): void {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const W = canvas.width, H = canvas.height;
@@ -3342,7 +3342,7 @@ export class UI {
       // でプレーするか）を表示する; ベンチ（フィールドのスポットなし）は代わりに
       // 各人の本来のロールを表示する。
       const SLOT_POS = ["PG", "SG", "SF", "PF", "C"];
-      const posOf = (p: import("./player").Player) =>
+      const posOf = (p: import("./objects/player/player").Player) =>
         this.showBench[t] ? p.role : (SLOT_POS[p.slot] ?? p.role);
       // 表示するセット（または 名前 / タブ / 評価ロール / スロット）が変わったときだけ
       // 再構築する — 名前がキーに含まれるので、ティップオフの applyRoster による
@@ -3404,7 +3404,7 @@ export class UI {
     }
   }
 
-  private popStat(player: import("./player").Player, label: string, delta: number,
+  private popStat(player: import("./objects/player/player").Player, label: string, delta: number,
                   color: string, stack: number): void {
     const icon = this.iconEl.get(player);
     if (!icon || !icon.isConnected) return;   // アイコンが実際に画面上にあるときだけ

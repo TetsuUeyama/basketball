@@ -4066,3 +4066,27 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - 未使用**パラメータ**(poses等の未使用 game 引数、SHOT_PARAMS の _f 等)は方式Aの統一シグネチャ維持のため除去せず据え置き。
 - 検証: tsc✓ / tsc --noUnusedLocals=**残0** / vite build✓(18.67s) / headless 40試合 29.0(基準内)。未使用コード除去のみ＝挙動不変。
 - ⚠️ 未コミット(0d2775c の上に本311)。openClubPicker は git 履歴から復元可能。
+
+## 2026-07-24 (312) objects/ フォルダ新設: 実体(メッシュ)を持つオブジェクトを集約
+
+- ユーザー指示「実体のあるものを objects へまとめる」。src/objects/ を新設し、メッシュ実体を持つ7ファイルを git mv: ball.ts, player.ts, player-{arms,facing,legs,react}.ts(Player+アニメ prototype), court.ts(コート/リング/ゴールボード/ハンドラーリング構築)。
+- 補足: **コート/ゴールリングは元々 game.ts でなく court.ts に定義**(buildCourt/makeHandlerRing)。game.ts は参照(this.ring:Mesh / this.hoops:Hoops)を保持するゲーム状態のみで構築コードは無く、移動対象外。
+- import 更新: normalize-imports.cjs で `from` import を一括再計算(game/main の ./court→./objects/court、各層の ../player→../objects/player、objects内の ./config→../config 等)。
+- **normalize の穴を手動補完**: (1) 副作用 import `import "./player-arms"` 等4行(game.ts、from無し)→ ./objects/player-*、(2) ui.ts の inline 型 import `import("./player").Player/.Stats` 11箇所(from無し)→ ./objects/player。※どちらも `from "..."` 正規表現の対象外。今後のフォルダ移動でも要手動対応。
+- 検証: tsc✓ / vite build✓(16.98s) / headless 40試合 28.1(基準内)。ファイル移動+import更新のみ=挙動不変。git はリネーム認識。
+- 最終構成: objects/(ball,court,player,player-*)、action/、reaction/、core/、systems/、root(game/main/ui/config/util/eval/attributes/camera/*db 等)。
+- ⚠️ 未コミット(543ca0a の上に本312)。
+
+## 2026-07-24 (313) objects/player/ 集約 + Player クラスの実体/ロジック分割
+
+- ユーザー方針「player系を objects/player/ にまとめ、実体設定のみ1ファイル、他は別ファイル」。2段階で実施。
+- **Stage1(入れ子化)**: objects/{player,player-arms,player-facing,player-legs,player-react}.ts を objects/player/ へ git mv。normalize を任意深さ対応(path.relative)へ改修し `from` import一括更新(../../config 等)。手動: game.ts 副作用import(./objects/player/player-*)、ui.ts inline型import(import("./objects/player/player"))。
+- **Stage2(クラス分割)**: player.ts(1595行、うち constructor のメッシュ構築488行)から、headless実行されるロジック20メソッドをプロトタイプ拡張3ファイルへ逐語移動:
+  - player-move.ts(236): recoveryMult/setPlant/tickCooldown/accelSpeed/turnFactor/leanFactor/accelToward/leanRecoverRate/decayLean/tickMotion/benchRecover/breakRecover/reachTopY
+  - player-query.ts(64): has/strongSide/strongSideBias/chestFront/faceDirWorld/dribbleWithRight
+  - player-state.ts(22): resetStats
+- **player.ts残置(1327)**: フィールド+constructor+全メッシュ/見た目メソッド(buildHairMeshes/applyLook/setNumberSide/applyModel/refreshScale/refreshBodyDepth/drawNameTag/applyUniform/sync)+getter(rooted/airborne)+jumpY+applyDef(applyLook等と密結合のため残置)+Stats/aimDownTo=「実体としての設定」。
+- プロトタイプ拡張のため private 7メンバーを public 化(eyeL/eyeR/plantDur/gaugeDrawn/gaugeRev/jumpY/drawNameTag)。他は既に public。除去はブレース深度方式スクリプト(オブジェクト戻り値/単一行メソッド対応)。game.ts が全拡張を副作用import(循環回避のため player.ts 自身は自import不可)。
+- 検証: tsc✓ / vite build✓(15.70s) / headless 40試合 27.3・29.4・29.3(基準28-30内) / **数値定数バイト一致**(旧543ca0a Player全体 vs 新 objects/player 全体: count1129・sum5203.9460 完全一致=逐語移動)。
+- 最終: objects/{ball,court, player/{player,player-move,player-query,player-state,player-arms,player-facing,player-legs,player-react}}。
+- ⚠️ 未コミット(543ca0a の上に 312/313)。

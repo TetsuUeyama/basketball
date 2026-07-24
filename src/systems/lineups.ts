@@ -2,7 +2,7 @@
 // どのポジションに適格か）。方式A: Game を受け取る関数群 / Player・PlayerDef を受け取る
 // 純ヘルパ。実際の入れ替えアニメ(substitute/updateSubs)は Game 側、交代の要否判断は
 // systems/subs.ts。game.ts から分離（workPlan.md / [[game-split-optionb]] 参照）。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { ROSTER, EXTRA_POSITIONS, rate, scoringPower, usageFromRank,
   type PlayerDef } from "../attributes";
 import { clamp } from "../util";

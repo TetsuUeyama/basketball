@@ -1,7 +1,7 @@
 // 選手同士の衝突解決（方式B: GameState 集約）。重なった選手を押し離す物理と、押し合い
 // の重み(holdWeight: ボール保持者やパサーは踏ん張る)。毎フレーム updateLive から呼ぶ。
 // 状態は Game に集約し各関数は第一引数 game を受け取る。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { rand } from "../util";
 import { rate } from "../attributes";
 import type { Game } from "../game";

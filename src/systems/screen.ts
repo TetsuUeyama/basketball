@@ -2,7 +2,7 @@
 // スクリーン設定と、守備側のカバレッジ(drop/show/switch)の両方を扱う。カバレッジ状態
 // (cov/screenerDef/handlerDef)は守備ループ(runDefense)からも読まれるため public。
 import { Vector3 } from "@babylonjs/core";
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { TACTICS, rate } from "../attributes";
 import { clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";
 import { defEffort, defendOnBall } from "../action/defense";

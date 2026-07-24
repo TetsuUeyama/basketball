@@ -2,7 +2,7 @@
 // リムフィニッシュ、コンテスト/ブロック、シューティングファウル、アシスト評価までを
 // 関数として集約。状態は Game に集約し各関数は第一引数 game を受け取る。
 // contestLeap は defense からも使うため Game 残置（game.contestLeap 経由）。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { RIM, THREE_DIST, PALM_HITBOX, SHOT_SET_Y, SHOT_GATHER_Y } from "../config";
 import { clamp, dist2D, moveToward2D, chance, rand } from "../util";
 import { shotWindupFor } from "../eval";

@@ -2,7 +2,7 @@
 // game.ts の releaseShot から切り出す。呼び出し側(game.ts)が最寄り守備者・ヘルプ人数・
 // クラッチ値・ブザー有無などの文脈を計算して渡し、ここでは確率のみを返す。
 // レイヤ分割: 効果(resolution)を発動/状態変更(game.ts)から分離（workPlan.md 参照）。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { THREE_DIST } from "../config";
 import { rate } from "../attributes";
 import { clamp, chance } from "../util";

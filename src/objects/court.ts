@@ -1,5 +1,5 @@
 import { Scene, MeshBuilder, StandardMaterial, Color3, DynamicTexture, Mesh } from "@babylonjs/core";
-import { COURT, RIM, THREE_DIST } from "./config";
+import { COURT, RIM, THREE_DIST } from "../config";
 
 // フロア（ライン付き）、周囲のエプロン、両フープを構築する。
 // 各エンドに1つずつ、得点時に光らせられるフープ部品（ネットの揺れ + リムのフラッシュ）を

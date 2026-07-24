@@ -1,6 +1,6 @@
 // ブロックの「効果」= 誰がどれだけ止められるか、をかわせるか、の確率算出（判定ルール）。
 // 状態は変更しない純粋関数。抽選(chance)と状態変更(evade/jump/shotMade)は game.ts 側に残す。
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { rate } from "../attributes";
 import { clamp, dist2D } from "../util";
 import { palmRadius } from "../eval";

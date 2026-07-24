@@ -1,7 +1,7 @@
 // man ディフェンス本体。Option B: 状態は Game(=GameState)が持ち、ここは game を受け取る
 // 関数群。ゾーン/プレスは defense-schemes、ピック&ロールのカバレッジは ScreenSystem。
 import { Vector3 } from "@babylonjs/core";
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { RIM, PALM_HITBOX } from "../config";
 import { rate } from "../attributes";
 import { clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";

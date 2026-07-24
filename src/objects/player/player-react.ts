@@ -1,7 +1,7 @@
 // 選手のリアクション（ファウル/守備成功/落胆/ベンチ待機）アニメーション（プロトタイプ拡張で Player に紐づけ）。本体は entities.ts から逐語移動
 // （this は Player インスタンスのまま）。呼び出し側は不変。game.ts が副作用 import する。
 import { Vector3 } from "@babylonjs/core";
-import { clamp, rand, chance } from "./util";
+import { clamp, rand, chance } from "../../util";
 import { Player } from "./player";
 
 declare module "./player" {

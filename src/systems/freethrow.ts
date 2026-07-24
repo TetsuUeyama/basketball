@@ -2,7 +2,7 @@
 // クラスが所有し、共有状態・フロー(得点/インバウンド/交代/リバウンド)は game 経由で
 // 呼ぶ。game.ts から分離（workPlan.md 参照）。
 import { Vector3 } from "@babylonjs/core";
-import { Player } from "../player";
+import { Player } from "../objects/player/player";
 import { COURT, RIM } from "../config";
 import { rate } from "../attributes";
 import { clamp, chance, rand, dist2D } from "../util";

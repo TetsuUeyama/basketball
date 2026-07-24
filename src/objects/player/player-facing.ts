@@ -1,6 +1,6 @@
 // 選手の向き/ツイスト（胸・頭・体の向き）アニメーション（プロトタイプ拡張で Player に紐づけ）。本体は entities.ts から逐語移動
 // （this は Player インスタンスのまま）。呼び出し側は不変。game.ts が副作用 import する。
-import { clamp } from "./util";
+import { clamp } from "../../util";
 import { Player } from "./player";
 
 declare module "./player" {
