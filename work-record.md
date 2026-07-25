@@ -4407,3 +4407,38 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - 検証: tsc✓ / vite build✓(23.81s) / スコアBLUE40・99側全勝・NaN無し・完走 / 反応発火 20試合で162→**293回**（全経路発火。stats.stl 139 より多いのは、奪取未完遂でも弾かれ接触には反応するため＝妥当）。
 - ⚠️ のけぞりの見た目は headless非対象＝ブラウザ目視必須。極端ロスターでは strip が多く反応が多発（~14/試合）だが現実ロスターでは減る想定。
 - ⚠️ 未コミット(e814db0 の上に 338〜341)。
+
+## 2026-07-25 (342) 守備の腕にFK/IKハイブリッドreachを実装（ボール接触はIK、遠い目標はFK）
+
+- ユーザー要望「守備の腕をボール/パスコースを目的地にFKかIKで。ハイブリッドで」。
+- リグ確認: 腕は肩pivot→(上腕UP=0.25)→elbow→(前腕FORE=0.25)→hand の2ボーン鎖。腕長を Player.UPPER_ARM/FOREARM に単一ソース化（makeArm も参照）。
+- animation/action/reach-ik.ts 新設:
+  - `armIKQuats(肩ワールド, 胴フレーム角th, 目標, UP, FORE)`（純粋関数）: 2ボーンIKを解き、肩(root ローカル)・肘(pivot ローカル)のクォータニオンを返す。手先を目標へ厳密一致。範囲外(>0.5m)/近すぎは null。極ベクトルは「下方向をreachに直交射影」で肘が自然に下へ落ちる。
+  - `reachIK(pivot,elbow,world)`: 肩ワールドをaimArmと同式で出しarmIKQuatsを適用（easeArm経由＝速度規則に従う）。届けばtrue。
+  - `reachBall(world,both)`: ハイブリッド。届く近い目標はIK、届かない遠い目標(パスコース等)はFK(aimArm+肘伸ばし)。
+- basic/arms.ts bendElbow: 先頭で node.rotationQuaternion=null（IKで設定したクォータニオンを解除しFKのrotation.xへ戻す）。
+- 配線: core/poses.ts の守備ボールリーチ2箇所（ギャザー際の叩き・プレストラップ2人目）を reach→reachBall に。
+- **検証**: mockはQuaternionがゴーストでIK不能→**実Babylon NullEngineで単体検証**: 届く目標で手先誤差=0（厳密一致）、範囲外は正しくnull→FKフォールバック(ik-test.ts)。tsc✓/vite build✓/ゲーム回帰 BLUE40.2・99側全勝・NaN無し・完走。
+- 補足: パスコース狙いも reachBall(レーン点) で可能（大抵0.5m超なのでFK=指す挙動）。denyLane等のレーン方向づけをレーン点狙いに変える拡張は未実施（要望あれば）。
+- ⚠️ 見た目（肘の曲がり方・自然さ）は headless非対象＝ブラウザ目視必須。極ベクトル（肘を下へ）は初期選択、実機で不自然なら方向調整可。
+- ⚠️ 未コミット(b677d30 の上に 342)。
+
+## 2026-07-25 (343) リバウンド等の空中リーチもハイブリッドreachBall（ボールへ手を向ける）に
+
+- ユーザー要望「リバウンドもジャンプ後ボールへ手を向ける」。先の守備IKと同様に空中リーチをハイブリッド化。
+- 確認: airborne は jumpRemaining>0（小さいリバウンドジャンプでも真）。loose中は raiseAirborne が両手をボールへ向けていた（従来はFKの reach）。
+- core/poses.ts raiseAirborne: `p.reach(b,true)` → `p.reachBall(b,true)`。リバウンド(loose)・コンテスト(shot/charge)の空中選手が、ボールが手の届く距離ならIKで手を乗せ、遠ければFKで方向付け。※shot/charge の空中コンテストは直後の「真上リーチ」上書き(loose以外)が効くため主に真上のまま、実効変化はリバウンド(loose)中心。
+- 検証: tsc✓/vite build✓/回帰 BLUE38.8・99側全勝・NaN無し・完走。IK自体は(342)でNullEngine単体検証済（手先誤差0）。
+- ⚠️ 見た目は headless非対象＝ブラウザ目視必須。高いリバウンドボールは0.5m超でFK（従来同様に方向付け）、ボールが手元に来た時のみIKで掴む挙動。
+- ⚠️ 未コミット(b677d30 の上に 342〜343)。
+
+## 2026-07-25 (344) ブロック/リバウンドのリーチが遅く横広がりに見える不具合を修正＋掴む(両手)/弾く(片手)を明確化
+
+- ユーザー実機報告「ブロック/リバウンドで腕を上げず横に広げたまま。両手で取りに行くか片手で弾きに行くように」。
+- 実測(reb-dir.ts): リバウンド中の空中選手は存在(6564サンプル)、狙う方向は上向き成分0.66・横0.58＝斜め上(ボール平均3.14m)、98.7%がFK範囲。つまり狙いは「斜め上のボール」で正しいのに横に見える＝**リーチが遅い(MOVE_RATE.arm=10)イーズで動くボールに追いつけずラグ**が真因（(334)で全腕を遅くした副作用）。
+- 修正:
+  - joints.ts に `MOVE_RATE.reach = 30`（ボールへ手を出す素早いレート。瞬間ではない、~0.1sで到達）を追加。
+  - reach / reachBall で armRateCap=MOVE_RATE.reach を掛けてから aim/IK（掴む・弾く動作を素早く）。構え直し(guard/deny/runArms)は従来の遅いレートのまま。
+  - リバウンド(raiseAirborne)=両手 reachBall(b,true) 維持。ブロック(swatShot)=`reach(ball,true)`→`reachBall(ball,false)` 片手スワットに。
+- 検証: tsc✓/vite build✓/回帰 BLUE39.4・99側全勝・NaN無し・完走。狙い方向は実測で斜め上と確認済、速度改善の見た目は headless非対象＝ブラウザ目視必須。
+- ⚠️ MOVE_RATE.reach=30 は初期値。実機で速すぎ/遅すぎ・片手/両手の使い分けが不自然なら調整。⚠️ 未コミット(b677d30 の上に 342〜344)。

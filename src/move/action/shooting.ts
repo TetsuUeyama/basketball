@@ -321,7 +321,7 @@ export function swatShot(game: Game, shooter: Player, blocker: Player): void {
     game.blockHoldVel.set((ox + px * kick) * power, rand(-0.6, 1.0), (oz + pz * kick) * power);
     game.blockHoldT = 0.13;
     game.ball.vel.setAll(0);
-    blocker.reach(game.ball.pos, true);        // 接触時に手をボールへ
+    blocker.reachBall(game.ball.pos, false);   // 片手で弾きに行く（スワット）
     game.lastTouch = blocker;                  // 彼が最後に触れた → アウトオブバウンズはオフェンスのまま
     // シューターはシュートの動き/着地中はボールを回収できない。
     // grabAfter は誰かが確保する前のルーズボール状態を保つ。

@@ -17,6 +17,7 @@ import "./animation/action/hold";
 import "./animation/action/reach";
 import "./animation/action/guard";
 import "./animation/action/screen";
+import "./animation/action/reach-ik";
 import "./animation/action/sit";
 import "./animation/reaction/bench-idle";
 import "./animation/reaction/foul-react";

@@ -35,6 +35,7 @@ Player.prototype.easeArm = function(pivot: TransformNode, target: Quaternion): v
   // 前腕(肘)は上腕と同じレート（armRateCap、未指定は MOVE_RATE.arm）で曲げ目標へ
   // イーズする。
 Player.prototype.bendElbow = function(node: TransformNode, amount: number): void {
+    node.rotationQuaternion = null;   // IKで設定されたクォータニオンを解除しFK(rotation)へ戻す
     node.rotation.y = 0; node.rotation.z = 0;   // 前のポーズから残った抱え込み方向のヨーをクリア
     const target = clampAngle(JOINT.elbow, amount * this.numberSide);   // 肘の可動域に収める
     const cap = this.armRateCap > 0 ? this.armRateCap : MOVE_RATE.arm;

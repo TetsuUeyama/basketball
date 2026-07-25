@@ -21,14 +21,14 @@ export function poseHands(game: Game, ): void {
       if (game.handler.gatherT > 0) {
         const d = game.onBallDefender(game.handler);
         if (d && !d.airborne && dist2D(d.pos, game.handler.pos) < 2.0) {
-          d.reach(new Vector3(b.x, b.y, b.z), true);
+          d.reachBall(new Vector3(b.x, b.y, b.z), true);   // 近ければIKで手をボールへ、遠ければFKで方向付け
           posed.add(d);
         }
       }
       // プレストラップ: 二人目は離れて立ち、両手でボールをはたきにいく
       const pt = game.pressTrapper;
       if (pt && !pt.airborne && dist2D(pt.pos, game.handler.pos) < 1.8) {
-        pt.reach(new Vector3(b.x, b.y, b.z), true);
+        pt.reachBall(new Vector3(b.x, b.y, b.z), true);
         posed.add(pt);
       }
     } else if (game.ballMode === "charge" && game.shooter) {
@@ -154,7 +154,7 @@ export function poseHands(game: Game, ): void {
   // 空中にいる選手は両手をボールへ向けて上げる（掴む・タップする・ブロックする）。
 export function raiseAirborne(game: Game, b: Vector3, except: Player | null): void {
     for (const p of game.players) {
-      if (p !== except && p.airborne) p.reach(b, true);
+      if (p !== except && p.airborne) p.reachBall(b, true);   // 近ければIKで手をボールへ、遠ければFKで方向付け
     }
   }
 

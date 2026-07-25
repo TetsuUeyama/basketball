@@ -187,6 +187,8 @@ export class Player {
   defWinKind: "block" | "steal" | "stop" = "block";
 
   // ═════════ 3Dメッシュ・ノード（実体） ═════════
+  static readonly UPPER_ARM = 0.25;   // 上腕長（肩→肘）
+  static readonly FOREARM = 0.25;     // 前腕長（肘→手）
   readonly root: TransformNode;
   // ボールを保持/ドリブル/パス/シュートするために手を伸ばす短い腕
   readonly armPivotL: TransformNode;
@@ -626,7 +628,7 @@ export class Player {
     // --- 腕: 上腕（ユニフォームのそで）→ 肘 → 前腕（肌）→ 手。肩のピボットが
     // 腕全体をボールへ向ける（リーチ）。肘は静止/走行中は曲がり、手のひらをボールに
     // 当てるために伸びる。全長 = UP + FORE。 ---
-    const UP = 0.25, FORE = 0.25;
+    const UP = Player.UPPER_ARM, FORE = Player.FOREARM;
     const makeArm = (sx: number, tag: string): { pivot: TransformNode; elbow: TransformNode } => {
       const pivot = new TransformNode(`arm_${tag}_${team}_${idx}`, scene);
       pivot.parent = torsoNode;   // 肩はツイストする胸に乗る

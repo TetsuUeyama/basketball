@@ -2,7 +2,7 @@
 // basic/arms・basic/torso のムーバ経由で動く。
 import { Vector3, Quaternion } from "@babylonjs/core";
 import { clamp, normAngle } from "../../util";
-import { JOINT } from "../basic/joints";
+import { JOINT, MOVE_RATE } from "../basic/joints";
 import { Player } from "../../objects/player/player";
 
 declare module "../../objects/player/player" {
@@ -13,12 +13,14 @@ declare module "../../objects/player/player" {
 }
 
 /** 右手（または両手）を伸ばして手のひらが `world` — ボール — に合うようにする。
- *  肘が伸びて手のひらが狙った点に実際に届く。 */
+ *  肘が伸びて手のひらが狙った点に実際に届く。素早いリーチ（MOVE_RATE.reach）。 */
 Player.prototype.reach = function(world: Vector3, both = false): void {
+    this.armRateCap = MOVE_RATE.reach;   // ボールへ素早く手を出す
     this.aimArm(this.armPivotR, world);
     this.bendElbow(this.elbowR, 0);
     if (both) { this.aimArm(this.armPivotL, world); this.bendElbow(this.elbowL, 0); }
     else { this.easeArm(this.armPivotL, Quaternion.Identity()); this.bendElbow(this.elbowL, 0.28); }
+    this.armRateCap = 0;
 };
 
 /** ディグ(掻き出し): 片手で伸ばし、上半身をボールへ回転させて先行する肩が横切り、
