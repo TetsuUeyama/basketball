@@ -1,6 +1,6 @@
 // ルーズボール物理。自由球の飛翔・反射、選手の追走、接触判定、確保(secureLoose)を集約。
 import { Player } from "../objects/player/player";
-import { COURT, SHOT_CLOCK } from "../config";
+import { COURT, SHOT_CLOCK, OOB_WALL } from "../config";
 import { rate, dist2DTo, moveToward2D, chance, rand, nearestOf } from "../util";
 import { looseSecureChance } from "../move/reaction/rebound";
 import { stepBallFlight } from "../move/basic/ball";
@@ -20,9 +20,10 @@ export function updateLoose(game: Game, dt: number): void {
       if (game.blockHoldT <= 0) game.ball.vel.copyFrom(game.blockHoldVel);
     } else {
       stepBallFreeFlight(game, dt, false);   // 生きたルーズボールはラインを越えることがある
-      // アウトオブバウンズ → 最後に触っていないチームのスローイン
+      // アウトオブバウンズ: ラインを越えても壁(エプロン外)までは軌道のまま飛ばし、
+      // 壁に達したら最後に触っていないチームのスローインにする。
       const b = game.ball.pos;
-      if (Math.abs(b.x) > COURT.halfW || Math.abs(b.z) > COURT.halfL) {
+      if (Math.abs(b.x) > COURT.halfW + OOB_WALL || Math.abs(b.z) > COURT.halfL + OOB_WALL) {
         const to = game.lastTouch ? 1 - game.lastTouch.team : 1 - game.looseOff;
         game.inbound.startAt(to, b.x, b.z);
         return;
@@ -37,7 +38,14 @@ export function updateLoose(game: Game, dt: number): void {
     if (game.ballMode !== "loose") return;   // このフレームで誰かが確保した
 
     game.looseT -= dt;
-    if (game.looseT <= 0) {                    // 安全網: 最も近い選手が確保する
+    if (game.looseT <= 0) {                    // 安全網
+      const b = game.ball.pos;
+      if (Math.abs(b.x) > COURT.halfW || Math.abs(b.z) > COURT.halfL) {
+        // ラインの外（エプロン内）で止まった → スローイン
+        const to = game.lastTouch ? 1 - game.lastTouch.team : 1 - game.looseOff;
+        game.inbound.startAt(to, b.x, b.z);
+        return;
+      }
       const near = nearestOf(game.players, (p) => dist2DTo(game.ball.pos, p.pos.x, p.pos.z))!;
       secureLoose(game, near);
     }

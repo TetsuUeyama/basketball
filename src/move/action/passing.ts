@@ -258,6 +258,7 @@ export function updatePass(game: Game, dt: number): void {
       game.ballMode = "held";
       game.shotClock = SHOT_CLOCK;
       d.decisionT = 0.4;
+      game.ball.pos.set(d.pos.x, 1.0, d.pos.z);   // 即奪取者へ（held初フレームの取り残し防止）
       game.ball.vel.set(0, 0, 0);
       game.resetMotion();
       game.maybeStartPush();   // ピックオフは最も綺麗な速攻開始
@@ -296,6 +297,7 @@ export function updatePass(game: Game, dt: number): void {
     game.handler = receiver;
     game.passTo = null;
     game.ballMode = "held";
+    game.ball.pos.set(receiver.pos.x, 1.0, receiver.pos.z);   // 即受け手へ（held初フレームの取り残し防止）
     // catch 硬直: テクニック(handling)ベース(tech100→~0.3s..50→~1.05s)＋オフターゲット分。×0.3。
     const tech = rate(receiver.attr.handling);
     const catchBase = 0.3 + (1 - tech) * 1.5;

@@ -65,7 +65,7 @@ export function poseHands(game: Game, ): void {
         break;
       }
       case "charge":
-        game.shooter?.reach(b, true);                // ショットポケットにボールをためる
+        game.shooter?.shootArms(b, true);            // 利き手で構え、逆手を添える
         raiseAirborne(game, b, game.shooter);         // 早く跳んだ守備者は上がっている
         break;
       case "inbound":
@@ -75,12 +75,12 @@ export function poseHands(game: Game, ): void {
         // フィニッシャーはリムまで手をボールに乗せ続ける。ジャンパーは最初の一拍だけ
         // リリースを保持し、その後フォロースルーへ移る。
         if (game.shooter && (game.shooterFinishing || game.shotT < game.shotDur * 0.45)) {
-          game.shooter.reach(b, true);
+          game.shooter.shootArms(b, true);           // 利き手でボールを運び放つ
         }
         raiseAirborne(game, b, game.shooter);         // コンテストする守備者が上がる
         break;
       case "freethrow":
-        if (game.ft.t < 1.4) game.ft.shooter?.reach(b, true);
+        if (game.ft.t < 1.4) game.ft.shooter?.shootArms(b, true);   // FTも利き手フォーム
         break;
       case "pass":
         // 両手のチェストパス: 両腕を胸の高さでレシーバーへ向けて前に押し出す
@@ -134,7 +134,7 @@ export function poseHands(game: Game, ): void {
     if (sh && sh.coolT > 0 && game.ballMode !== "charge" && !releasing
         && sh !== game.handler && sh.foulReactT <= 0) {
       const rim = game.attackFloor(sh.team);
-      sh.reach(new Vector3(rim.x, 3.2, rim.z), true);
+      sh.shootArms(new Vector3(rim.x, 3.2, rim.z), false);   // 利き手でリムへフォロースルー
     }
 
     // ファウルのリアクションは最後に再生され、どの休めポーズよりも優先して腕を管理する

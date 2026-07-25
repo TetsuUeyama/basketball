@@ -81,6 +81,9 @@ export class Player {
   // される（accelSpeed）。tickMotionで設定。
   plantT = 0;
   plantDur = 0;  // 同上、クロスオーバー/停止のプラント用（動き直し）
+  // 完全硬直: 着地/切り返し/ダッシュ急停止の直後、一瞬まったく動けない（accelSpeed=0）。
+  // 硬直(landT/plantT)の頭側の一部。敏捷でスケール。
+  rootT = 0;
   // ルーズボールを手で床からすくい上げる: ボールが保持位置へ上がり、手が下→上に追う
   pickupT = 0;
   pickupDur = 0;
@@ -113,6 +116,16 @@ export class Player {
   offTimer = 0;                  // 次のオフボール判断までのクールダウン
   reactT = 0;      // 守備: シェードが追いつくまでの反応の遅れ
   looseReactT = 0; // ルーズボール: この選手が追いかけ始めるまでの反応の遅れ（反応でスケール）
+
+  // ═════════ アクションの3段階（発生=windup / 実行=active / クールダウン=cooldown） ═════════
+  // 全アクション共通のライフサイクル。beginAction で発生開始→自動遷移。windup 完了フレームで
+  // actFired=true（呼び出し側が効果を実行）。active 後 cooldown で再発動を抑制。tickAction が進める。
+  actKind = "";
+  actPhase: "" | "windup" | "active" | "cooldown" = "";
+  actT = 0;            // 現段階の残り秒
+  actActiveDur = 0;    // active フェーズ長（保持）
+  actCoolDur = 0;      // cooldown フェーズ長（保持）
+  actFired = false;    // windup→active の遷移フレームで真（呼び出し側が消費）
 
   // ═════════ 攻防の可変状態（1対1/オフボール/ドリブル/スクリーン） ═════════
   // オフボールの動作状態

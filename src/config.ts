@@ -41,6 +41,9 @@ export const BURST_SPEED = 7.5;   // 抜き去りバーストの想定速度
 export const BODY_MIN_DIST = 0.62; // 選手同士の最小ボディ間隔(押し離しの基準)
 export const OOB_OUTSET = 0.3;     // アウトオブバウンズでラインの外に立つ距離
 export const INBOUNDS_INSET = 1.0; // コート内に収める際のラインからの内側距離
+// ボールの反射壁／OOB確定の位置（コートラインから外側へ。黒いエプロン(+3m)の外）。
+// OOBになってもこの距離まではボールが軌道のまま外へ飛び、そこで壁/スローインになる。
+export const OOB_WALL = 3.2;
 export const PASS_SPEED = 13;     // パスの移動速度
 export const LANE_W = 1.1;        // 守備がパスレーンを脅かす横方向の距離(m)
 // 手のひら当たり判定モデル: 守備のリーチ半径を(守備−オフェンス)でスケール。false で

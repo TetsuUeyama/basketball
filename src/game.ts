@@ -18,6 +18,7 @@ import "./animation/action/reach";
 import "./animation/action/guard";
 import "./animation/action/screen";
 import "./animation/action/reach-ik";
+import "./animation/action/shoot";
 import "./animation/action/sit";
 import "./animation/reaction/bench-idle";
 import "./animation/reaction/foul-react";
@@ -399,6 +400,7 @@ export class Game {
       for (let i = 0; i < ROSTER_SIZE; i++) {
         const p = this.roster[t][i];
         p.resetStats();
+        p.resetPose();       // 前試合のジャンプ/腕/リアクション状態を全クリア
         if (i < STARTERS) {
           p.slot = i;
           p.spotIdx = i;
@@ -545,6 +547,11 @@ export class Game {
       case "finale": updateFinale(this, dt); break;
     }
 
+    // 保持中のボールは、この後の衝突解決でハンドラーが押された分だけ一緒にずらす
+    // （更新順の都合でボール位置はハンドラー移動前に決まるため、手から取り残されないように）。
+    const holder = this.ballMode === "held" ? this.handler
+      : this.ballMode === "charge" ? this.chargeShooter : null;
+    const holdX = holder ? holder.pos.x : 0, holdZ = holder ? holder.pos.z : 0;
     // 踏ん張るキーパー: ボールを守るハンドラー(keepShieldT)を押しで後退させない。
     // 衝突前にリムまでの距離を記録し、押しで増えたらその線まで引き戻す（後退のみ拒否、横/前進は放置）。
     const keeper = this.handler && this.handler.keepShieldT > 0 ? this.handler : null;
@@ -559,6 +566,10 @@ export class Game {
         keeper.pos.x = keepFloor.x + dx * k;
         keeper.pos.z = keepFloor.z + dz * k;
       }
+    }
+    if (holder) {   // ハンドラーの押し出し分だけボールを追従
+      this.ball.pos.x += holder.pos.x - holdX;
+      this.ball.pos.z += holder.pos.z - holdZ;
     }
     const resting = this.ballMode === "pause" || this.ballMode === "freethrow"
       || this.ballMode === "tipoff" || this.ballMode === "subs"

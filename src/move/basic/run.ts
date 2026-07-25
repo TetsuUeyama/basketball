@@ -4,11 +4,17 @@ import { HUD_OPTS } from "../../config";
 import { reactionLag } from "../../eval";
 import { Player } from "../../objects/player/player";
 
+// 硬直(landT/plantT)のうち、頭側の完全硬直（動けない）に充てる割合。
+const FREEZE_FRAC = 0.4;
+
 declare module "../../objects/player/player" {
   interface Player {
     recoveryMult(): number;
     applyReactLag(): void;
     setPlant(t: number): void;
+    beginAction(kind: string, windup: number, active: number, cooldown: number): void;
+    tickAction(dt: number): void;
+    actBusy(kind: string): boolean;
     tickCooldown(dt: number): void;
     accelSpeed(dt: number, mult?: number): number;
     accelToward(dt: number, tx: number, tz: number, mult?: number): number;
@@ -31,10 +37,43 @@ Player.prototype.applyReactLag = function(): void {
  *  （動き直し）を設定する。最も長いものとその全長を加速のイージング用に保持する。 */
 Player.prototype.setPlant = function(t: number): void {
   if (t > this.plantT) { this.plantT = t; this.plantDur = t; }
+  this.rootT = Math.max(this.rootT, t * FREEZE_FRAC);   // 頭側は完全硬直
+};
+
+/** アクションを発生(windup)から開始する。windup→active→cooldown と自動遷移。 */
+Player.prototype.beginAction = function(kind: string, windup: number, active: number, cooldown: number): void {
+  this.actKind = kind;
+  this.actPhase = "windup";
+  this.actT = windup;
+  this.actActiveDur = active;
+  this.actCoolDur = cooldown;
+  this.actFired = false;
+};
+
+/** アクションの3段階を進める（tickCooldownが毎フレーム呼ぶ）。windup→active の遷移で
+ *  actFired を立て（呼び出し側が効果を実行し消費）、active→cooldown→idle と進む。 */
+Player.prototype.tickAction = function(dt: number): void {
+  if (!this.actPhase) return;
+  this.actT -= dt;
+  if (this.actT > 0) return;
+  if (this.actPhase === "windup") {
+    this.actPhase = "active"; this.actT = this.actActiveDur;
+    this.actFired = true;                 // 実行フレーム
+  } else if (this.actPhase === "active") {
+    this.actPhase = "cooldown"; this.actT = this.actCoolDur;
+  } else {
+    this.actPhase = ""; this.actKind = ""; this.actFired = false;   // cooldown 終了 → idle
+  }
+};
+
+/** そのアクション種別が発生/実行/クールダウン中で、新たに発動できない。 */
+Player.prototype.actBusy = function(kind: string): boolean {
+  return this.actKind === kind && this.actPhase !== "";
 };
 
 /** パス/シュート後の回復クールダウンを減算する。 */
 Player.prototype.tickCooldown = function(dt: number): void {
+  this.tickAction(dt);   // アクション3段階を進める
   if (this.coolT > 0) this.coolT = Math.max(0, this.coolT - dt);
   if (this.justPassedT > 0) this.justPassedT = Math.max(0, this.justPassedT - dt);
   if (this.trappedT > 0) this.trappedT = Math.max(0, this.trappedT - dt);
@@ -44,6 +83,7 @@ Player.prototype.tickCooldown = function(dt: number): void {
   if (this.pickupT > 0) this.pickupT = Math.max(0, this.pickupT - dt);
   if (this.plantT > 0) this.plantT = Math.max(0, this.plantT - dt);
   if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
+  if (this.rootT > 0) this.rootT = Math.max(0, this.rootT - dt);
   if (this.quickT > 0) this.quickT = Math.max(0, this.quickT - dt);
   if (this.baitT > 0) this.baitT = Math.max(0, this.baitT - dt);
   if (this.openRollT > 0) this.openRollT = Math.max(0, this.openRollT - dt);
@@ -69,6 +109,7 @@ Player.prototype.tickCooldown = function(dt: number): void {
  * — 選手が動く箇所でフレームのdtとともに呼ぶ。
  */
 Player.prototype.accelSpeed = function(dt: number, mult = 1): number {
+  if (this.rootT > 0) return 0;   // 完全硬直中（着地/切り返し/急停止の直後）は動けない
   // バランスの回復（パス/シュート後）や着地からまだ落ち着いていない状態では足は
   // ほとんど動けない。動き直しのプラント（激しいカット後）も再プッシュをスロットルする。
   // 着地: 最初の一歩は鈍い(0.35×)が、硬直が抜けるにつれて全速へ徐々に戻る。
@@ -123,6 +164,7 @@ Player.prototype.tickMotion = function(dt: number, resting: boolean): void {
           // それを縮小する（sharp × speedFrac）。
           const plant = sharp * speedFrac * (0.3 + (1 - quick) * 2.2); // ~0.3s（エリート）.. ~2.5s（遅い）
           if (plant > this.plantT) { this.plantT = plant; this.plantDur = plant; }
+          this.rootT = Math.max(this.rootT, plant * FREEZE_FRAC);   // 切り返しの頭側は完全硬直
         }
       } else if (psp > 3.0 && sp < 2.0) {
         // 急停止: ダッシュからのブレーキもプラントを要する。ブレーキが強い（一度に落とす
@@ -135,6 +177,7 @@ Player.prototype.tickMotion = function(dt: number, resting: boolean): void {
           // 一度にどれだけ速度を落としたかでスケールする。
           const plant = shed * (0.3 + (1 - quick) * 1.7);  // ~0.3s（エリート）.. ~2.0s（遅い）
           if (plant > this.plantT) { this.plantT = plant; this.plantDur = plant; }
+          this.rootT = Math.max(this.rootT, plant * FREEZE_FRAC);   // 急停止の頭側は完全硬直
         }
       }
     }

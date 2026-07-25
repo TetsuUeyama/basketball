@@ -2,7 +2,7 @@
 // 自由飛行の1ステップ（積分・床バウンド・境界反射・速度クランプ）をここで行う。
 // シュート/パスの弾道はアクション側（move/action）がこのベースの上に定義する。
 import { Ball } from "../../objects/ball";
-import { COURT } from "../../config";
+import { COURT, OOB_WALL } from "../../config";
 
 export const BALL = {
   gravity: 9.0,     // 自由飛行の重力(m/s²)
@@ -26,9 +26,10 @@ export function stepBallFlight(b: Ball, dt: number, reflect: boolean): void {
     b.vel.x *= BALL.friction;
     b.vel.z *= BALL.friction;
   }
-  // コート境界で反射させてインプレーに保つ
+  // 境界で反射させてインプレーに保つ。壁はエプロンの外(OOB_WALL)なので、
+  // OOBになってもボールはしばらく軌道のまま外へ飛んでから壁に当たる。
   if (reflect) {
-    const mw = COURT.halfW - 0.1, ml = COURT.halfL - 0.1;
+    const mw = COURT.halfW + OOB_WALL, ml = COURT.halfL + OOB_WALL;
     if (b.pos.x < -mw) { b.pos.x = -mw; b.vel.x = Math.abs(b.vel.x) * BALL.wallBounce; }
     if (b.pos.x > mw) { b.pos.x = mw; b.vel.x = -Math.abs(b.vel.x) * BALL.wallBounce; }
     if (b.pos.z < -ml) { b.pos.z = -ml; b.vel.z = Math.abs(b.vel.z) * BALL.wallBounce; }

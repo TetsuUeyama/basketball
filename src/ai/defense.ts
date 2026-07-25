@@ -196,6 +196,12 @@ export function runDefense(game: Game, dt: number): void {
       const press = game.tactics[defTeam].defense.pressure * twWeight(d);
       const gap = dist2D(d.pos, man.pos);
       const reach = PALM_HITBOX ? palmRadius(d, man) : 1.5;
+      // スティール実行フレーム（発生=踏み込みの後）: まだ密着していれば突く、離れていれば空振り(隙)
+      if (d.actKind === "steal" && d.actFired) {
+        d.actFired = false;
+        if (gap < reach && !man.airborne) { game.steal(d); return; }
+        d.reactT = Math.max(d.reactT, 0.3);   // 空振り: 踏み込んだ分の隙
+      }
       if (gap < reach) {
         const close = 1 - gap / reach;               // 密着1、端0
         const stl = defHands(d);
@@ -208,7 +214,8 @@ export function runDefense(game: Game, dt: number): void {
         const dBall = dist2DTo(d.pos, game.ball.pos.x, game.ball.pos.z);
         const carryMod = clamp(1 + (gap - dBall) * 1.2, 0.55, 1.6)
           * (man.baitT > 0 ? 1.6 : 1);
-        if (chance(pPoke * close * carryMod * dt)) {
+        // 発生: ポークの好機を掴んだら踏み込み開始（即スティールでなく溜め）。クールダウン中は不可。
+        if (!d.actBusy("steal") && chance(pPoke * close * carryMod * dt)) {
           if (man.baitT > 0 && chance(0.35 + rate(man.attr.dribbleAcc) * 0.45)) {
             // 誘い成立: 見せたボールを引き、ハンドラーが抜く
             man.baitT = 0;
@@ -220,8 +227,7 @@ export function runDefense(game: Game, dt: number): void {
             d.reactT = Math.max(d.reactT, 0.35);
             man.beatenT = Math.max(man.beatenT, 0.2 + rate(man.attr.agility) * 0.15);
           } else {
-            game.steal(d);
-            return;
+            d.beginAction("steal", 0.12, 0.03, 0.6);   // 踏み込み(0.12s)→突き→回復(0.6s)
           }
         }
         if (chance(reachInFoulRate(press, close) * dt)) { defensiveFoul(game, man, d); return; }

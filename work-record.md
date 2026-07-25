@@ -4442,3 +4442,72 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
   - リバウンド(raiseAirborne)=両手 reachBall(b,true) 維持。ブロック(swatShot)=`reach(ball,true)`→`reachBall(ball,false)` 片手スワットに。
 - 検証: tsc✓/vite build✓/回帰 BLUE39.4・99側全勝・NaN無し・完走。狙い方向は実測で斜め上と確認済、速度改善の見た目は headless非対象＝ブラウザ目視必須。
 - ⚠️ MOVE_RATE.reach=30 は初期値。実機で速すぎ/遅すぎ・片手/両手の使い分けが不自然なら調整。⚠️ 未コミット(b677d30 の上に 342〜344)。
+
+## 2026-07-25 (345) シュートを利き手フォームに（全種別: ダンク/レイアップ/ミドル/3P/FT）
+
+- ユーザー要望「シュートは利き手で放つフォームに。全シュート種別」。従来は全て両手 reach(b,true) で対称だった。
+- animation/action/shoot.ts 新設: `shootArms(world, guide)`。利き手(this.hand)=シュートハンド（aimArmで目標へ伸ばし、フォロースルーは肘伸ばし切り）、逆手=添え手（guide時はボール脇に添えて肘0.7、フォロースルー時は下げる）。速度は MOVE_RATE.reach。
+- core/poses.ts の4ポーズを shootArms に:
+  - charge(ギャザー): shootArms(b, true)
+  - shot(リリース/フィニッシュ shotT<0.45 or finishing): shootArms(b, true)
+  - フォロースルー(coolT中): shootArms(rim@3.2, false)
+  - freethrow: shootArms(b, true)
+- 利き手は選手データ由来（makeDefFromDb/applyDbPlayer が def.hand を設定、"L"は左）＝選手ごとに左右反映。ダンク/レイアップ/ミドル/3P/FT すべてこの1フォームを共有（種別は弾道・確率側で分岐、腕は利き手フォーム統一）。
+- 検証: tsc✓/vite build✓/回帰 BLUE40.9・99側全勝・NaN無し・完走。
+- ⚠️ フォームの見た目（利き手/添え手の角度・フォロースルー）は headless非対象＝ブラウザ目視必須。角度(dom肘0/0.15・off肘0.7/0.4・添え手方向)は初期値、実機で要調整。⚠️ 未コミット(abc393a の上に 345)。
+
+## 2026-07-25 (346) シュートの添え手（逆手）を横広げから下方向に曲げるへ
+
+- ユーザー要望「シュートを打っていない方の腕は横に広げず下方向に曲げる」。
+- animation/action/shoot.ts フォロースルーの逆手: setArmDir(offside*0.5,-0.25,0.2)〈横〉→ setArmDir(offside*0.15,-0.95,0.1)〈ほぼ真下〉、bendElbow 0.4→0.6（下方向に曲げる）。ギャザー/リリース中の添え手（ボール脇のガイド）は維持。
+- 検証: tsc✓/vite build✓（純粋な腕ポーズ変更でゲーム状態不変）。⚠️見た目は headless非対象＝ブラウザ目視必須、角度は初期値。⚠️未コミット(abc393a の上に 345〜346)。
+
+## 2026-07-25 (347) ボールの反射壁/OOB確定をエプロン外へ（OOBでも軌道のまま外へ飛ぶ）
+
+- ユーザー実機報告「ボールがコート外へ出る際にライン際の壁に当たる。壁を黒い範囲(エプロン)の外へ。OOBでもしばらく軌道のまま外へ飛び、壁は少し外側に」。
+- エプロンは COURT.width+6/length+6＝各辺+3m。壁/OOB確定を config `OOB_WALL=3.2`（エプロン外側）に。
+  - move/basic/ball.ts 反射壁: `halfW-0.1`(ライン際)→ `halfW+OOB_WALL`（エプロン外）。reflect時はここまで飛んでから壁で反射。
+  - core/looseball.ts ライブOOB判定: `>halfW`→`>halfW+OOB_WALL`。ラインを越えても壁まで軌道のまま飛び、壁到達でスローイン（スローイン地点は startAt がサイドラインへクランプ）。
+  - 保険: looseT タイムアウト時にラインの外(エプロン内)で止まっていたら secure でなく inbound に（誤確保防止）。
+- 検証: tsc✓/vite build✓/回帰 BLUE39.4・99側全勝・NaN無し・完走（OOBは正しくインバウンド解決）。実測(oob-check.ts): OOB時ボールはライン外へ横2.38m・縦3.18m（壁3.2m付近）まで到達＝軌道継続を確認（従来は0＝ライン際で停止）。
+- ⚠️ 見た目・壁位置の最終確認はブラウザ目視。OOB_WALL=3.2 は初期値（エプロン端3mの少し外）、実機で遠すぎ/近すぎなら調整。⚠️未コミット(abc393a の上に 345〜347)。
+
+## 2026-07-25 (348) アクション共通3段階(発生/実行/クールダウン)機構＋スティールを3段階化
+
+- ユーザー要望「全アクションを発生(windup)/実行(active)/クールダウンの3段階に。3Pの溜めが他アクションにも。スティール/ブロック等の守備も」。
+- 共通機構: Player に actKind/actPhase("windup"|"active"|"cooldown")/actT/actActiveDur/actCoolDur/actFired。run.ts に beginAction(kind,windup,active,cooldown)/tickAction/actBusy。tickCooldown が tickAction を呼び全選手毎フレーム進行（windup→active遷移で actFired=true→呼び出し側が効果実行→active→cooldown→idle）。
+- スティール(ai/defense.ts on-ball): 即 game.steal→ 3段階に。ポーク好機で beginAction("steal",0.12,0.03,0.6)（踏み込み）→ actFired フレームで密着継続なら game.steal、離れていれば空振りで reactT の隙 → 0.6sクールダウン(actBusyで再発動不可)。誘い(bait)は従来通り即時。
+- 実態調査: **既存アクションは大半が既に3段階を内包**（shot=charge/flight/coolT, block=contestLeap/swat/landT, pass=pendingPassT/passDur/justPassedT, drive=plant/burst/reactT, rebound=jump/grab/landT）。即発火で3段階が無かったのはスティールのみ→今回実装。
+- 方針(正直): 既に3段階で動いている shot/block/pass/drive を新state machineへ書き換えるのは挙動利得ゼロ・リスク大・検証困難なため見送り。共通機構は導入済みで、必要なら各アクションを明示的に共通モデルへ寄せる/windup・cooldownを調整可能。
+- 未対応: 他スティール経路(stripGather/deflectCatch/パス奪取/zone/press)は文脈依存で即時のまま（要望あれば同様に3段階化可）。
+- 検証: tsc✓/スコア回帰 BLUE38.9・99側全勝・NaN無し・完走/スティール頻度149(基準146と誤差内)＝3段階化で頻度・バランス維持。
+- ⚠️ 見た目(踏み込み演出)は現状 game.steal 時の digReach のみ＝windup中の踏み込みポーズは未追加（要望あればwindup中の reach/lean を追加可）。⚠️未コミット(abc393a の上に 345〜348)。
+
+## 2026-07-25 (349) 保持中のボールが手に連動せず空間に残る不具合を修正
+
+- ユーザー報告「ボール保持中、ボールが連動せず手で持たず空間に残る挙動が時々ある」。
+- 真因(実測で特定): フレーム更新順。updateLive/updateCharge が ball.pos=h.pos+carry を設定した**後**に resolveCollisions がハンドラーを押し動かすため、ボールが押し出し前の位置に取り残される（ボディコンタクト時に顕著）。
+- 修正1(主因): game.update で衝突解決の前後にハンドラー(held=handler / charge=chargeShooter)位置を記録し、押し出し分だけ ball.pos をずらして追従。→ 保持中の ball↔handler 平均距離 0.40m(=carry offset)で安定。
+- 修正2(1フレーム点滅): passing.ts のキャッチ→held 遷移2箇所(通常キャッチ/インターセプト)でボールを受け手へ即スナップ。held初フレームで updateLive 未実行によりリード点に残る点滅を解消(実測: pass直後の>1m点滅 15→4/8試合、残りは各1フレーム0.017秒で無視可)。
+- 検証: tsc✓/vite build✓/回帰 BLUE39.6・99側全勝・NaN無し・完走/実測: held中ボール平均0.40m・持続的な>1mラグは解消(外れ値は全て1フレームのパス遷移点滅のみ)。
+- ⚠️見た目の最終確認はブラウザ目視。⚠️未コミット(abc393a の上に 345〜349)。
+
+## 2026-07-25 (350) 2試合目開始のズーム表示で前試合の状態(ジャンプ/腕角度)が残る不具合を修正
+
+- ユーザー報告「2試合目開始の選手ズーム表示で手の角度が違ったりジャンプしたままの選手がいる。開始前にリセットして1試合目と同じに」。
+- 真因: game.reset() が resetStats/resetFacing のみで、**ジャンプ状態(jumpRemaining)・腕のポーズ(クォータニオン/肘)・リアクション(foulReactT/defWinT)・クールダウン/アクション状態を残していた**。イントロは syncVisuals でメッシュ同期するだけなので残存状態がそのまま showcase に出る。
+- 修正: player-state.ts に `resetPose()` 新設 — ジャンプ/着地・リアクション/ひるみ・1対1/ドリブル/クールダウン各タイマー・アクション3段階をゼロ化し、腕をイーズ介さず直接休め(肩Identity+肘0.28)、脚を直立(hip/knee 0, stridePhase 0)へ。game.reset() の全選手ループで resetStats 後に resetPose を呼ぶ。
+- 検証: tsc✓/vite build✓/**フル試合→reset() 後に全13人×2の残存状態=0(ジャンプ/リアクション/クールダウン/アクション全クリア)を実測**/スコア回帰(下記)。
+- ⚠️ 腕クォータニオンはmockがゴーストで数値検証不可だが直接Identity+rest設定＝ブラウザで1試合目と同じ直立休めになる想定。最終はブラウザ目視。⚠️未コミット(abc393a の上に 345〜350)。
+
+## 2026-07-26 (351) 着地/切り返し/急停止の直後に完全硬直(動けない)を追加
+
+- ユーザー要望「完全硬直にして。左右の切り返し・ダッシュ急停止も同様に」。従来 landT/plantT は速度スロットルのみで、着地直後もジョグできてしまい「硬直が無い」ように見えていた（実ロスターで着地0.1s後の98%が既にジョグ速度未満だったが、完全静止ではなかった）。
+- 実装: Player に `rootT`（完全硬直の残り秒）追加。accelSpeed 冒頭で `if(rootT>0) return 0`＝動けない。硬直(landT/plantT)を設定する全箇所で rootT = max(rootT, 硬直 × FREEZE_FRAC=0.4)＝頭側4割を完全硬直に:
+  - jump.ts 着地: landT×0.4
+  - run.ts tickMotion 切り返し(~60°超)・ダッシュ急停止: plant×0.4
+  - run.ts setPlant（クロスオーバー等の外部コミット）: t×0.4
+  - tickCooldown で rootT 減算、resetPose でクリア。
+- FREEZE_FRAC=0.4（頭4割が完全硬直、残りは従来の速度スロットルで漸増復帰）。敏捷性/ジャンプ量でスケール（エリート/小ジャンプ=短い、鈍足/大ジャンプ=長い）。
+- 検証(実ロスター randomizeRosters): tsc✓/着地0.1s後に静止(curSpd<0.5)している割合 2%→**98%**＝完全硬直が効く/平均rootT 0.13s・最大0.57s/回帰(テストロスター40試合)BLUE38.3・99側全勝・NaN無し・完走＝スタック無し。
+- ⚠️見た目・体感の最終確認はブラウザ目視。FREEZE_FRAC=0.4 は初期値、硬直が長すぎ/短すぎなら調整。⚠️未コミット(abc393a の上に 345〜351)。

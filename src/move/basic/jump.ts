@@ -43,6 +43,7 @@ Player.prototype.updateJump = function(dt: number): void {
         const base = 0.3 + Math.pow(1 - ability, 0.85) * 2.2;                    // 0.3 .. 2.5 (フルジャンプ)
         const heightScale = clamp(0.5 + this.jumpHeight * 0.9, 0.45, 1.3);
         this.landDur = this.landT = clamp(base * heightScale, 0.3, 2.6);
+        this.rootT = Math.max(this.rootT, this.landT * 0.4);   // 着地の頭側は完全硬直（動けない）
         this.leapX = this.leapZ = 0;
       }
     }
