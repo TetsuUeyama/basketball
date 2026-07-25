@@ -42,6 +42,10 @@ export function poseHands(game: Game, ): void {
     if (game.shooter && game.shooter.coolT > 0 && game.shooter !== game.handler) {
       posed.add(game.shooter);
     }
+    // スクリーナーは腕を組む（ファウル回避）— runArms に上書きさせない
+    for (const p of game.players) {
+      if (p.screening) { p.foldArms(); posed.add(p); }
+    }
     for (const p of game.players) if (!posed.has(p)) p.runArms();   // 腕振り／休め
     switch (game.ballMode) {
       case "held": {
@@ -99,8 +103,9 @@ export function poseHands(game: Game, ): void {
           const digger = game.looseStealBy, loser = game.looseStealVictim;
           // 奪う側は突進: 片手を出し、上体をひねり、腕を大きく伸ばす
           if (digger && !digger.airborne && dist2D(digger.pos, b) < 2.4) digger.digReach(lb);
-          // 失った者は片手を伸ばして取り戻そうとする
-          if (loser && loser !== digger && !loser.airborne && dist2D(loser.pos, b) < 2.2) loser.reach(lb);
+          // 失った者は片手を伸ばして取り戻そうとする（のけぞり中は手を出さない＝反応を見せる）
+          if (loser && loser !== digger && !loser.airborne && loser.foulReactT <= 0
+              && dist2D(loser.pos, b) < 2.2) loser.reach(lb);
         }
         break;
       case "tipoff":

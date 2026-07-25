@@ -1,10 +1,11 @@
-// オフボール移動・スペーシング。スクリーンは ScreenSystem、トラップ救済等は Game 側のヘルパー。
+// オフボール移動・スペーシング。スクリーンは move/action/screen、トラップ救済等は Game 側のヘルパー。
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
 import { RIM, THREE_DIST, LANE_W } from "../config";
 import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D, dirTo2D, segPerp } from "../util";
 import { deepThreeOK } from "../eval";
 import { laneBlock } from "../move/reaction/pass-risk";
+import { countScreening, handlerPressured, goodScreener, setScreen, updateScreen } from "../move/action/screen";
 import { tightlyTrapped, trapReliever, trapReliefSpot } from "./reads";
 import type { Game } from "../game";
 
@@ -65,7 +66,7 @@ export function updateOffBallMotion(game: Game, dt: number, team: number, exclud
     p.offTimer -= dt * tick;
 
     if (p.screening) {
-      game.screen.update(dt, p);
+      updateScreen(game, dt, p);
     } else if (p.cutting) {
       // カットに沿って走る(スポットより少し速い)。走路の守備を避けて曲がる。
       const ct = game.steerAround(p, p.offTarget.x, p.offTarget.z, true);
@@ -145,10 +146,10 @@ export function updateOffBallMotion(game: Game, dt: number, team: number, exclud
 // オープンなスポットへドリフト。同時にスクリーナー/カッターは最大1人で間合いを保つ。
 function pickOffBallAction(game: Game, team: number, spots: Vector3[], p: Player): void {
   const rim = game.attackFloor(team);
-  const busy = game.screen.countScreening(team) + countCutting(game, team);
-  const screenChance = (game.isBig(p) ? 0.7 : 0.3) * (p.evalRole === "スクリーナー" ? 1.5 : 1);
-  if (busy === 0 && game.screen.handlerPressured() && game.screen.goodScreener(p) && chance(screenChance)) {
-    game.screen.start(p);
+  const busy = countScreening(game, team);   // 他のスクリーナーのみ排他（カットとは併存可）
+  const screenChance = (game.isBig(p) ? 1.0 : 0.6) * (p.evalRole === "スクリーナー" ? 1.5 : 1);
+  if (busy === 0 && handlerPressured(game) && goodScreener(game, p) && chance(screenChance)) {
+    setScreen(game, p);
     return;
   }
   // ステーションのポストビッグがいるとカットのスペースが減る

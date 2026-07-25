@@ -1,10 +1,11 @@
-// man ディフェンス本体。ゾーン/プレスは defense-schemes、ピック&ロールのカバレッジは ScreenSystem。
+// man ディフェンス本体。ゾーン/プレスは defense-schemes、ピック&ロールのカバレッジは move/reaction/screen。
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
 import { RIM, PALM_HITBOX } from "../config";
 import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D, dirTo2D, towardPoint } from "../util";
 import { twWeight, palmRadius, effShootRange, stripEdge, shotThreat, defHands, ballSecurity, leapHeight } from "../eval";
 import { reachInFoulRate } from "../move/reaction/foul";
+import { tickScreenCoverage, defendScreen } from "../move/reaction/screen";
 import { pickDefScheme, runZoneDefense, runPress } from "./defense-schemes";
 import { defensiveFoul } from "../core/deadball";
 import type { Game } from "../game";
@@ -165,7 +166,7 @@ export function runDefense(game: Game, dt: number): void {
   if (game.zoneScheme) { runZoneDefense(game, dt); return; }
 
   // ピック&ロールのカバレッジ窓
-  game.screen.tickCoverage(dt);
+  tickScreenCoverage(game, dt);
 
   // 一度に一人のリムプロテクター: ボールとリムの間の最良位置の LOW MAN が壁になる。ビッグ優先(−1.2m)。
   let rimHelper: Player | null = null;
@@ -185,7 +186,7 @@ export function runDefense(game: Game, dt: number): void {
 
     // ピック&ロール: スクリーンの2守備者はカバレッジスキームで動く
     if (game.screen.cov && (d === game.screen.screenerDef || d === game.screen.handlerDef)) {
-      game.screen.defend(dt, d, protect);
+      defendScreen(game, dt, d, protect);
       continue;
     }
 

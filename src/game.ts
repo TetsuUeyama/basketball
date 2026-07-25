@@ -16,6 +16,7 @@ import "./animation/action/dribble";
 import "./animation/action/hold";
 import "./animation/action/reach";
 import "./animation/action/guard";
+import "./animation/action/screen";
 import "./animation/action/sit";
 import "./animation/reaction/bench-idle";
 import "./animation/reaction/foul-react";
@@ -29,7 +30,7 @@ import { reactionLag } from "./eval";
 import { FreeThrowSystem } from "./systems/freethrow";
 import { TipoffSystem } from "./systems/tipoff";
 import { InboundSystem } from "./systems/inbound";
-import { ScreenSystem } from "./systems/screen";
+import { ScreenState } from "./move/reaction/screen";
 import { updateSubs } from "./systems/subs";
 import { refreshChoiceRanks } from "./ai/lineups";
 import { updatePass } from "./move/action/passing";
@@ -82,8 +83,9 @@ export class Game {
   possession = 0;
   handler: Player | null = null;
   ballMode: BallMode = "held";
-  // スクリーン(ピック&ロール)機能（状態と処理は ScreenSystem が所有 / 方式A）
-  readonly screen = new ScreenSystem(this);
+  // スクリーン(ピック&ロール)の共有状態。処理は move/action/screen(攻撃) と
+  // move/reaction/screen(守備カバレッジ) の関数が担う。
+  readonly screen = new ScreenState();
 
   // ---- 現ポゼッションのチーム守備スキーム(resetMotion で決定)。
   // "" = 素のマンツーマン(pnr カバレッジが適用される)。
@@ -734,6 +736,13 @@ export class Game {
     this.handler = null;
     this.ballMode = "loose";
     for (const p of this.players) p.touchCool = 0;
+    // スティール/はたき出しの被害者は弾かれて軽くのけぞる（衝撃のみ、歩かない）。
+    // 全スティール経路(steal/stripGather/deflectCatch/パス奪取)がここを通る。
+    const st = opts.stealBy, vic = opts.victim;
+    if (st && vic && st !== vic) {
+      vic.foulReaction("hurt", vic.pos.x - st.pos.x, vic.pos.z - st.pos.z, rand(0.25, 0.42));
+      vic.foulStumble = false; vic.foulStaggerX = vic.foulStaggerZ = 0;
+    }
     // ボールがこぼれた反応: 反応の速い選手が先に飛びつく(reactionLag で遅延)。
     for (const p of this.players) p.looseReactT = reactionLag(p);
   }
@@ -906,7 +915,7 @@ export class Game {
     this.goLoose(h.team, 1.6, { stealBy: d, victim: h, grabAfter: 0.55 });
     d.digReach(new Vector3(this.ball.pos.x, 0.9, this.ball.pos.z));   // ランジ
     d.defWin("steal");                             // 争奪が片付いたら祝いのガッツポーズ
-    h.touchCool = 0.5;                             // バランスを崩された — 即座には掴めない
+    h.touchCool = 0.5;                             // バランスを崩された — 即座には掴めない（のけぞりは goLoose で付与）
   }
 
   // ---- クォーター / 試合終了 ----------------------------------------------

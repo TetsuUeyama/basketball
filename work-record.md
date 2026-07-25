@@ -4360,3 +4360,50 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - 検証: tsc✓（一発通過）/ vite build✓(15.58s) / headless 40試合: BLUE 39.9・99側全勝・NaN無し・完走。
 - リバート用スナップショット: scratchpad/src-before-ai。workPlan の構成図を更新（data/ 追記含む）。
 - ⚠️ 未コミット(6485887 の上に 334〜337)。
+
+## 2026-07-25 (338) スクリーン(ピック&ロール)を実測で復活＋move の action/reaction へ分割
+
+- ユーザー指摘「スクリーンでハンドラーがフリーになる場面が皆無＝実質死んでいる。選手のMOVEなので action/reaction にすべき」。両方とも正しいことを実測で確認し対応。
+- **死亡の実測確認**: headless計測で開始2.9回/試合・**接続0回/40試合**。発火はするが一度も繋がらない（soccer-simのCROSS教訓と同型: 発火数≠意味のある挙動）。
+- **根本原因(実測で特定)**: (a)ピック目標がハンドラー基準で守備者を捕まえられない、(b)動く守備者への精密ランデブー依存で72回中立ち位置到達1回、(c)ハンドラーがスクリーンを使いに来る連携が無い。
+- **復活の実装**:
+  - screen.update: 目標を守備者基準(d.pos-lx*0.3)に、接続を「ハンドラーがスクリーナーに寄る(dist<1.4)＋守備者が守る間合い(dist<2.6)」に。goodScreener 7.5→5.0m。
+  - ai/offense: `usingScreen`/`activeScreener` を新設し、探りドリブル中に味方のスクリーンを使いに行く連携（スクリーナーの脇を回ってリムへ＝守備者をピックに通す）を追加。
+  - ai/offball: 開始排他を「他スクリーナーのみ(カット併存可)」に、screenChance 0.7/0.3→1.0/0.6。
+  - 実測: 接続 **0 → 1.9回/試合**・接続率54%・カバレッジ均等(drop/show/switch)・freed 0.72/試合。スコア分布不変(BLUE 38〜40)。
+- **配置換え（挙動保存）**: systems/screen.ts(ScreenSystemクラス)を廃し、
+  - move/action/screen.ts: 攻撃アクション（setScreen/updateScreen/countScreening/handlerPressured/goodScreener/endScreen）
+  - move/reaction/screen.ts: 守備リアクション（ScreenState状態＋resolveScreenCoverage/chooseCoverage/tickScreenCoverage/defendScreen）
+  - Game は `readonly screen = new ScreenState()` を保持（他の一時状態と同様のデータ保持。systems の「状態を持つ機能クラス」から選手MOVEへ）。呼び出し側 ai/defense・ai/offball・game.ts を関数呼び出しに更新。
+  - 分割後実測: 接続1.7/試合・率49%（分割前と揺らぎ内で一致＝挙動保存）。tsc✓/vite build✓/スコアBLUE39.6・99側全勝・NaN無し・完走。
+- ⚠️ スクリーンの見た目(スクリーナーの寄せ・ロール・カバレッジの動き)は headless非対象＝最終はブラウザ目視。連携の頻度・パラメータ(接続閾値/screenChance等)は初期値、実機で要調整の可能性。
+- リバート用: scratchpad/src-before-ai の後の状態。⚠️ 未コミット(e814db0 の上に 338)。
+
+## 2026-07-25 (339) スクリーンの立ち位置修正＋スクリーナーの腕組みアニメ
+
+- ユーザー実機確認「スクリーナーがハンドラーの邪魔になる。マークマンの横に立ち相手が来られないようにしてハンドラーを解放すべき。またスクリーナーは腕を組むはず（ファウル回避）」。
+- ①立ち位置修正: updateScreen の目標を `d.pos - lx*0.3`（守備者の逆側）→ `d.pos + lx*0.55`（ハンドラーが抜ける側 +l の真横）に。守備者(-l側) — スクリーナー — ハンドラー(+l側、usingScreen連携で scr+l*0.7 へ) の並びになり、スクリーナーが守備者の追走を壁で止める。ハンドラーはスクリーナーの外側を回るので邪魔にならない。
+- ②腕組みアニメ: animation/action/screen.ts に `foldArms`（上腕を前へ下ろし肘を1.5曲げ＋前腕を内側z=±0.6で交差）を新設。core/poses.ts の poseHands で `p.screening` なら foldArms を適用し posed に追加（runArms に上書きさせない）。game.ts に副作用import追加。
+- 検証: tsc✓ / vite build✓(23.09s) / 接続1.95/試合・率48%・カバレッジ均等（幾何変更後も維持）/ スコアBLUE39・99側全勝・NaN無し・完走。
+- ⚠️ **立ち位置の左右・腕組みの見た目は headless非対象＝ブラウザ目視必須**。立ち位置の +l 符号は現状の連携（handler が +l 側へ回る）に合わせた解釈。実機で逆なら符号反転。腕組みの角度(上腕方向/肘1.5/交差0.6)は初期値、見た目で要調整。
+- ⚠️ 未コミット(e814db0 の上に 338〜339)。
+
+## 2026-07-25 (340) スティール/ブロックされた被害者にリアクション（のけぞり）を追加
+
+- ユーザー要望「スティール・ブロックされた時にファウル時のように衝撃を受け少しのけぞる動きを」。従来は守備側(digReach/defWin)だけで被害者は touchCool が付くのみ＝無反応だった。
+- 既存の `foulReaction("hurt",...)` を軽め・歩かない版で被害者に適用（poseFoulReaction が毎フレーム全選手に呼ばれるので foulReactT を立てるだけで のけぞりが表示される）:
+  - game.steal(): ハンドラー h に `foulReaction("hurt", h-d方向, rand(0.25,0.4))` → 直後に foulStumble=false・stagger=0 で移動を抑制（純粋なのけぞりのみ）。
+  - swatShot(): シューター に `foulReaction("hurt", shooter-blocker方向, rand(0.3,0.45))` → 同様に移動抑制。ブロック時は coolT のフォロースルーより foulReact のけぞりが優先（poses.ts が foulReactT>0 でフォロースルーをスキップ）。
+- 強度を低く(0.25〜0.45)し、stumble movement を切ることで「少しのけぞる」軽い衝撃に。方向は加害者から離れる向き。
+- 検証: tsc✓ / vite build✓(22.21s) / スコアBLUE39.9・99側全勝・NaN無し・完走 / 20試合でスティール146・ブロック3が発生しリアクション発火162回（=steal/block 149＋実ファウル約13）＝**被害者リアクションが両方で発火を確認**。
+- ⚠️ **のけぞりの見た目は headless非対象＝ブラウザ目視必須**（foulReactT が立つことは確認済みだが実際の動きの強さ/向きは要目視、強度と方向は初期値で調整可）。「stop(壁で止められた)」時の被害者リアクションは未実装（要望あれば追加可）。
+- ⚠️ 未コミット(e814db0 の上に 338〜340)。
+
+## 2026-07-25 (341) スティール反応が一部経路で出ない不具合を修正（goLoose に集約）
+
+- ユーザー指摘「スティールされたアクションが無い」。(340)は `game.steal()`（ドリブル奪取）だけに反応を付けたが、実際のスティール経路は4つ: game.steal / stripGather(ギャザー際) / deflectCatch(キャッチ際) / パスインターセプト。大半が無反応だった。
+- 全経路が `goLoose({stealBy, victim})` を通るため、**被害者のけぞりを goLoose に集約**（steal() の個別追加は削除＝重複排除）。stealBy && victim && 別人の時にのみ発火。ブロックは goLoose に victim を渡さない経路なので swatShot 側の明示反応を維持。
+- 併せて core/poses.ts の loose 争奪ポーズを修正: 被害者が `foulReactT>0`（のけぞり中）はボールへ手を伸ばさない → 反応が上書きされず見える。
+- 検証: tsc✓ / vite build✓(23.81s) / スコアBLUE40・99側全勝・NaN無し・完走 / 反応発火 20試合で162→**293回**（全経路発火。stats.stl 139 より多いのは、奪取未完遂でも弾かれ接触には反応するため＝妥当）。
+- ⚠️ のけぞりの見た目は headless非対象＝ブラウザ目視必須。極端ロスターでは strip が多く反応が多発（~14/試合）だが現実ロスターでは減る想定。
+- ⚠️ 未コミット(e814db0 の上に 338〜341)。

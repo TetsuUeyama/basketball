@@ -106,6 +106,15 @@ export function runOffense(game: Game, dt: number, h: Player): void {
       h.stalledT = Math.max(0, h.stalledT - dt);
       game.setDrive(h, rimFloor, dist2D(h.pos, rimFloor) + 0.5); // リトリートドリブル
       moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelToward(dt, h.driveTarget.x, h.driveTarget.z, 0.5) * dt);
+    } else if (usingScreen(game, h)) {
+      // ピック&ロール連携: 味方が掛けているスクリーンを使いに行く。スクリーナーの
+      // ドライブ側を回ってリムへ向かい、守備者をピックに通す。
+      const scr = activeScreener(game, h)!;
+      const { ux, uz } = dirTo2D(h.pos.x, h.pos.z, rimFloor.x, rimFloor.z);
+      const lx = -uz * h.driveSide, lz = ux * h.driveSide;
+      const tx = scr.pos.x + lx * 0.7 + ux * 0.4;   // スクリーナーの脇を抜けてリム方向
+      const tz = scr.pos.z + lz * 0.7 + uz * 0.4;
+      moveToward2D(h.pos, tx, tz, h.accelToward(dt, tx, tz, mult) * dt);
     } else {
       // move の合間の探るドリブル。押し込むビッグは押し合いを続け、
       // それ以外はレーン内の体を回り込む。
@@ -802,6 +811,18 @@ export function stepBack(game: Game, h: Player, d: Player, dHoop: number): void 
       d.applyReactLag();
       h.driveTarget.copyFrom(h.jukeTarget);
     }
+  }
+
+  // このハンドラーのために今スクリーンを掛けている味方（居なければ null）。
+export function activeScreener(game: Game, h: Player): Player | null {
+    for (const q of game.teamPlayers(h.team)) if (q !== h && q.screening) return q;
+    return null;
+  }
+
+  // ピックを使いに行くべきか: 味方がスクリーン中で、まだ近づいていない（連携で寄せる）。
+export function usingScreen(game: Game, h: Player): boolean {
+    const scr = activeScreener(game, h);
+    return !!scr && dist2D(h.pos, scr.pos) > 1.0;
   }
 
   // 前方約1.2m以内で、ドライブ経路に真っ直ぐ立つ守備者。彼らの体の接触が
