@@ -1,11 +1,8 @@
-// フリースロー機能（方式A: Game 参照を受け取るサブシステム）。FT 固有の状態はこの
-// クラスが所有し、共有状態・フロー(得点/インバウンド/交代/リバウンド)は game 経由で
-// 呼ぶ。game.ts から分離（workPlan.md 参照）。
+// フリースロー機能。FT 固有の状態はこのクラスが所有し、共有状態・フローは game 経由で呼ぶ。
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
 import { COURT, RIM } from "../config";
-import { rate } from "../attributes";
-import { clamp, chance, rand, dist2D } from "../util";
+import { rate, clamp, chance, rand } from "../util";
 import { swishNet } from "../core/visuals";
 import { benchCheer } from "../core/bench";
 import { withSubs } from "./subs";
@@ -15,7 +12,7 @@ export class FreeThrowSystem {
   shooter!: Player;
   remaining = 0;
   team = 0;
-  t = 0;                 // poseHands が参照（構え中に手をボールへ伸ばす）
+  t = 0;                 // poseHands が参照
   made = false;
   private target = new Vector3();
   private missKind: "make" | "rimOut" | "air" = "make";
@@ -58,32 +55,31 @@ export class FreeThrowSystem {
     const g = this.game;
     this.t = 0;
     g.ballFalling = false;
-    // FK精度、弱い精神なら疲労/スコアで揺れる。PKキッカーはルーティンが染み付く。
+    // メイク確率を算出（FK精度・特能・クラッチで補正）
     const p = 0.5 + rate(this.shooter.attr.freeThrow) * 0.45
       + (this.shooter.has("ftKicker") ? 0.08 : 0)
       - g.clutchFactor(this.shooter) * 0.15;
     this.made = chance(clamp(p, 0.3, 0.97));
     g.ball.pos.set(this.shooter.pos.x, 1.2, this.shooter.pos.z);
 
-    // 結果からどこへ飛ぶか決め、軌道で物語る
+    // 結果からボールの飛び先を決める
     const rim = g.attackRim(this.team);
     const sh = this.shooter.pos;
     if (this.made) {
       this.missKind = "make";
-      this.target.copyFrom(rim);                 // ど真ん中 → 吸い込まれる
+      this.target.copyFrom(rim);                 // ど真ん中
       return;
     }
-    // エアボールは本当に下手な選手のみ(稀)。それ以外はリムアウト。
+    // エアボールは下手な選手のみ、それ以外はリムアウト
     const ftr = rate(this.shooter.attr.freeThrow);
     const airP = Math.max(0, (0.32 - ftr) / 0.32) * 0.12;   // ~0.32超で0、どん底で最大~12%
     if (chance(airP)) {
       this.missKind = "air";
-      // 届かず手前で失速: ~82%地点、リムより十分低く
+      // 届かず手前で失速: ~82%地点
       this.target.set(sh.x + (rim.x - sh.x) * 0.82, RIM.height - 0.7, sh.z + (rim.z - sh.z) * 0.82);
       return;
     }
-    // リムアウト: リムの縁(主に前後、時々横)を狙い、ど真ん中に来てから跳ねるのでなく
-    // 目に見えてリングに当てる
+    // リムアウト: リムの縁(主に前後、時々横)を狙う
     this.missKind = "rimOut";
     let ux = sh.x - rim.x, uz = sh.z - rim.z;      // シューター方向(前リム方向)の単位
     const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
@@ -109,8 +105,7 @@ export class FreeThrowSystem {
       const k = (this.t - setup) / shotDur;
       const a = this.shooter.pos, b = this.target;   // リム中心 / リム縁 / 手前
       const baseY = 2.0 + (b.y - 2.0) * k;
-      // 弾道高さ: FTのアーチも評価で上がる(ノーコンテストなので見た目)。エアボールは
-      // 弱くフラットで目に見えて手前に失速(低いアーチで届かない)。
+      // 弾道高さ: エアボールは低くフラットで手前に失速
       const ftArc = 1.2 + rate(this.shooter.attr.bank) * 1.2;
       const arc = this.missKind === "air" ? ftArc * 0.55 : ftArc;
       g.ball.pos.set(a.x + (b.x - a.x) * k, baseY + Math.sin(k * Math.PI) * arc, a.z + (b.z - a.z) * k);
@@ -135,7 +130,7 @@ export class FreeThrowSystem {
 
     // 最後のFTが解決
     if (this.made) {
-      // ボールがネットを抜けてホールド中に床で弾む
+      // ボールがネットを抜けて床で弾む
       const rim = g.attackRim(this.team);
       g.ball.pos.set(rim.x, RIM.height - 0.15, rim.z);
       g.ball.vel.set(rand(-0.4, 0.4), -2.4, -Math.sign(rim.z || 1) * rand(0.2, 0.7));
@@ -151,14 +146,13 @@ export class FreeThrowSystem {
     }
   }
 
-  // 外したFTはライブボールになり、最初のバウンドが外し方に対応: リムアウトはリングに
-  // 当たって弾き、エアボールは手前に落ちる。その後は通常の競り合いリバウンド。
+  // 外したFTをライブボール化。最初のバウンドが外し方に対応し、その後は通常のリバウンド。
   private startRebound(): void {
     const g = this.game;
     const rim = g.attackRim(this.team);
     const rimFloor = g.attackFloor(this.team);
     if (this.missKind === "air") {
-      // リングに届かず — その場から手前へ落とす(リム接触なし → 14秒リセット無し fromRim:false)
+      // リングに届かず手前へ落とす(リム接触なし → fromRim:false)
       g.ball.vel.set(rand(-0.6, 0.6), 0.2, -Math.sign(rim.z || 1) * rand(0.3, 0.9));
       g.goLoose(this.team, 2.6, { rebound: true, fromRim: false });
     } else {
@@ -170,9 +164,6 @@ export class FreeThrowSystem {
       g.goLoose(this.team, 2.6, { rebound: true, fromRim: true });
     }
     // ビッグ(とリム至近の全員)がボードを取りに跳ぶ
-    for (const p of g.players) {
-      const d = dist2D(p.pos, rimFloor);
-      if (d < 2.8 && (g.isBig(p) || d < 1.4)) p.jump(g.isBig(p) ? 0.7 : 0.5, 0.6);
-    }
+    g.crashReboundJump(rimFloor);
   }
 }

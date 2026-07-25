@@ -1,10 +1,9 @@
-// スクリーン（ピック&ロール）機能。方式A: Game 参照を受け取るサブシステム。攻撃側の
-// スクリーン設定と、守備側のカバレッジ(drop/show/switch)の両方を扱う。カバレッジ状態
-// (cov/screenerDef/handlerDef)は守備ループ(runDefense)からも読まれるため public。
+// スクリーン（ピック&ロール）機能。攻撃側のスクリーン設定と守備側のカバレッジ(drop/show/switch)を扱う。
+// カバレッジ状態(cov/screenerDef/handlerDef)は runDefense からも読まれるため public。
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
-import { TACTICS, rate } from "../attributes";
-import { clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";
+import { TACTICS } from "../attributes";
+import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";
 import { defEffort, defendOnBall } from "../action/defense";
 import { bestOpenSpot } from "../action/offball";
 import type { Game } from "../game";
@@ -52,9 +51,8 @@ export class ScreenSystem {
     h.driveSide = p.screenSide;
   }
 
-  // 選んだ側でハンドラーの横のピックへ入る。セット後にオンボール守備がぶつかると
-  // ハンドラーが角を曲がり(ブロウバイ)、守備は止められる。その後スクリーナーはリムへ
-  // ハードにロール。使われなかったピックは失効しポップアウト。
+  // 選んだ側でハンドラーの横のピックへ入る。繋がればハンドラーは角を曲がり、スクリーナーは
+  // リムへロール。使われなかったピックは失効しポップアウト。
   update(dt: number, p: Player): void {
     const g = this.game;
     const h = g.handler;
@@ -74,8 +72,7 @@ export class ScreenSystem {
 
     const set = dist2DTo(p.pos, tx, tz) < 0.5;
     if (set && dist2D(p.pos, d.pos) < 0.95) {
-      // ピックが繋がる — 守備がどう守るか選び、ハンドラーの結末(ブロウバイ/プルアップ/
-      // 壁)がそれに従う
+      // ピックが繋がる — 守備のカバレッジを決め、ハンドラーの結末がそれに従う
       this.resolveCoverage(h, p, d);
       this.endScreen(p, true);                          // スクリーナーはロール
       return;
@@ -83,9 +80,8 @@ export class ScreenSystem {
     if (p.screenT <= 0) this.endScreen(p, false);       // 未使用のピック — ポップアウト
   }
 
-  // ボールスクリーンの2守備者と、スクリーナーの守備者がどう守るか。ピックが繋がった
-  // 瞬間に呼ばれる。カバレッジ窓(t)を張り、runDefense がそれを読んで両守備者をスキームで
-  // 動かす。攻撃側には対応する結果を適用。
+  // カバレッジを選び、ピックが繋がった瞬間に呼ばれる。カバレッジ窓(t)を張り、runDefense が
+  // それを読んで両守備者を動かす。攻撃側には対応する結果を適用。
   private resolveCoverage(handler: Player, screener: Player, hDef: Player): void {
     const g = this.game;
     const defTeam = 1 - handler.team;
@@ -99,20 +95,16 @@ export class ScreenSystem {
     handler.decisionT = Math.max(handler.decisionT, 0.2);
     g.setDriveSide(handler);
     if (cov === "drop") {
-      // ビッグが下がってリムを守る — ハンドラーはプルアップ用の一歩(リムへのブロウバイ
-      // ではない)を得て、ロールはカバーされる
+      // ドロップ: ビッグが下がってリムを守る。ハンドラーはプルアップの一歩を得る
       handler.beatenT = Math.max(handler.beatenT, rand(0.18, 0.32));
       hDef.reactT = Math.max(hDef.reactT, 0.35);   // ハンドラーの守備者は上を追う
     } else if (cov === "show") {
-      // ビッグが飛び出してボールを止める — ハンドラーは一瞬壁になるが、スクリーナーが
-      // 空いたスペースへロール
+      // ショー: ビッグが飛び出してボールを止める。スクリーナーは空きへロール
       handler.stalledT = Math.max(handler.stalledT, rand(0.35, 0.55));
       hDef.reactT = Math.max(hDef.reactT, 0.45);
       screener.openRollT = 0.9;
     } else {
-      // スイッチ: 男を入れ替える。楽な角は無いが、ガードにスイッチしたビッグが一歩遅ければ
-      // ハンドラーはそのミスマッチを攻める(クイックネス差でスケールした遅延ブロウバイ)。
-      // 小さい男に乗り換えたローラーもオープンレーンを得る
+      // スイッチ: マークを入れ替える。ハンドラーはミスマッチを攻め、ローラーもレーンを得る
       const agiGap = rate(handler.attr.agility) - rate(sDef.attr.agility);
       handler.beatenT = Math.max(handler.beatenT, clamp(agiGap, 0, 0.45) * 1.3);
       hDef.reactT = Math.max(hDef.reactT, 0.3);
@@ -120,9 +112,8 @@ export class ScreenSystem {
     }
   }
 
-  // スクリーナーの守備者がどのカバレッジを取るか: 足の遅いビッグはリム保護でドロップ、
-  // 攻撃的な戦術(または速いビッグ)はヘッジ、同格でスイッチ可能なら入れ替え。毎回同じに
-  // ならないよう重み付け。
+  // スクリーナーの守備者がどのカバレッジを取るか(重み付き抽選): 遅いビッグはドロップ、
+  // 攻撃的/速いビッグはショー、同格ならスイッチ。
   private chooseCoverage(hDef: Player, sDef: Player): "drop" | "show" | "switch" {
     const g = this.game;
     const press = TACTICS[sDef.team].defense.pressure;
@@ -159,7 +150,7 @@ export class ScreenSystem {
     const effort = defEffort(g, d, protect);
     if (d === this.screenerDef) {
       if (this.cov === "drop") {
-        // ボールとリムの間で深くサグる — ペイントを壁にしてローラーを迎える
+        // ドロップ: ボールとリムの間で深くサグる
         const tx = h.pos.x + (protect.x - h.pos.x) * 0.62;
         const tz = h.pos.z + (protect.z - h.pos.z) * 0.62;
         moveToward2D(d.pos, tx, tz, d.accelToward(dt, tx, tz, 1.05 * effort) * dt);
@@ -198,8 +189,7 @@ export class ScreenSystem {
       return;
     }
     const rim = g.attackFloor(p.team);
-    // ピック&ポップ vs ピック&ロール: ストレッチシューターのスクリーナーはアークへポップ
-    // してキャッチ&シュート3P、リムランナー(や非シューター)は従来通りハードにロール。
+    // ピック&ポップ vs ロール: シューターはアークへポップ、それ以外はリムへロール
     const canPop = rate(p.attr.threeAcc) > 0.68 || p.has("range") || p.evalRole === "ストレッチ";
     p.cutting = true;
     p.offTimer = rand(1.5, 2.5);

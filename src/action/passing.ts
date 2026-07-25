@@ -2,9 +2,8 @@
 // ここは game を受け取る関数群。パスのリスク/インターセプト計算は resolution/pass-risk。
 import { Player } from "../objects/player/player";
 import { COURT, PASS_SPEED, MAX_PASS, SHOT_CLOCK } from "../config";
-import { rate } from "../attributes";
-import { clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";
-import { twWeight, effShootRange, reactionLag } from "../eval";
+import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";
+import { twWeight, effShootRange, reactionLag, shotThreat } from "../eval";
 import { laneVetoed, passRisk, evalInterception, longBallRead } from "../reaction/pass-risk";
 import { runDefenseDuringDeadish } from "./defense";
 import { updateOffBallMotion, bestOpenSpot } from "./offball";
@@ -324,7 +323,7 @@ export function updatePass(game: Game, dt: number): void {
       // キャッチ姿勢を今決める: 守備あり→シールド / オープン&射程→キャッチ&シュート / それ以外→ドライブ
       const dDefC = game.nearestDefenderDist(receiver);
       const inRange = dist2D(receiver.pos, game.attackFloor(receiver.team)) <= effShootRange(receiver) + 0.3;
-      const canShoot = Math.max(rate(receiver.attr.midAcc), rate(receiver.attr.threeAcc)) > 0.5;
+      const canShoot = shotThreat(receiver) > 0.5;
       receiver.catchIntent = dDefC < 1.6 ? "shield"
         : (inRange && canShoot && dDefC > 1.9) ? "shoot" : "drive";
     }

@@ -1,10 +1,12 @@
-// 選手の向き/ツイスト（胸・頭・体の向き）アニメーション（プロトタイプ拡張で Player に紐づけ）。本体は entities.ts から逐語移動
-// （this は Player インスタンスのまま）。呼び出し側は不変。game.ts が副作用 import する。
-import { clamp } from "../../util";
-import { Player } from "./player";
+// 胸・頭の部位定義と基本ムーバ（向き/ツイスト）。可動域・速度は
+// JOINT.chestTwist / JOINT.headTurn に従う。各アクションのアニメはこれを通す。
+import { clamp, normAngle } from "../../../util";
+import { Player } from "../../../objects/player/player";
+import { JOINT } from "./joints";
 
-declare module "./player" {
+declare module "../../../objects/player/player" {
   interface Player {
+    worldYawTo(x: number, z: number): number;
     twistToward(x: number, z: number, dt: number, maxTwist?: number, rate?: number): void;
     lookToward(x: number, z: number, dt: number, rate?: number): void;
     faceChestToward(x: number, z: number): void;
@@ -16,18 +18,21 @@ declare module "./player" {
   }
 }
 
+/** 胸（ローカル -numberSide·Z）がワールド点 (x,z) を向くためのワールドヨー。 */
+Player.prototype.worldYawTo = function(x: number, z: number): number {
+    const s = this.numberSide;
+    return Math.atan2(-s * (x - this.pos.x), -s * (z - this.pos.z));
+};
+
 /** 上半身をツイストして、root（脚、足）が自身の向きを保ったまま胸がワールド点を
  *  向くようにする — 走りながら受ける、並走しながらドライブへ追随する。TWIST_MAXに
  *  クランプし平滑化する。rootの向き付近を狙う（またはスクエアに立つ）と
  *  ゼロへ巻き戻る。 */
-Player.prototype.twistToward = function(x: number, z: number, dt: number, maxTwist = Player.TWIST_MAX, rate = 10): void {
-    const s = this.numberSide;
+Player.prototype.twistToward = function(x: number, z: number, dt: number, maxTwist = JOINT.chestTwist.max, rate = JOINT.chestTwist.speed): void {
     const fx = x - this.pos.x, fz = z - this.pos.z;
     let want = 0;
     if (Math.abs(fx) + Math.abs(fz) >= 0.05) {
-      let d = Math.atan2(-s * fx, -s * fz) - this.root.rotation.y;
-      while (d > Math.PI) d -= 2 * Math.PI;
-      while (d < -Math.PI) d += 2 * Math.PI;
+      const d = normAngle(this.worldYawTo(x, z) - this.root.rotation.y);
       want = clamp(d, -maxTwist, maxTwist);
     }
     const step = rate * 0.5 * dt;   // 上半身は半分のレートで回る——胸を新しい向きへ
@@ -39,15 +44,12 @@ Player.prototype.twistToward = function(x: number, z: number, dt: number, maxTwi
 /** 胸のツイストの上に重ねて、頭を回してワールド点を見る — 片方向へ動く/向いた
  *  選手でもボール（やマーク）を見続けられる。胸を越えてHEAD_MAXにクランプし
  *  平滑化する。胸が既に向いている方を見るとゼロへ巻き戻る。 */
-Player.prototype.lookToward = function(x: number, z: number, dt: number, rate = 11): void {
-    const s = this.numberSide;
+Player.prototype.lookToward = function(x: number, z: number, dt: number, rate = JOINT.headTurn.speed): void {
     const fx = x - this.pos.x, fz = z - this.pos.z;
     let want = 0;
     if (Math.abs(fx) + Math.abs(fz) >= 0.05) {
-      let d = Math.atan2(-s * fx, -s * fz) - this.root.rotation.y - this.torsoTwist;
-      while (d > Math.PI) d -= 2 * Math.PI;
-      while (d < -Math.PI) d += 2 * Math.PI;
-      want = clamp(d, -Player.HEAD_MAX, Player.HEAD_MAX);
+      const d = normAngle(this.worldYawTo(x, z) - this.root.rotation.y - this.torsoTwist);
+      want = clamp(d, JOINT.headTurn.min, JOINT.headTurn.max);
     }
     this.headYaw += clamp(want - this.headYaw, -rate * dt, rate * dt);
     this.headNode.rotation.y = this.headYaw;
@@ -58,16 +60,13 @@ Player.prototype.lookToward = function(x: number, z: number, dt: number, rate = 
  *  TWIST_MAXで上限）ので、上半身が受け手に定まる間、足は遅れうる
  *  （「足はズレていても」）。 */
 Player.prototype.faceChestToward = function(x: number, z: number): void {
-    const s = this.numberSide;
     const fx = x - this.pos.x, fz = z - this.pos.z;
     if (Math.abs(fx) + Math.abs(fz) < 0.05) return;
-    const want = Math.atan2(-s * fx, -s * fz);       // 目標とする胸のワールドヨー
-    let twist = want - this.root.rotation.y;
-    while (twist > Math.PI) twist -= 2 * Math.PI;
-    while (twist < -Math.PI) twist += 2 * Math.PI;
-    if (Math.abs(twist) > Player.TWIST_MAX) {          // 胴の可動域を超える → 超過分は足を回す
-      this.root.rotation.y += twist - Math.sign(twist) * Player.TWIST_MAX;
-      twist = Math.sign(twist) * Player.TWIST_MAX;
+    const want = this.worldYawTo(x, z);              // 目標とする胸のワールドヨー
+    let twist = normAngle(want - this.root.rotation.y);
+    if (Math.abs(twist) > JOINT.chestTwist.max) {      // 胴の可動域を超える → 超過分は足を回す
+      this.root.rotation.y += twist - Math.sign(twist) * JOINT.chestTwist.max;
+      twist = Math.sign(twist) * JOINT.chestTwist.max;
     }
     this.torsoTwist = twist;
     this.torsoNode.rotation.y = twist;
@@ -77,15 +76,11 @@ Player.prototype.faceChestToward = function(x: number, z: number): void {
  *  0=的が胸の真正面。±π/2=真横。±π/2を越える=上半身の後ろ（そこへのパスは
  *  彼が向き直す必要がある）。 */
 Player.prototype.relativeChestAngle = function(x: number, z: number): number {
-    const s = this.numberSide;
     const fx = x - this.pos.x, fz = z - this.pos.z;
     if (Math.abs(fx) + Math.abs(fz) < 1e-4) return 0;
-    const want = Math.atan2(-s * fx, -s * fz);         // 目標を向くためのワールドヨー
+    const want = this.worldYawTo(x, z);                // 目標を向くためのワールドヨー
     const chest = this.root.rotation.y + this.torsoTwist;
-    let d = want - chest;
-    while (d > Math.PI) d -= 2 * Math.PI;
-    while (d < -Math.PI) d += 2 * Math.PI;
-    return d;
+    return normAngle(want - chest);
 };
 
 /** 胸を即座に腰の上へスクエアに戻す（ベンチ着席、リセット）。 */
@@ -105,9 +100,8 @@ Player.prototype.resetTwist = function(): void {
 Player.prototype.faceToward = function(x: number, z: number, yawOffset = 0): void {
     const fx = x - this.pos.x, fz = z - this.pos.z;
     if (Math.abs(fx) + Math.abs(fz) < 0.01) return;
-    const s = this.numberSide;
     // RotationY(θ) はローカル +Z を (sinθ, 0, cosθ) へ写す。胸はローカル -s·Z
-    this.root.rotation.y = Math.atan2(-s * fx, -s * fz) + yawOffset;
+    this.root.rotation.y = this.worldYawTo(x, z) + yawOffset;
 };
 
 /** コート上のボディをワールド点へ向ける。このフレームで最大 `maxStep` ラジアン
@@ -117,11 +111,7 @@ Player.prototype.faceToward = function(x: number, z: number, yawOffset = 0): voi
 Player.prototype.faceSmooth = function(x: number, z: number, maxStep: number): void {
     const fx = x - this.pos.x, fz = z - this.pos.z;
     if (Math.abs(fx) + Math.abs(fz) < 0.05) return;   // 目標が自分の真上——向きを保持
-    const s = this.numberSide;
-    const target = Math.atan2(-s * fx, -s * fz);
-    let d = target - this.root.rotation.y;
-    while (d > Math.PI) d -= 2 * Math.PI;             // 最短の角度経路
-    while (d < -Math.PI) d += 2 * Math.PI;
+    const d = normAngle(this.worldYawTo(x, z) - this.root.rotation.y);   // 最短の角度経路
     this.root.rotation.y += clamp(d, -maxStep, maxStep);
 };
 
@@ -135,4 +125,3 @@ Player.prototype.resetFacing = function(): void {
     this.flinchPitch = 0;
     this.resetTwist();
 };
-

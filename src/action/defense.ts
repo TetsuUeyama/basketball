@@ -1,27 +1,24 @@
-// man ディフェンス本体。Option B: 状態は Game(=GameState)が持ち、ここは game を受け取る
-// 関数群。ゾーン/プレスは defense-schemes、ピック&ロールのカバレッジは ScreenSystem。
+// man ディフェンス本体。ゾーン/プレスは defense-schemes、ピック&ロールのカバレッジは ScreenSystem。
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
 import { RIM, PALM_HITBOX } from "../config";
-import { rate } from "../attributes";
-import { clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";
-import { twWeight, palmRadius, reactionLag, effShootRange, stripEdge } from "../eval";
+import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D, dirTo2D, towardPoint } from "../util";
+import { twWeight, palmRadius, effShootRange, stripEdge, shotThreat, defHands, ballSecurity, leapHeight } from "../eval";
 import { reachInFoulRate } from "../reaction/foul";
 import { pickDefScheme, runZoneDefense, runPress } from "./defense-schemes";
 import { defensiveFoul } from "../core/deadball";
 import type { Game } from "../game";
 
-// この守備者が今どれだけ守備で動くか。オフェンスのスター(高オフェンス優先度)は脚を
-// 温存して省エネ、ロールプレイヤー/3&Dは常時全力。自軍ゴール近く・4Q接戦は全員全力。
+// この守備者が今どれだけ守備で動くか(0..1)。
 export function defEffort(game: Game, d: Player, protect: Vector3): number {
   if (game.quarter >= 4 && Math.abs(game.score[0] - game.score[1]) <= 6) return 1;   // 終盤接戦
   if (d.lockDef) return 1;                                  // 常時全力ロール
   const nearGoal = clamp(1 - dist2D(d.pos, protect) / 9, 0, 1); // リムで1
-  // 守備ロールのギア(優先): 省エネは脚を温存、ツーウェイ/バランスは多く出す
+  // 守備ロールのギア(優先)
   if (d.defEffortGear !== undefined) {
     return clamp(d.defEffortGear + (1 - d.defEffortGear) * nearGoal, 0, 1);
   }
-  // 旧フォールバック(defRole未設定): オフェンスのスターは少し流す
+  // フォールバック(defRole未設定): スターは少し流す
   if (d.evalRole === "ロックダウン" || d.evalRole === "スイッチディフェンダー"
     || d.evalRole === "エナジーガイ" || d.evalRole === "3&D") return 1;
   const star = clamp((d.offPriority - 0.45) / 0.4, 0, 1);  // 0=ロール .. 1=スター
@@ -30,8 +27,7 @@ export function defEffort(game: Game, d: Player, protect: Vector3): number {
   return 1 - star * (1 - e);
 }
 
-// 今どれだけシュートを DENY しているか: deny 戦術を、ショットクロック終盤(撃たせず
-// 時間切れを狙う価値がある時)にのみ上げる。序盤0、期限が近づくほど deny 値へ。
+// 今どれだけシュートを DENY しているか: ショットクロック終盤ほど deny 戦術値へ近づく。
 export function denyIntensity(game: Game, defTeam: number): number {
   const t = Math.max(game.tactics[defTeam].defense.deny, 0.12);
   if (!game.frontT) return 0;
@@ -39,8 +35,7 @@ export function denyIntensity(game: Game, defTeam: number): number {
   return t * late;
 }
 
-// 強い deny でハンドラーが完全に覆われ、綺麗な形で撃てない状態か。抜くか動かすか
-// しかなく、どちらもできなければ時間切れ(ショットクロック違反=deny の報酬)。
+// 強い deny でハンドラーが覆われ、綺麗に撃てない状態か。
 export function denySmother(game: Game, h: Player, dDef: number): boolean {
   return denyIntensity(game, 1 - h.team) > 0.18 && dDef < 1.0;
 }
@@ -49,8 +44,7 @@ export function denySmother(game: Game, h: Player, dDef: number): boolean {
 // ドライブを切り、抜かれたら追って復帰。
 export function defendOnBall(game: Game, dt: number, d: Player, man: Player, protect: Vector3): void {
   const effort = defEffort(game, d, protect);
-  // スターはバックコートでボールに圧をかけない(持ち運びを嫌がらせるのはロール/3&Dの仕事)。
-  // 自陣内側で下がって待ち、キャッチで拾う。
+  // スターはバックコートでボールに圧をかけない。自陣内側で下がって待つ。
   const s0 = game.attackSign(game.possession);
   if (effort < 0.9 && man.pos.z * s0 < 0.3) {
     const wx = man.pos.x * 0.6, wz = s0 * 1.5;
@@ -58,26 +52,22 @@ export function defendOnBall(game: Game, dt: number, d: Player, man: Player, pro
     game.clampCourt(d.pos);
     return;
   }
-  // 反応ラグが切れたらハンドラーのドライブ側へシェードを合わせる(DFライン general が速める)
+  // 反応ラグが切れたらハンドラーのドライブ側へシェードを合わせる
   if (d.reactT > 0) d.reactT -= dt * (game.teamHas(d.team, "dfLine") ? 1.3 : 1);
   else d.shadeSide = man.driveSide;
 
-  // バランス: 体重を少しのシェードへ戻す。クイックネス(敏捷性)が重心の戻る速さを決める。
+  // 体重を少しのシェードへ戻す。敏捷性が重心の戻る速さを決める。
   const targetLean = clamp(d.shadeSide * 0.3, -0.3, 0.3);
   const recover = (d.leanRecoverRate() + rate(d.attr.reaction) * 0.15) * dt;
   d.lean += clamp(targetLean - d.lean, -recover, recover);
 
-  const dx = protect.x - man.pos.x, dz = protect.z - man.pos.z;
-  const len = Math.hypot(dx, dz) || 1;
-  const ux = dx / len, uz = dz / len;        // ハンドラー -> ゴール
-  // lean はこのデュエルの横軸に乗る。world 軸を最新に保ち movement(leanFactor)へ反映。
+  const { ux, uz } = dirTo2D(man.pos.x, man.pos.z, protect.x, protect.z);   // ハンドラー -> ゴール
+  // lean をこのデュエルの横軸に乗せ、world 軸を最新に保つ。
   d.leanAxisX = -uz; d.leanAxisZ = ux;
 
-  // 適切なクッションを保つ(密着しすぎない)。ただしポスト/リム際で押してくるビッグには
-  // タイトにボディアップ。攻撃的な戦術・マンマークはギャップを詰める。
+  // クッションを保つ。ポスト/リム際で押してくるビッグにはタイトにボディアップ。
   const postUp = (game.isBig(man) || man.has("post")) && dist2D(man.pos, protect) < 5.5;
-  // 密着限界: どこまで詰めるかは守備能力 vs 相手のオフェンス能力。深い(ゴール近い)ほど
-  // 全員がタイトに(レイアップは絶対に許さない)、高い位置ではミスマッチが大きなサグに。
+  // 密着限界: 守備能力 vs オフェンス能力。深いほどタイト、高い位置ではサグ。
   const diff = clamp(rate(d.attr.defense) - rate(man.attr.offense), -0.5, 0.5);
   const depth = clamp((dist2D(man.pos, protect) - 3) / 6, 0, 1);  // リムで0 .. 約9m超で1
   let gap = postUp
@@ -87,7 +77,7 @@ export function defendOnBall(game: Game, dt: number, d: Player, man: Player, pro
   if (d.has("manMark")) gap *= 0.85;
   if (d.evalRole === "ロックダウン") gap *= 0.85;   // ストッパーは密着
   gap = clamp(gap, 0.3, 2.1);
-  // DENY(ショットクロック終盤): 詰めて撃たせず時間切れを狙う。リスク: 詰めすぎは抜かれる。
+  // DENY(ショットクロック終盤): 詰めて撃たせない。
   const dny = denyIntensity(game, d.team);
   if (dny > 0) {
     gap = Math.max(0.32, gap - dny * 0.7);
@@ -97,29 +87,28 @@ export function defendOnBall(game: Game, dt: number, d: Player, man: Player, pro
       if (chance(clamp(dny * (0.55 + edge), 0, 0.7) * dt * 3)) {
         man.driveSide = game.pickSide(man);
         man.beatenT = rand(0.5, 0.85);
-        d.reactT = Math.max(d.reactT, reactionLag(d));
+        d.applyReactLag();
         game.setDriveSide(man);
       }
     }
   }
 
-  // 早仕掛けのギャンブル: 射程で構えるシューターに攻撃的守備が先に跳ぶ。今撃てば巨大な
-  // コンテスト。だが床に置かれたらフローターを見送られる(decide が空中守備を突く)。
+  // 早仕掛けのギャンブル: 射程で構えるシューターに攻撃的守備が先に跳ぶ。
   if (!d.airborne && d.landT <= 0
       && man.beatenT <= 0 && man.powerT <= 0 && man.jukeT <= 0
       && dist2D(d.pos, man.pos) < 1.7
       && dist2D(man.pos, protect) <= effShootRange(man) + 0.3) {
-    const threat = Math.max(rate(man.attr.threeAcc), rate(man.attr.midAcc));
+    const threat = shotThreat(man);
     const gamble = (0.015 + rate(d.attr.aggression) * 0.045
       + game.tactics[d.team].defense.pressure * 0.02) * threat;
     if (chance(gamble * dt * 6)) {
-      game.contestLeap(d, man.pos, 0.55 + rate(d.attr.jump) * 0.3, 0.62);
+      game.contestLeap(d, man.pos, leapHeight(d), 0.62);
     }
   }
 
   let tx: number, tz: number;
   if (man.beatenT > 0) {
-    // 抜かれた: 切り返して先回り(体に真っ直ぐでなく、ハンドラーとゴールの間の点へ)
+    // 抜かれた: 切り返してハンドラーとゴールの間の点へ先回り
     tx = man.pos.x + (protect.x - man.pos.x) * 0.45;
     tz = man.pos.z + (protect.z - man.pos.z) * 0.45;
   } else {
@@ -136,8 +125,7 @@ export function defendOnBall(game: Game, dt: number, d: Player, man: Player, pro
   game.clampCourt(d.pos);
 }
 
-// トランジション — まず戻る: ポゼッションが変わった時、上に残っていた守備者(グラス
-// クラッシュ/ポストアップ直後)が担当より先に自陣へ全力で戻る。ビッグはリム最優先。
+// トランジション — まず戻る: 上に残っていた守備者が担当より先に自陣へ全力で戻る。ビッグはリム最優先。
 // このフレームの移動を処理したら true。
 export function getBackOnDefense(game: Game, dt: number, d: Player, man: Player): boolean {
   const s = game.attackSign(game.possession);  // 守備の自陣: z*s > 0
@@ -179,9 +167,7 @@ export function runDefense(game: Game, dt: number): void {
   // ピック&ロールのカバレッジ窓
   game.screen.tickCoverage(dt);
 
-  // 一度に一人のリムプロテクター: ハンドラーが抜いてドライブしたら、ボールとリムの間に
-  // 最も良い位置の LOW MAN がローテして壁になる。ビッグ優先(−1.2m)、ガードしかいなければ
-  // ガードが上がる。
+  // 一度に一人のリムプロテクター: ボールとリムの間の最良位置の LOW MAN が壁になる。ビッグ優先(−1.2m)。
   let rimHelper: Player | null = null;
   if (game.handler && (game.handler.beatenT > 0 || game.handler.powerT > 0)) {
     let best = Infinity;
@@ -205,33 +191,25 @@ export function runDefense(game: Game, dt: number): void {
 
     if (isOnBall) {
       defendOnBall(game, dt, d, man, protect);
-      // クッションからリーチイン: 鋭い反応/読みが多く奪う。D精度が守り、攻撃的戦術は
-      // ギャンブル(そしてファウル)する。
+      // クッションからリーチイン(密着時にスティール/ファウル判定)。
       const press = game.tactics[defTeam].defense.pressure * twWeight(d);
       const gap = dist2D(d.pos, man.pos);
       const reach = PALM_HITBOX ? palmRadius(d, man) : 1.5;
       if (gap < reach) {
         const close = 1 - gap / reach;               // 密着1、端0
-        const stl = rate(d.attr.reaction) * 0.45 + rate(d.attr.agility) * 0.35
-          + rate(d.attr.defense) * 0.2;
-        const resist = rate(man.attr.dribbleAcc) * 0.6 + rate(man.attr.handling) * 0.4
-          + (man.has("keepDribble") ? 0.25 : 0);
-        const slide = d.has("interceptor") ? 1.3 : 1;
-        // クロスオーバー中はボールが露出。速い手が突くが、巧く速いハンドラーは紐で保つ
-        // ので、守備のクイックネスが上回った時だけ突ける。
-        const secure = rate(man.attr.dribbleAcc) * 0.5 + rate(man.attr.handling) * 0.3
-          + rate(man.attr.agility) * 0.2;
+        const stl = defHands(d);
+        const resist = ballSecurity(man);
+        // クロスオーバー中はボールが露出。守備のクイックネスが上回った時だけ突ける。
         const exposed = man.jukeT > 0
-          ? 1 + Math.max(0, rate(d.attr.agility) * 0.6 + rate(d.attr.reaction) * 0.4 - secure) * 2.2 : 1;
-        const pPoke = Math.max(0.005, (0.03 + stl * 0.1 - resist * 0.06 + press * 0.05) * slide * exposed);
-        // キャリー位置: 前に見せたボールは突かれ、遠い腰に隠したものは届かない(守備の
-        // ボールへの距離 vs 男への距離で比較)。
+          ? 1 + Math.max(0, rate(d.attr.agility) * 0.6 + rate(d.attr.reaction) * 0.4 - resist) * 2.2 : 1;
+        const pPoke = Math.max(0.005, (0.03 + stl * 0.1 - resist * 0.06 + press * 0.05) * exposed);
+        // キャリー位置: 守備のボールへの距離 vs 男への距離で突けるか決まる。
         const dBall = dist2DTo(d.pos, game.ball.pos.x, game.ball.pos.z);
         const carryMod = clamp(1 + (gap - dBall) * 1.2, 0.55, 1.6)
           * (man.baitT > 0 ? 1.6 : 1);
         if (chance(pPoke * close * carryMod * dt)) {
           if (man.baitT > 0 && chance(0.35 + rate(man.attr.dribbleAcc) * 0.45)) {
-            // 誘い成立: 見せたボールを引き、突っ込んだ守備の体重が乗る — ハンドラーが抜く
+            // 誘い成立: 見せたボールを引き、ハンドラーが抜く
             man.baitT = 0;
             const bx = game.ball.pos.x - d.pos.x, bz = game.ball.pos.z - d.pos.z;
             const bl = Math.hypot(bx, bz) || 1;
@@ -266,18 +244,17 @@ export function runDefense(game: Game, dt: number): void {
     if (game.handler && d === rimHelper) {
       const hx = game.handler.pos.x, hz = game.handler.pos.z;
       const dRim = dist2DTo(game.handler.pos, protect.x, protect.z);
-      // リムプロテクターは飛ぶタイミングを計る(早跳びは頂点で手、遅れると着地中)
+      // リムプロテクターは飛ぶタイミングを計る
       if (!d.airborne && d.landT <= 0 && dRim < 4.5
           && dist2D(d.pos, game.handler.pos) < 2.6) {
         const timing = rate(d.attr.reaction) * 0.5 + rate(d.attr.defense) * 0.3;
         if (chance((0.35 + timing * 0.9) * dt * 3)) {
-          game.contestLeap(d, game.handler.pos, 0.55 + rate(d.attr.jump) * 0.3, 0.6);
+          game.contestLeap(d, game.handler.pos, leapHeight(d), 0.6);
         }
       }
       if (dRim < 8) {
-        const dx = hx - protect.x, dz = hz - protect.z;
-        const len = Math.hypot(dx, dz) || 1;
-        const rtx = protect.x + (dx / len) * 2.0, rtz = protect.z + (dz / len) * 2.0;
+        const rt = towardPoint(protect.x, protect.z, hx, hz, 2.0);
+        const rtx = rt.x, rtz = rt.z;
         moveToward2D(d.pos, rtx, rtz,
           d.accelToward(dt, rtx, rtz, 1.1 * Math.max(defEffort(game, d, protect), 0.9)) * dt);
         game.clampCourt(d.pos);
@@ -296,17 +273,14 @@ export function runDefense(game: Game, dt: number): void {
     // トランジション: ポゼッション交代で上に残っていたら、まず戻る
     if (getBackOnDefense(game, dt, d, man)) continue;
 
-    // オフボール: ゴール方向へサグしてヘルプ。ハイヘルプ戦術ほど大きく、連携の高い者ほど
-    // 忠実に、DFライン general が一段深く整える。
+    // オフボール: ゴール方向へサグしてヘルプ。
     const help = game.tactics[defTeam].defense.help * twWeight(d);
     // クロック終盤の DENY: ヘルプサグを外して担当に密着しボールを拒否
     const sag = (1.2 + help * 1.4) * (game.teamHas(defTeam, "dfLine") ? 1.15 : 1)
       * (1 - denyIntensity(game, defTeam) * 0.8);
-    const dx = protect.x - man.pos.x, dz = protect.z - man.pos.z;
-    const len = Math.hypot(dx, dz) || 1;
-    let stx = man.pos.x + (dx / len) * sag, stz = man.pos.z + (dz / len) * sag;
-    // 進路 denial: 動いている男(カッター/走者)は行き先を影で追う。反応/守判断で先読み量が
-    // 決まり、スプリンターの前へワープしないよう上限。
+    const st = towardPoint(man.pos.x, man.pos.z, protect.x, protect.z, sag);
+    let stx = st.x, stz = st.z;
+    // 進路 denial: 動いている男の行き先を影で追う(先読みは上限付き)。
     const mSpd = Math.hypot(man.velX, man.velZ);
     if (mSpd > 2.5) {
       const read = 0.15 + rate(d.attr.reaction) * 0.22 + rate(d.attr.defense) * 0.10;
@@ -333,10 +307,8 @@ export function runDefenseDuringDeadish(game: Game, dt: number): void {
     const man = offense[d.slot];
     // アウトレット/スローインはビッグが自陣へ全力で戻る場面
     if (getBackOnDefense(game, dt, d, man)) continue;
-    const dx = protect.x - man.pos.x, dz = protect.z - man.pos.z;
-    const len = Math.hypot(dx, dz) || 1;
-    moveToward2D(d.pos, man.pos.x + (dx / len) * 1.5, man.pos.z + (dz / len) * 1.5,
-      d.accelSpeed(dt) * dt);
+    const gs = towardPoint(man.pos.x, man.pos.z, protect.x, protect.z, 1.5);
+    moveToward2D(d.pos, gs.x, gs.z, d.accelSpeed(dt) * dt);
     game.clampCourt(d.pos);
   }
 }
@@ -346,9 +318,7 @@ export function runDefenseDuringDeadish(game: Game, dt: number): void {
 // stealLunge)と、密集からのはたき(swarmStrips)。実際の奪取確定は Game.steal。
 // ---------------------------------------------------------------------------
 
-  // ハンドラーに寄せてきたオフボール守備者もボールを掘る。2〜3人に群がられると
-  // 下手なハンドラーには本当に危険で、上手い選手にはほとんど苦にならない
-  // (オンボール守備者自身のはたきは runDefense 内)。
+  // ハンドラーに寄せたオフボール守備者もボールを掘る(オンボール守備者のはたきは runDefense 内)。
   // ドリブルの合間、ボールが床近くにある時ほどはたきやすい。
 export function swarmStrips(game: Game, dt: number): void {
     const h = game.handler;
@@ -365,22 +335,15 @@ export function swarmStrips(game: Game, dt: number): void {
     }
   }
 
-  // 収まる前のスティール: レシーバーがまだ弾いたキャッチ(gatherT)を捕まえきれて
-  // いない間、ボールは手の中で不安定 — 密着した守備者なら誰でも掘り出してはじく
-  // (綺麗なピックではなくライブのルーズボール)。もたつき(硬直の深さ)が大きく、技術が
-  // 守備者の手に対して弱いほど起こりやすい。綺麗なキャッチ(gatherT≈0)ではこの露出は無い。
+  // 収まる前のスティール: ギャザー(gatherT)中でボールが不安定な間、密着守備者がはじく。
 export function catchStrips(game: Game, dt: number): void {
     const h = game.handler;
     if (!h || game.ballMode !== "held" || h.gatherT <= 0) return;
     const bobble = clamp(h.gatherT * 2.4, 0.2, 1.3);       // ボールがまだどれだけ不安定か
     const b = game.ball.pos;
-    // 担当守備者がもたつきに跳びかかる: 踏み込んでルーズボールを掘る(リーチのポーズは
-    // poseHands 内、同じ gatherT でゲート)。近くのヘルプ守備者も突けるが、飛び込むのは
-    // 主担当のみ。
+    // 担当守備者が踏み込んでルーズボールを掘る(飛び込むのは主担当のみ)。
     const onBall = game.onBallDefender(h);
-    // レシーバーがボールを隠すためにどれだけ体を回したか(0 = 取った直後で前に露出、
-    // 1 = 遠い腰に収めた)。速いハンドラー/短いギャザーはほぼ即座に隠す。弾いた
-    // キャッチは長く露出したまま。
+    // レシーバーがボールを隠すため体を回した量(0 = 前に露出 .. 1 = 遠い腰に収めた)。
     const shielded = h.gatherDur > 0 ? clamp(1 - h.gatherT / h.gatherDur, 0, 1) : 1;
     const exposed = clamp(1 - shielded, 0, 1);
     for (const d of game.teamPlayers(1 - h.team)) {
@@ -389,18 +352,13 @@ export function catchStrips(game: Game, dt: number): void {
       if (gap > 1.8) continue;
       // ルーズボールを攻めに飛び込む(背中に這い上がらない)
       if (d === onBall && gap > 0.75) moveToward2D(d.pos, b.x, b.z, d.accelSpeed(dt, 1.2) * dt * 0.8);
-      // CONTACT はじき: まだ露出している(隠されていない)うちに手がボールに届く
-      // → はじく(彼に収まるのではなく飛び散るライブのルーズボール)。競争は
-      // 反応/リーチ vs レシーバーの隠す回転: 密着して反応の速い者は収められる前に届く。
-      // 一度隠されれば(露出→0)安全で、確かなハンドラー(技術)はいずれにせよ守る。
+      // はじき: 露出しているうちに手がボールに届けばはじく(反応/リーチ vs 隠す回転)。
       const toBall = dist2D(d.pos, b);
       if (toBall < 0.5) {
         const reach = 0.35 + rate(d.attr.reaction) * 0.65 - rate(h.attr.handling) * 0.4;
         if (chance(clamp(reach, 0.05, 0.9) * exposed * dt * 18)) { deflectCatch(game, h, d); return; }
       } else if (toBall < 1.15 && d.landT <= 0 && d.plantT <= 0) {
-        // 届くか届かないか → 平行ジャンプステップ: ボールへ横っ飛びをギャンブル
-        // (反応/攻撃性が行くか決める)。手が届けばはじく。いずれにせよ飛び込みは
-        // 確定(stealLunge のクロスオーバープラント硬直)。
+        // 届くか届かないか → 平行ジャンプステップでボールへ横っ飛び。手が届けばはじく。
         const gamble = rate(d.attr.reaction) * 0.5 + rate(d.attr.aggression) * 0.35;
         if (chance(clamp(gamble, 0.05, 0.9) * exposed * dt * 6)) {
           stealLunge(game, d, b.x, b.z);
@@ -414,14 +372,10 @@ export function catchStrips(game: Game, dt: number): void {
     }
   }
 
-  // キャッチ際にボールに触れた手がはじく — ほぼランダムな方向へ飛び散るライブの
-  // ルーズボール(はじき)であって、ドリブルのはたきのように守備者へ綺麗に収まるの
-  // ではない。着地すれば全員が競り合う。スティール/ターンオーバーは誰かが確保した
-  // 時(secureLoose)にのみ記録される。
+  // キャッチ際に触れた手がボールをはじく — ランダム方向へ飛び散るライブのルーズボール。
+  // スティール/ターンオーバーは誰かが確保した時(secureLoose)にのみ記録。
 export function deflectCatch(game: Game, h: Player, d: Player): void {
-    // はじき方は手がボールのどこを捉えたかで決まる。下から入った手は上へ弾き、
-    // 側面をかすめた手はほぼ床と平行に飛ばし、上から叩いた手は下へ叩き落として
-    // 転がす。方向は水平にランダム。威力は軽く触れる程度から強打まで様々。
+    // はじき方は手がボールのどこを捉えたかで決まる。方向は水平にランダム。
     const ang = rand(0, Math.PI * 2);
     const ballY = clamp(game.ball.pos.y, 0.35, 1.4);   // ボールが実際に在った位置から始める
     const contact = rand(0, 1);
@@ -441,10 +395,8 @@ export function deflectCatch(game: Game, h: Player, d: Player): void {
     game.goLoose(h.team, 1.8, { stealBy: d, victim: h, grabAfter: 0.6 });
   }
 
-  // 平行ジャンプステップ: 届くか届かないかの距離からのスティール — 守備者が踏み切って
-  // ボールへ横っ飛び(低く、正対を保った斜めのジャンプステップ)し、手を乗せる。
-  // 確定したギャンブルなので、復帰はクロスオーバーのプラント処理(動き直し)を使う —
-  // 鋭いカットと同じ 0.3秒(速い) .. 2.5秒(遅い) の硬直。
+  // 平行ジャンプステップ: 届くか届かないかの距離から、守備者がボールへ横っ飛びし手を乗せる。
+  // 復帰はクロスオーバーのプラント硬直(0.3秒速い .. 2.5秒遅い)を使う。
 export function stealLunge(game: Game, d: Player, tx: number, tz: number): void {
     const dx = tx - d.pos.x, dz = tz - d.pos.z;
     const gap = Math.hypot(dx, dz) || 1;

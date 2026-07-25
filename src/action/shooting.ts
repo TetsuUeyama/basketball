@@ -3,10 +3,9 @@
 // 関数として集約。状態は Game に集約し各関数は第一引数 game を受け取る。
 // contestLeap は defense からも使うため Game 残置（game.contestLeap 経由）。
 import { Player } from "../objects/player/player";
-import { RIM, THREE_DIST, PALM_HITBOX, SHOT_SET_Y, SHOT_GATHER_Y } from "../config";
-import { clamp, dist2D, moveToward2D, chance, rand } from "../util";
-import { shotWindupFor } from "../eval";
-import { rate } from "../attributes";
+import { RIM, THREE_DIST, PALM_HITBOX, SHOT_SET_Y, SHOT_GATHER_Y, BUZZER_WINDOW } from "../config";
+import { rate, clamp, dist2D, moveToward2D, chance, rand } from "../util";
+import { shotWindupFor, defHands, leapHeight } from "../eval";
 import { jumpShotMakeProbability, rimFinishOutcome } from "../reaction/shot-outcome";
 import { bestBlocker, evadeBlockProbability } from "../reaction/contest-block";
 import { shootingFoulChance } from "../reaction/foul";
@@ -18,10 +17,8 @@ import type { Game } from "../game";
 
 // ---- シュート種別（距離ベース） -------------------------------------------
 // 距離でリム下(ダンク/レイアップ)・ミドル・3Pを使い分ける。ダンク/レイアップの
-// 枝分かれは能力・レーンで rimFinishOutcome が抽選、ミドル/3P は THREE_DIST 境界で
-// 分ける。ブザービーターは距離種別ではなく横断的な修飾(buzzer フラグ)、フリースローは
-// 別フェーズ(systems/freethrow)として本種別には含めない。
-// A(現状): 従来の値/式を種別ごとに明示化＝挙動等価。B: 各種別を独立に調整する土台。
+// 枝分かれは rimFinishOutcome が抽選、ミドル/3P は THREE_DIST 境界で分ける。
+// ブザービーターは横断的な修飾(buzzer フラグ)、フリースローは別フェーズ。
 export type ShotType = "dunk" | "layup" | "midrange" | "three";
 
 // ジャンパーの距離種別。リム下フィニッシュは finishAtRim が別途 dunk/layup を決める。
@@ -30,8 +27,7 @@ function jumperType(dHoop: number): ShotType {
 }
 
 // 種別ごとの実行パラメータ。apex(弾道頂点m)/dur(飛翔s)は far(=THREE_DIST からの
-// 超過m、ミドル/リムは0)で可変。mid と three を別エントリにしておくことで、B で
-// それぞれ独立にカーブ調整できる（A では従来式を保持＝挙動等価）。
+// 超過m、ミドル/リムは0)で可変。
 const SHOT_PARAMS: Record<ShotType, {
   points: number;                                   // 得点
   liveLabel: string | null;                         // 発動時の即時バナー（ジャンパーは null＝着弾時に判定）
@@ -45,10 +41,9 @@ const SHOT_PARAMS: Record<ShotType, {
 };
 
 export function shoot(game: Game, h: Player, dHoop: number, dDef: number): void {
-    // ブザービーター: ギャザーの時間が無い — ホーンと同時にただ投げ上げる。
-    // 純粋な確率のトレードオフ(releaseShot が既に make% を下限化)なので、
+    // ブザービーター: ギャザーの時間が無い — ホーンと同時に投げ上げる。
     // チャージ相もワインドアップも無い(ボールは今すぐ飛ぶ)。
-    if (game.gameClock > 0 && game.gameClock < 0.9) {
+    if (game.gameClock > 0 && game.gameClock < BUZZER_WINDOW) {
       game.shotWindup = 0;
       releaseShot(game, h, dHoop, dDef);
       return;
@@ -62,14 +57,12 @@ export function shoot(game: Game, h: Player, dHoop: number, dDef: number): void 
     game.shooter = h;              // ギャザー中のポーズの所有者
     game.handler = null;
     game.ballMode = "charge";
-    // ボールはギャザーのポケット(胸)で開始し、ワインドアップの間に頭上へ
-    // 持ち上げられる(chargeBallY 参照) — 彼がリリースするジャンプショットのポケット
+    // ボールはギャザーのポケット(胸)で開始し、ワインドアップの間に頭上へ上がる
     game.ball.pos.set(h.pos.x, chargeBallY(game), h.pos.z);
   }
 
-  // ボールはワインドアップの間にポケットから頭上へ上がり、溜めが静止ポーズでなく
-  // 動きに見えるようにする: ギャザーの約80%で頭上へ、その後リリースの窓の間そこで
-  // 保持。急がない持ち上げのためイージング(smoothstep)。
+  // ボールはワインドアップの間にポケットから頭上へ上がる: ギャザーの約80%で頭上へ、
+  // その後リリースの窓の間そこで保持。イージング(smoothstep)。
 export function chargeBallY(game: Game, ): number {
     const w = game.shotWindup || 0.001;
     const p = clamp(1 - game.chargeT / w, 0, 1);   // ギャザー開始で0 → リリースで1
@@ -78,10 +71,8 @@ export function chargeBallY(game: Game, ): number {
     return SHOT_GATHER_Y + (SHOT_SET_Y - SHOT_GATHER_Y) * e;
   }
 
-  // ギャザーの1フレーム: ボールを溜めたまま保持し、オンボール守備者にシュートを
-  // 読ませてクローズアウト/踏み切ってコンテストさせる。ドライブで重心を崩された
-  // (抜かれた/復帰中の)守備者は間に合わない — ドリブルを深追いすると綺麗な
-  // シュートを許すのはこのため。
+  // ギャザーの1フレーム: ボールを溜めたまま保持し、守備者にシュートを読ませて
+  // クローズアウト/コンテストさせる。重心を崩された守備者は間に合わない。
 export function updateCharge(game: Game, dt: number): void {
     const h = game.chargeShooter;
     if (!h) { game.ballMode = "held"; return; }
@@ -98,20 +89,17 @@ export function updateCharge(game: Game, dt: number): void {
           moveToward2D(d.pos, h.pos.x, h.pos.z, clo);
           game.clampCourt(d.pos);
         }
-        // リリースが近づくと、近くにいて読んだ守備者が踏み切って挑む —
-        // 反応/守判断 がタイミングを計り、ジャンプ が届く高さを与える
+        // リリースが近づくと、近くの守備者が踏み切って挑む —
+        // 反応/守判断 がタイミング、ジャンプ が高さ
         if (game.chargeT < 0.13 && gap < 1.7) {
           const read = rate(d.attr.reaction) * 0.5 + rate(d.attr.defense) * 0.5;
-          if (chance((0.25 + read * 1.5) * dt * 9)) game.contestLeap(d, h.pos, 0.5 + rate(d.attr.jump) * 0.35, 0.6);
+          if (chance((0.25 + read * 1.5) * dt * 9)) game.contestLeap(d, h.pos, leapHeight(d), 0.6);
         }
       }
-      // ギャザー中のストリップ: ボールが頭上に溜められている間、その空間にいる
-      // 守備者がはたく — フレーム毎なので、長いギャザー(深い/遅い溜め)ほどリリース前に
-      // 弾かれやすい。高いボールに届く必要がある(空中だと大きく有利)。背の高い
-      // シューターは遠ざけて保持する。
+      // ギャザー中のストリップ: 頭上に溜められたボールを守備者がはたく。長いギャザーほど
+      // 弾かれやすく、高いボールに届く必要がある(空中だと有利)。背の高いシューターは遠ざける。
       if (gap < 1.2) {
-        const poke = rate(d.attr.reaction) * 0.4 + rate(d.attr.agility) * 0.35
-          + rate(d.attr.defense) * 0.25 + (d.has("interceptor") ? 0.12 : 0);
+        const poke = defHands(d);
         const secure = rate(h.attr.handling) * 0.5 + clamp((h.height - d.height) * 0.6, -0.15, 0.35);
         const reach = d.airborne ? 1.3 : 0.5;   // ボールは頭上 — 跳んで届く必要がある
         if (chance(Math.max(0, poke - secure) * reach * dt * 5)) { stripGather(game, h, d); return; }
@@ -152,7 +140,7 @@ export function releaseShot(game: Game, h: Player, dHoop: number, dDef: number):
       nearestDef: game.nearestDefender(h),
       helpCount: game.defendersWithin(h, 2.4),
       clutch: game.clutchFactor(h),
-      buzzer: game.gameClock > 0 && game.gameClock < 1.0,
+      buzzer: game.gameClock > 0 && game.gameClock < BUZZER_WINDOW,
       palmHitbox: PALM_HITBOX,
     });
     game.shotMade = chance(p);
@@ -168,13 +156,11 @@ export function releaseShot(game: Game, h: Player, dHoop: number, dDef: number):
     game.shotFrom.set(h.pos.x, 2.05, h.pos.z);
     aimShotTarget(game, dHoop);   // 決まればリム、ロングミスはリムから大きく外れた点へ
     game.shotT = 0;
-    // アークの外ではボールは弾くのでなく放り投げる: 遠いほど高く遅い放物線
-    // (ブザーの一発は追えるほど長く空中に留まる)。アークの内側では何も変わらない
-    // (far = 0 → 従来の 0.85/2.2)。
+    // アークの外ではボールは弾くのでなく放り投げる: 遠いほど高く遅い放物線。
+    // アークの内側は変わらない(far = 0)。
     const far = Math.min(12, Math.max(0, dHoop - THREE_DIST));
-    // 弾道時間・高さは種別テーブル(SHOT_PARAMS)から。ミドルは far=0 で従来の 0.85 /
-    // (1.6+bank*1.2)、3Pは far で山なりに上がる。ジャンパーは evaded を持たない(false)。
-    // 高いアークは山なりに見えブロックしにくい(tryBlock は同じ能力値を読む)。
+    // 弾道時間・高さは種別テーブル(SHOT_PARAMS)から。3Pは far で山なりに上がる。
+    // ジャンパーは evaded を持たない(false)。
     game.shotDur = SHOT_PARAMS[shotType].dur(far, false);
     game.shotApex = SHOT_PARAMS[shotType].apex(h, far);
     game.longShot = far > 0.5;   // ボールカメラが追うべきほど深い
@@ -186,8 +172,7 @@ export function releaseShot(game: Game, h: Player, dHoop: number, dDef: number):
     game.handler = null;
     h.jump(0.4, 0.8);          // シューターはジャンプショットで跳ぶ
     contestJump(game, h);       // 最寄りの守備者がコンテスト
-    // フォロースルー: シューターはシュートの飛翔と着地の一拍の間その場に留まるので、
-    // すぐにはボードへ突っ込んだり戻ったりできない
+    // フォロースルー: シューターは飛翔と着地の間その場に留まる
     h.coolT = game.shotDur + rand(0.4, 0.7) * h.recoveryMult();
     // ボールが空中にある間、味方も守備者もボードへ突っ込める
   }
@@ -216,13 +201,11 @@ export function finishAtRim(game: Game, h: Player, dDef: number): void {
 
     game.shotFrom.set(h.pos.x, dunk ? 2.6 : 1.7, h.pos.z);
     game.shotT = 0;
-    // かわしたブロックはダブルクラッチに見える — スワットが空振りで通り過ぎるまで
-    // 一拍長く滞空してから決める（種別テーブルの dur が evaded で +0.14）
+    // かわしたブロックはダブルクラッチに見える — 一拍長く滞空してから決める
     game.shotDur = SHOT_PARAMS[shotType].dur(0, game.evadedFinish);
     game.shotApex = SHOT_PARAMS[shotType].apex(h, 0);
-    // リムの手前(進入側)で踏み切り、体をリム真下に置くのでなくボールをゴールへ
-    // 伸ばす。ダンカーはレイアップより近づく。すでにリム真下にいるなら、
-    // ミッドコート側からギャザーする。
+    // リムの手前(進入側)で踏み切り、ボールをゴールへ伸ばす。ダンカーはより近づく。
+    // すでにリム真下ならミッドコート側からギャザーする。
     {
       const rimFloor = game.attackFloor(h.team);
       let dx = h.pos.x - rimFloor.x, dz = h.pos.z - rimFloor.z;
@@ -231,8 +214,7 @@ export function finishAtRim(game: Game, h: Player, dDef: number): void {
       const standoff = dunk ? 0.6 : 0.9;
       game.finishSpot.set(rimFloor.x + (dx / len) * standoff, 0, rimFloor.z + (dz / len) * standoff);
     }
-    // ドライブの勢いを跳躍へ持ち込む: 走っていた速度で踏み切り(止まってから跳ぶの
-    // でなく、フィニッシュへ一歩踏み込む)、その水平速度は空中で減衰する(crashBoards)。
+    // ドライブの勢いを跳躍へ持ち込む: 走っていた速度で踏み切る。
     // 速攻でリムを行き過ぎないよう上限を設ける。
     {
       const cap = h.runSpeed * 1.05;
@@ -248,16 +230,14 @@ export function finishAtRim(game: Game, h: Player, dDef: number): void {
     game.shooter = h;
     game.shooterFinishing = true;
     game.handler = null;
-    // 踏み切り時にリムへ正対: 空中では体が固定されるので、傾いて離陸するとダンク/
-    // レイアップが「バックダンク」に見える。今のうちに胸(と胸が覆いきれない足)を
-    // ゴールへ向け、正対してフィニッシュさせる。
+    // 踏み切り時にリムへ正対: 空中では体が固定されるので、傾いて離陸すると
+    // 「バックダンク」に見える。今のうちに胸をゴールへ向ける。
     { const rf = game.attackFloor(h.team); h.faceChestToward(rf.x, rf.z); }
     // 跳躍の高さは ジャンプ に比例
     h.jump(dunk ? 0.85 + rate(h.attr.jump) * 0.3 : 0.55 + rate(h.attr.jump) * 0.2,
       dunk ? 0.7 : 0.6);
     contestJump(game, h);
-    // フィニッシャーはシュート中に切り込み(crashBoards で処理)、その後
-    // 再び動けるまで短い復帰時間
+    // フィニッシャーはシュート中に切り込み、その後短い復帰時間
     h.coolT = game.shotDur + rand(0.25, 0.45) * h.recoveryMult();
     game.setEvent(SHOT_PARAMS[shotType].liveLabel!, h.team);   // "DUNK!" / "LAYUP"
   }
@@ -273,16 +253,11 @@ export function contestJump(game: Game, shooter: Player): void {
     if (near) game.contestLeap(near, shooter.pos, 0.5, 0.65);
   }
 
-  // 守備者はシュートをはたけるか？ 届く守備者は全員(最寄りの1人だけでなく)
-  // 一撃のチャンスを得る — だからウィークサイドのリムプロテクターが担当を抜かれた
-  // ガードをブロックする。ブロックが実際に生まれるのはここから。
-  // リムフィニッシュは ヘッド(ダンク/リム保護) + ジャンプ + 守判断 で挑まれ、
-  // ジャンパーは ジャンプ + 反応 + 守判断 で挑まれる。どちらも本物の高さ差と
-  // タイトなコンテストを報いる。跳ぶのは最も止められるショットブロッカー。
-  // evadeOK: シューターが S技術 で来かけたブロックをかわせるか(ダブルクラッチ)。
-  // フィニッシュは常に可能。アーク内のジャンプショット(ミドル/ゴール下)も今は
-  // 可能なので、高 S技術 のスコアラーは常にはたかれるのでなくコンテストの上/横から
-  // 打つ。3Pは不可(そこでは evadeOK=false)。
+  // 守備者はシュートをはたけるか？ 届く守備者は全員一撃のチャンスを得る。
+  // リムフィニッシュは ヘッド + ジャンプ + 守判断、ジャンパーは ジャンプ + 反応 +
+  // 守判断 で挑まれる。跳ぶのは最も止められるショットブロッカー。
+  // evadeOK: シューターが S技術 でブロックをかわせるか(ダブルクラッチ)。
+  // フィニッシュとアーク内のジャンプショットは可能、3Pは不可。
 export function tryBlock(game: Game, shooter: Player, isFinish: boolean, evadeOK = isFinish): Player | null {
     // ブロック確率の算出は効果層(resolution/contest-block)へ分離。ここでは最も
     // 止められる守備者と確率を受け取り、抽選と状態変更(evade/jump/shotMade)を行う。
@@ -295,13 +270,10 @@ export function tryBlock(game: Game, shooter: Player, isFinish: boolean, evadeOK
     if (evadeOK) {
       const pEvade = evadeBlockProbability(shooter, best);
       if (chance(pEvade)) {
-        // スワットは空振り — ブロッカーは跳んだまま、シューターは滞空して
-        // シュートを組み直す。調整したリリースは少し決めにくいが、S技術 が
-        // 空中でもメカニクスを綺麗に保つ。
+        // スワットは空振り — ブロッカーは跳んだまま、シューターは滞空して組み直す。
         if (!best.airborne) best.jump(0.9, 0.6);
-        // ダブルクラッチの迂回はフィニッシュの動き(ボールをスワットの下へ引き、
-        // ブロッカーを回り込む)。ジャンプショットは手の上から放つだけなので、
-        // ボールが曲がる見た目(evadedFinish)はフィニッシュ限定。
+        // ダブルクラッチの迂回はフィニッシュの動き。ボールが曲がる見た目(evadedFinish)は
+        // フィニッシュ限定。
         if (isFinish) {
           game.evadedFinish = true;
           const ex = shooter.pos.x - best.pos.x, ez = shooter.pos.z - best.pos.z;
@@ -322,16 +294,13 @@ export function swatShot(game: Game, shooter: Player, blocker: Player): void {
     shooter.stats.fga++;             // ブロックされたシュートは失敗した試投
     if (game.shotPoints === 3) shooter.stats.tpa++;
     game.pendingAssist = null;
-    // ブロッカーは跳び上がり、リリースの瞬間に手をボールへ合わせる —
-    // ただし既に跳んでいる場合もある(ギャザー中に跳んだ)ので再ジャンプしない
-    // (跳躍がリセットされ接触の判定が崩れる)
+    // ブロッカーは跳び上がり手をボールへ合わせる — 既に跳んでいれば再ジャンプしない
     if (!blocker.airborne) game.contestLeap(blocker, shooter.pos, 0.95, 0.6);
     game.setEvent("BLOCK!", blocker.team);
     game.handler = null;
 
-    // 手がボールを飛翔からはたく: ブロック点(シューターのリリース)から叩き出され、
-    // 横への飛散を伴ってリムから外へ弾き返され、重力でライブのルーズボールとして
-    // 落ちる。強いブロッカー(ジャンプ/守判断)ほど遠くへ飛ばす。
+    // 手がボールを飛翔からはたく: ブロック点から横へ飛散して弾き返される。
+    // 強いブロッカーほど遠くへ飛ばす。
     const rim = game.attackFloor(shooter.team);
     let ox = shooter.pos.x - rim.x, oz = shooter.pos.z - rim.z;
     let ol = Math.hypot(ox, oz);
@@ -342,28 +311,23 @@ export function swatShot(game: Game, shooter: Player, blocker: Player): void {
     ox /= ol; oz /= ol;
     const px = -oz, pz = ox, kick = rand(-0.8, 0.8);   // 手からの横方向の飛散
     const power = 4.4 + (rate(blocker.attr.jump) * 0.5 + rate(blocker.attr.defense) * 0.5) * 4.0;   // 大きくはたき飛ばす
-    // 接触点 = シューターの空間でなくブロッカーの手: ボールをブロッカーのすぐ前
-    // (シューター側)、リーチの最上点に置き、届く範囲内で手が目に見えて乗るように
-    // する — ボールはシューターからワープするのでなく、彼の手からはたき出される。
+    // 接触点 = ブロッカーの手: ボールをブロッカーのすぐ前(シューター側)、
+    // リーチの最上点に置き、手が目に見えて乗るようにする。
     let hx = shooter.pos.x - blocker.pos.x, hz = shooter.pos.z - blocker.pos.z;
     const hl = Math.hypot(hx, hz) || 1;
     game.ball.pos.set(blocker.pos.x + (hx / hl) * 0.45, 2.6, blocker.pos.z + (hz / hl) * 0.45);
-    // ボールは一拍(blockHoldT)手の上で完全に静止 — 接触が見える — その後
-    // ほぼ外と下へはたかれる。ピンが解ける(updateLoose)まではじきの速度を保持し、
-    // それまでボールを手に固定しておく。
+    // ボールは一拍(blockHoldT)手の上で静止 — 接触が見える — その後外と下へはたかれる。
+    // ピンが解ける(updateLoose)まではじきの速度を保持する。
     game.blockHoldVel.set((ox + px * kick) * power, rand(-0.6, 1.0), (oz + pz * kick) * power);
     game.blockHoldT = 0.13;
     game.ball.vel.setAll(0);
     blocker.reach(game.ball.pos, true);        // 接触時に手をボールへ
     game.lastTouch = blocker;                  // 彼が最後に触れた → アウトオブバウンズはオフェンスのまま
-    // シューターはシュートの動き/着地中はボールを回収できない
-    // (ブロックされた自分のシュートを即座に掴み直せない)。grabAfter は誰かが確保する前の
-    // 綺麗で自由に転がるルーズボール状態を保つ。
+    // シューターはシュートの動き/着地中はボールを回収できない。
+    // grabAfter は誰かが確保する前のルーズボール状態を保つ。
     shooter.touchCool = 1.0;
     // フォロースルーを固める: releaseShot は coolT を設定できていない(ブロックが
-    // 先に return した)ので、ここで設定する — さもないとルーズボールのポーズで、空中の
-    // 腕がはたかれたボールへ、まるでそこに投げたかのように向いてしまう。coolT が立てば
-    // poseHands は彼を争奪から除外し、リリースの形を保つ。
+    // 先に return した)ので、ここで設定する。coolT が立てば poseHands はリリースの形を保つ。
     shooter.coolT = 0.6 + rand(0.3, 0.6) * shooter.recoveryMult();
     blocker.defWin("block");                   // 着地したら誇らしげに拳を上げる
     game.goLoose(shooter.team, 2.6, { rebound: true, grabAfter: 0.6 });
@@ -377,9 +341,8 @@ export function tryShootingFoul(game: Game, h: Player, dDef: number, layup: bool
     if (!chance(shootingFoulChance(h, dDef, layup, od))) return false;
 
     if (game.shotMade) {
-      // AND-1: ルール上バスケットが実際に決まる必要がある — なのでここで
-      // 打ち切らない。シュートを他の成功と同様に飛ばして沈める。resolveShot が
-      // 保留中のファウルを見てカウントし、その後1本のシュートを与える。
+      // AND-1: バスケットが決まる必要があるので打ち切らない。シュートを飛ばして沈め、
+      // resolveShot が保留中のファウルを見てカウントし1本を与える。
       game.pendingAndOne = h;
       return false;
     }
@@ -401,9 +364,8 @@ export function tryShootingFoul(game: Game, h: Player, dDef: number, layup: bool
     return true;
   }
 
-  // ボールが実際に飛ぶ先。成功はリム中心へ向かい、ミスはリム周辺/バックボード際の点へ
-  // 向かう — 決して真ん中(成功に見える)や大きく場外へは行かない。遠いシュートほど
-  // 少し散るが、常にゴール付近に留まるのでリバウンドできる。
+  // ボールが実際に飛ぶ先。成功はリム中心、ミスはリム周辺/バックボード際の点へ向かう。
+  // 遠いシュートほど少し散るが、常にゴール付近に留まる。
 export function aimShotTarget(game: Game, dHoop: number): void {
     const rim = game.attackRim(game.possession);
     game.shotTarget.copyFrom(rim);
@@ -421,10 +383,8 @@ export function updateShot(game: Game, dt: number): void {
     game.shotT += dt;
     const k = Math.min(1, game.shotT / game.shotDur);
     const b = game.shotTarget;   // 成功ならリム、ミスなら的外れの点
-    // フィニッシュ(ダンク/レイアップ): ボールはフィニッシャーの手から1つの滑らかな
-    // アークでリムへ上がる — 空中で折れない。水平方向は手の現在位置(滑り込み中)から
-    // リムへイージング。垂直方向は頂点(スラムはリムの上に来る)まで上がってから
-    // 沈む。腕は最後までボールを追う(poseHands)ので、手とボールは繋がったまま。
+    // フィニッシュ(ダンク/レイアップ): ボールは手から1つの滑らかなアークでリムへ上がる。
+    // 水平は手の現在位置からリムへイージング、垂直は頂点まで上がってから沈む。
     if (game.shooterFinishing && game.shooter) {
       const fin = game.shooter;
       const e = k * k * (3 - 2 * k);                 // smoothstep — 連続した速度
@@ -433,10 +393,8 @@ export function updateShot(game: Game, dt: number): void {
       let x = fin.pos.x + (b.x - fin.pos.x) * e;
       let y = top + (b.y - top) * e + Math.sin(k * Math.PI) * (peak - Math.max(top, b.y));
       let z = fin.pos.z + (b.z - fin.pos.z) * e;
-      // ダブルクラッチ: イベイドしたフィニッシュはボールを一度スワットの下へ
-      // 引き込み、ブロッカーと反対側へ体側で回してからリムへ運び直す。腕は
-      // poseHands でボールに追従するので、この軌道の曲がりがそのまま「手を
-      // かわす」動きとして見える（窓は飛行の18..68%、両端でゼロ=軌道は滑らか）。
+      // ダブルクラッチ: イベイドしたフィニッシュはボールをスワットの下へ引き、
+      // ブロッカーの反対側へ回してからリムへ運び直す(窓は飛行の18..68%)。
       if (game.evadedFinish) {
         const c = Math.sin(clamp((k - 0.18) / 0.5, 0, 1) * Math.PI);
         y -= c * 0.38;                               // スワットの下へ引き下げる
@@ -456,8 +414,7 @@ export function updateShot(game: Game, dt: number): void {
   }
 
 export function resolveShot(game: Game, ): void {
-    // 深い一発は着地/バウンドまでボールカメラを維持するので、フレームが元へ
-    // 戻る前に、視聴者は入ったかどうかを見られる
+    // 深い一発は着地/バウンドまでボールカメラを維持する
     if (game.longShot) { game.longShotHoldT = 1.6; game.longShot = false; }
     const shooter = game.possession;
     const sh = game.shooter;
@@ -481,9 +438,8 @@ export function resolveShot(game: Game, ): void {
       game.ball.vel.set(rand(-0.5, 0.5), -2.4, -Math.sign(rim.z || 1) * rand(0.2, 0.8));
       game.ballFalling = true;
       swishNet(game, shooter);   // 成功時にネットが弾け、リムが光る
-      // 視聴者が見られるよう決まったバスケットで間を置き、その後交代、その後
-      // インバウンド — ただしブザーが既に鳴っていれば(ブザービーター)ここで
-      // ピリオド終了。AND-1 は代わりにラインで続く: バスケット有効 + フリースロー1本。
+      // 決まったバスケットで間を置き、交代、インバウンド。ブザーが鳴っていればピリオド終了。
+      // AND-1 はラインで続く(バスケット有効 + フリースロー1本)。
       game.handler = null;
       // AND-1: スコアラーは決めたバスケットの上でポーズを取り、その後ラインへ向かう
       if (andOne) { sh!.foulReaction("and1"); game.pauseThen(1.4, () => game.ft.start(sh!, 1)); }
@@ -498,8 +454,7 @@ export function resolveShot(game: Game, ): void {
     game.pendingAndOne = null;
   }
 
-  // このシューターをパスで演出した味方(いれば) — シュートが決まればアシストを
-  // 記録。シューターがそのパスを受けた選手であることが条件。
+  // このシューターをパスで演出した味方 — シューターがそのパスの受け手であること。
 export function assistCreditFor(game: Game, shooter: Player): Player | null {
     return (game.assistTo === shooter && game.assistFrom && game.assistFrom !== shooter)
       ? game.assistFrom : null;

@@ -1,6 +1,4 @@
-// 選手の状況クエリ（特殊能力・利き手・体の向き/前方点の算出）。プロトタイプ拡張で
-// Player に紐づけ。本体は player.ts から逐語移動（this は Player のまま）。呼び出し側は
-// 不変。game.ts が副作用 import する。
+// 選手の状況クエリ（特殊能力・利き手・体の向き/前方点の算出）。プロトタイプ拡張で Player に紐づけ。
 import { Vector3 } from "@babylonjs/core";
 import { AbilityKey } from "../../attributes";
 import { Player } from "./player";

@@ -1,15 +1,10 @@
 // UI: タイトル画面・クラブ対戦ウィザード。
-// プロトタイプ拡張で UI に紐づけ。本体は ui.ts から逐語移動（this は UI のまま）。
-// 呼び出し側は不変。main.ts が副作用 import する。
-import { Game } from "../game";
-import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS, TEAM_CLUB, teamAbbr, teamShort } from "../config";
-import { CLUB_ABBR } from "../clubabbr";
-import { CLUB_FLAGS } from "../clubflags";
-import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, clubTeam, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "../attributes";
-import { CLUBS } from "../clubdb";
-import { PLAYER_DB, type DbPlayer } from "../playerdb";
-import { playerLook } from "../objects/player/player-look";
-import { UI, colorOf, POP_STATS, type Phase } from "./ui";
+import { TEAM_NAMES, TEAM_CLUB, teamAbbr } from "../config";
+import { CLUB_ABBR } from "../club/clubabbr";
+import { CLUB_FLAGS } from "../club/clubflags";
+import { clubTeam } from "../roster";
+import { CLUBS } from "../club/clubdb";
+import { UI, colorOf, BTN_BG, INK, ELLIPSIS } from "./ui";
 
 declare module "./ui" {
   interface UI {
@@ -24,8 +19,7 @@ declare module "./ui" {
 }
 
   // ---- タイトル画面 -------------------------------------------------------
-  // 一番最初の画面: クラブチーム対戦（リーグ → チームのウィザード）か、
-  // ランダム対戦（既存のランダムロスターエディタへ直行）を選ぶ。
+  // 最初の画面: クラブチーム対戦かランダム対戦を選ぶ。
 UI.prototype.buildTitle = function(): void {
     const p = this.panel();
     p.style.gap = "16px";
@@ -45,7 +39,7 @@ UI.prototype.buildTitle = function(): void {
       Object.assign(b.style, {
         display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
         width: "min(320px,86vw)", padding: "14px 18px", cursor: "pointer",
-        background: "rgba(20,24,34,0.9)", color: "#fff", borderRadius: "12px",
+        background: BTN_BG, color: "#fff", borderRadius: "12px",
         border: "1px solid rgba(255,255,255,0.18)",
       } as Partial<CSSStyleDeclaration>);
       const t = document.createElement("span");
@@ -56,7 +50,7 @@ UI.prototype.buildTitle = function(): void {
       Object.assign(d.style, { fontSize: "11px", opacity: "0.65" } as Partial<CSSStyleDeclaration>);
       b.append(t, d);
       b.onmouseenter = () => { b.style.background = "rgba(70,120,220,0.9)"; };
-      b.onmouseleave = () => { b.style.background = "rgba(20,24,34,0.9)"; };
+      b.onmouseleave = () => { b.style.background = BTN_BG; };
       b.onclick = onClick;
       return b;
     };
@@ -84,8 +78,7 @@ UI.prototype.leaguesInOrder = function(): string[] {
     return out;
 };
 
-  // 実クラブを1チームに適用する（ロスター + 名前 + ユニフォーム + 自動ライン
-  // ナップ/ロール）。エディタの再構築はしない — いつ更新/離脱するかは呼び出し側が決める。
+  // 実クラブを1チームに適用する（ロスター + 名前 + ユニフォーム + 自動ラインナップ/ロール）。エディタの再構築はしない。
 UI.prototype.assignClub = function(team: number, idx: number): void {
     clubTeam(team, idx);
     TEAM_NAMES[team] = CLUBS[idx][0];
@@ -96,8 +89,7 @@ UI.prototype.assignClub = function(team: number, idx: number): void {
     this.autoAssignChoiceRanks(team);
 };
 
-  // ボタンとして表示されるリーグのグループ。上位リーグ（他リーグA まで）は
-  // それぞれ独自のグループのまま。それ以下は 南米 と その他B にまとめられる。
+  // リーグのグループ。他リーグA までは独自グループ、それ以下は 南米 と その他B にまとめる。
 UI.prototype.leagueGroups = function(): { label: string; leagues: string[] }[] {
     const order = this.leaguesInOrder();
     const cut = order.indexOf("他リーグA");   // そのまま残す最後のリーグ
@@ -119,10 +111,6 @@ UI.prototype.leagueGroups = function(): { label: string; leagues: string[] }[] {
 };
 
   // ウィザードの入口: ホーム（team 0）、続いてアウェイ（team 1）のクラブを選ぶ。
-  // コートと選手は、マッチアップが確定するまでウィザードの間ずっと不透明な
-  // オーバーレイの後ろに隠れたままになる。最初から戦力バーとリーグ/クラブ選択を
-  // 表示する — リーグボタンとクラブのフラッグ一覧は同じ領域を占め、その場で
-  // 入れ替わる（リーグを選ぶ → そのクラブ群; リーグ選択 → 戻る）。
 UI.prototype.startClubMatchup = function(): void {
     this.titlePanel.style.display = "none";
     this.openMatchupWizard();
@@ -132,10 +120,8 @@ UI.prototype.openMatchupWizard = function(): void {
     this.closeChooser();
 
     const OPAQUE = "#080a0f";
-    // オーバーレイ自体は透明。不透明なタイルが、3Dのホーム/アウェイの選手が
-    // 描画される2つの透明な「ウィンドウ」を除いて画面全体を覆う（main.ts が
-    // onUniformPreview 経由で描画）。タイルは隣接して（重なりも隙間もなく）配置
-    // されるため、コートの他の部分が見えることはない。
+    // オーバーレイ自体は透明。不透明なタイルが、3Dの選手を描画する2つの透明な
+    // 「ウィンドウ」を除いて画面全体を覆う（main.ts が onUniformPreview で描画）。
     const overlay = document.createElement("div");
     Object.assign(overlay.style, {
       position: "absolute", inset: "0", display: "flex", flexDirection: "column",
@@ -152,8 +138,7 @@ UI.prototype.openMatchupWizard = function(): void {
     const renderBar = () => barHost.replaceChildren(this.buildVsBoard());
     topCover.appendChild(barHost);
 
-    // 2) ユニフォーム帯 — 2つの透明なウィンドウ（3Dが透けて見える）、残りは不透明。
-    //    ホームのウィンドウは左、アウェイは右。戦力バーと同様に対比させる。
+    // 2) ユニフォーム帯 — 2つの透明なウィンドウ（左=ホーム、右=アウェイ）、残りは不透明。
     const WIN_W = 120, WIN_H = 150;
     const cover = (flex: string): HTMLDivElement => {
       const d = document.createElement("div");
@@ -167,9 +152,8 @@ UI.prototype.openMatchupWizard = function(): void {
       Object.assign(win.style, {
         position: "relative", width: "100%", height: `${WIN_H}px`, background: "transparent",
       } as Partial<CSSStyleDeclaration>);
-      // 3Dビューポートは矩形。角を丸くするために、(a) 4隅の三角形を不透明な
-      // くさび（radial-gradient マスク）で覆い、(b) その上に丸い色付きの枠線を
-      // 描く。どちらのオーバーレイもウィンドウの上に重なる。
+      // 矩形の3Dビューポートの角を丸める: (a) 4隅を不透明なくさび（radial-gradient
+      // マスク）で覆い、(b) その上に丸い色付きの枠線を描く。
       const R = 8;
       const g = (at: string, pos: string) =>
         `radial-gradient(circle ${R}px at ${at}, transparent ${R}px, ${OPAQUE} ${R}px) ${pos} / ${R}px ${R}px no-repeat`;
@@ -190,7 +174,7 @@ UI.prototype.openMatchupWizard = function(): void {
       const lab = document.createElement("div");   // その下の不透明なラベル帯
       Object.assign(lab.style, {
         background: OPAQUE, textAlign: "center", padding: "3px 0", fontSize: "11px", fontWeight: "800",
-        color: colorOf(t), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+        color: colorOf(t), ...ELLIPSIS,
       } as Partial<CSSStyleDeclaration>);
       cell.append(win, lab);
       return { cell, win, lab };
@@ -203,10 +187,8 @@ UI.prototype.openMatchupWizard = function(): void {
     midLbl.textContent = "ユニフォーム";
     Object.assign(midLbl.style, { fontSize: "10px", fontWeight: "800", opacity: "0.45", letterSpacing: "2px" } as Partial<CSSStyleDeclaration>);
     midCover.appendChild(midLbl);
-    // ウィンドウは、戦力バーとちょうど同じ幅（min(560px,94vw)）の中央寄せ
-    // コンテナの両端に位置するため、ホームウィンドウの左端とアウェイウィンドウの
-    // 右端がバーの端に揃う。注意: 透明な連鎖の中の要素は背景を持ってはならない —
-    // カバーは不透明な兄弟タイル（両側のカバー / midCover / ラベル帯）だけが担う。
+    // ウィンドウは戦力バーと同じ幅（min(560px,94vw)）のコンテナの両端に置き、バーの端に揃える。
+    // 透明な連鎖の中の要素は背景を持たせず、不透明な兄弟タイルだけがカバーを担う。
     const inner = document.createElement("div");
     Object.assign(inner.style, { width: "min(560px,94vw)", display: "flex", alignItems: "stretch" } as Partial<CSSStyleDeclaration>);
     inner.append(homeCell.cell, midCover, awayCell.cell);
@@ -223,9 +205,7 @@ UI.prototype.openMatchupWizard = function(): void {
       awayCell.lab.textContent = `アウェイ　${teamAbbr(1)}`;
     };
 
-    // ボトムシート: 表示されるパネルは 1200px で頭打ちにして中央寄せ。その内容も
-    // 中央寄せ（alignItems:center + 各行を中央寄せ）。暗いプレビュー背景により、
-    // 頭打ちにしたパネルの脇の領域は単に暗いままになる。
+    // ボトムシート: パネルは 1200px で頭打ちにして中央寄せ、内容も中央寄せ。
     const sheet = document.createElement("div");
     Object.assign(sheet.style, {
       width: "100%", maxWidth: "1200px", alignSelf: "center", boxSizing: "border-box",
@@ -264,8 +244,7 @@ UI.prototype.openMatchupWizard = function(): void {
     const exitPreview = () => window.removeEventListener("resize", sendPreview);
     const exitToTitle = () => { this.onUniformPreview(null); exitPreview(); this.closeChooser(); this.titlePanel.style.display = "flex"; };
 
-    // リーグの「フラッグ」: 国旗風のデザイン（クラブフラッグと同じ形式/サイズ）。
-    // 他リーグA / 南米 / その他B はグループであって国ではない → 中立 / 大陸風。
+    // リーグの「フラッグ」: 国旗風のデザイン。グループ（他リーグA / 南米 / その他B）は中立 / 大陸風。
     const LEAGUE_FLAGS: Record<string, string[]> = {
       "イングランド": ["c", "f2f2f2", "e01414"],            // セントジョージ十字
       "イタリア": ["v", "1f8a3b", "f2f2f2", "e01414"],       // 緑-白-赤
@@ -277,18 +256,14 @@ UI.prototype.openMatchupWizard = function(): void {
       "その他B": ["h", "5a4a34", "7a6a52"],                  // 中立（混成リーグ）
     };
 
-    // リーグ一覧とクラブ一覧が形式・フラッグサイズ・縦の高さで同一になるための
-    // 共有ビルダー（maxRows 行まで、それを超えるとスクロール）。
+    // リーグ一覧とクラブ一覧の共有ビルダー（maxRows 行まで、超えるとスクロール）。
     const IDLE_BORDER = "rgba(255,255,255,0.16)";
     const COL = 100, GAP = 8, ROW_H = 54;
     const makeScroll = (): { scrollArea: HTMLDivElement; grid: HTMLDivElement } => {
       const maxRows = window.innerWidth <= 480 ? 3 : 4;
       const scrollArea = document.createElement("div");
       Object.assign(scrollArea.style, { maxHeight: `${maxRows * ROW_H}px`, overflowY: "auto", width: "100%" } as Partial<CSSStyleDeclaration>);
-      // グリッドは固定幅フラッグの flex-wrap 行で左揃え。グリッドのブロック自体は
-      // ちょうど N 列の幅で中央寄せ（margin:auto、centerGrid 参照）。よって、
-      // 埋まった行はブロックを端から端まで満たし（中央寄せに見える）、最後の
-      // 半端な行は最初のフラッグの下で左揃えになる。
+      // 固定幅フラッグの flex-wrap 行で左揃え。ブロックは N 列幅で中央寄せ（centerGrid 参照）。
       const grid = document.createElement("div");
       Object.assign(grid.style, {
         display: "flex", flexWrap: "wrap", justifyContent: "flex-start", alignContent: "flex-start",
@@ -297,8 +272,7 @@ UI.prototype.openMatchupWizard = function(): void {
       scrollArea.append(grid);
       return { scrollArea, grid };
     };
-    // グリッドブロックを、収まる整数個の列幅にサイズ調整し、最後の行は左揃えの
-    // まま中央寄せする。DOM に入った後で呼ぶこと。
+    // グリッドブロックを収まる整数個の列幅にサイズ調整する。DOM に入った後で呼ぶこと。
     const centerGrid = (scrollArea: HTMLDivElement, grid: HTMLDivElement): void => {
       const avail = scrollArea.clientWidth || COL;
       const cols = Math.max(1, Math.floor((avail + GAP) / (COL + GAP)));
@@ -307,9 +281,7 @@ UI.prototype.openMatchupWizard = function(): void {
     const makeFlag = (design: string[] | undefined, overlay: string, label: string): HTMLButtonElement => {
       const btn = document.createElement("button");
       Object.assign(btn.style, {
-        // 枠線は INSET の box-shadow で（border ではない）: border-radius +
-        // overflow:hidden の実際の border は、丸めた角で子要素の背景が約1px
-        // にじむ。inset の shadow なら半径にきれいに沿う。
+        // 枠線は border ではなく INSET の box-shadow で描く（丸めた角にきれいに沿う）。
         display: "flex", flexDirection: "column", cursor: "pointer", padding: "0",
         width: "100px", flex: "0 0 100px",   // 固定サイズの flex アイテム（行によって中央寄せ）
         borderRadius: "8px", overflow: "hidden", color: "#fff", boxSizing: "border-box",
@@ -333,7 +305,7 @@ UI.prototype.openMatchupWizard = function(): void {
       Object.assign(nm.style, {
         width: "100%", boxSizing: "border-box", padding: "3px 4px",
         fontSize: "10px", fontWeight: "700", textAlign: "center",
-        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+        ...ELLIPSIS,
       } as Partial<CSSStyleDeclaration>);
       nm.textContent = label;
       btn.append(flag, nm);
@@ -397,7 +369,7 @@ UI.prototype.openMatchupWizard = function(): void {
       const confirm = this.button("決定");
       Object.assign(confirm.style, {
         fontSize: "13px", fontWeight: "800", padding: "7px 22px",
-        background: colorOf(team), color: "#0d1016", border: `1px solid ${colorOf(team)}`,
+        background: colorOf(team), color: INK, border: `1px solid ${colorOf(team)}`,
         opacity: picked[team] ? "1" : "0.4", pointerEvents: picked[team] ? "auto" : "none",
       } as Partial<CSSStyleDeclaration>);
       confirm.onclick = () => {

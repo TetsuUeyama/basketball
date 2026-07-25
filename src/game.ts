@@ -1,20 +1,30 @@
 import { Scene, Vector3, Mesh } from "@babylonjs/core";
 import { Player } from "./objects/player/player";
 import { Ball } from "./objects/ball";
-import "./objects/player/player-move";    // Player.prototype に移動/物理/クエリ/状態を注入
+import "./action/move/run";   // Player.prototype に走る/ジャンプ/方向転換を注入
+import "./action/move/jump";
+import "./action/move/turn";
 import "./objects/player/player-query";
 import "./objects/player/player-state";
 import "./objects/player/player-visual";
 import "./objects/player/player-roster";
-import "./objects/player/player-arms";    // Player.prototype にアニメを注入
-import "./objects/player/player-facing";
-import "./objects/player/player-legs";
-import "./objects/player/player-react";
+import "./action/animation/basic/arms";    // 部位の基本ムーバを注入（腕/胴・頭/脚）
+import "./action/animation/basic/torso";
+import "./action/animation/basic/legs";
+import "./action/animation/locomotion";    // アクション毎のアニメを注入
+import "./action/animation/dribble";
+import "./action/animation/hold";
+import "./action/animation/reach";
+import "./action/animation/guard";
+import "./action/animation/sit";
+import "./action/animation/bench-idle";
+import "./action/animation/foul-react";
+import "./action/animation/defwin";
+import "./action/animation/dejected";
 import { makeHandlerRing, type Hoops } from "./objects/court";
 import {
-  COURT, RIM, PASS_SPEED, SHOT_CLOCK, QUARTER_TIME, QUARTERS, teamShort,
-} from "./config";
-import { clamp, dist2D, moveToward2D, chance, rand } from "./util";
+  COURT, RIM, PASS_SPEED, SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS, OOB_OUTSET, teamShort, } from "./config";
+import { rate, clamp, dist2D, moveToward2D, towardPoint, chance, rand } from "./util";
 import { reactionLag } from "./eval";
 import { FreeThrowSystem } from "./systems/freethrow";
 import { TipoffSystem } from "./systems/tipoff";
@@ -31,7 +41,8 @@ import { syncAll, updateFacing, tickSwish } from "./core/visuals";
 import { shotClockViolation } from "./core/deadball";
 import { resolveCollisions } from "./core/collision";
 import { seatOnBench, updateBenchCheer } from "./core/bench";
-import { ROSTER, ROSTER_SIZE, STARTERS, TACTICS, rate, AbilityKey } from "./attributes";
+import { ROSTER, ROSTER_SIZE, STARTERS } from "./roster";
+import { TACTICS, AbilityKey } from "./attributes";
 
 export type BallMode = "held" | "charge" | "pass" | "shot" | "loose" | "inbound" | "tipoff" | "freethrow" | "pause" | "subs" | "finale";
 
@@ -44,25 +55,18 @@ export class Game {
   readonly players: Player[] = [];   // コート上: [0..4]=チーム0の枠 / [5..9]=チーム1の枠
   readonly roster: Player[][] = [[], []]; // 13人フルロスター（先発+ベンチ）
   subsMade = 0;                      // この試合の交代回数（デバッグ/テレメトリ）
-  // 直近の交代。UI が「メンバーチェンジ」フィードとして表示する
-  // UI は HOME(チーム0)のチップを先に表示。HOME のチップが1つでも生きている間は
-  // AWAY(チーム1)のチップは凍結(ttl が進まず、表示もされない) —
-  // つまり HOME の交代を全て流し、消えてから AWAY の交代を最初から流す。
+  // 直近の交代。UI がフィードとして表示（HOME→AWAY の順に流す）
   readonly subEvents: { inNum: number; inName: string; outNum: number; outName: string; team: number; ttl: number }[] = [];
-  // 交代の入場/退場アニメ("subs" ボールモード): 各歩行者が自分の目標へ向かい、
-  // 全員が到着したらプレー再開(subNext)
+  // 交代の入場/退場アニメ("subs" ボールモード): 各歩行者が目標へ向かい、全員到着でプレー再開(subNext)
   subWalkers: { p: Player; tx: number; tz: number }[] = [];
   subNext: (() => void) | null = null;
   subT = 0;
-  // チーム別のベンチ歓声タイマー — 正の間、ベンチは立ち上がって両腕を上げ
-  // 跳ねる(短い猶予でジャンプが着地しきる)
+  // チーム別のベンチ歓声タイマー（正の間、ベンチが立って歓声）
   cheerT: [number, number] = [0, 0];
   cheerAmp: [number, number] = [0.5, 0.5];   // 歓声の強さ(ダンク/スリーで大きく)
   readonly ball: Ball;
   readonly ring: Mesh;
   readonly tactics = TACTICS; // チーム別の作戦
-
-  // 一時デバッグ(要削除): チャージ/コンテスト/ブロックのテレメトリ
 
   // --- スコア / クロック ---
   score: [number, number] = [0, 0];
@@ -81,49 +85,37 @@ export class Game {
   // スクリーン(ピック&ロール)機能（状態と処理は ScreenSystem が所有 / 方式A）
   readonly screen = new ScreenSystem(this);
 
-  // ---- 現ポゼッションのチーム守備スキーム(resetMotion で決定)
-  // 守備側はハーフコートの構えと、運び上げにプレスをかけるかを決める。
-  // "" = 素のマンツーマン(この場合は上記の pnr カバレッジが適用される)。
+  // ---- 現ポゼッションのチーム守備スキーム(resetMotion で決定)。
+  // "" = 素のマンツーマン(pnr カバレッジが適用される)。
   zoneScheme: "" | "2-3" | "3-2" = "";
   pressOn = false;
-  // このフレームのプレストラップ2人目 — 体を寄せる代わりにボールを狙う
-  // (ディグ姿勢/スティール)。runPress が設定し、runDefense の毎tickでクリア
+  // このフレームのプレストラップ2人目 — ボールを狙う(ディグ姿勢)。runPress が設定、runDefense がクリア
   pressTrapper: Player | null = null;
-  // ジャスト・パスレシーブ: 飛行中のパスの質(1=ぴったり手元)。リリース時に
-  // P精度+散らばりから抽選。捕球時、受け手が次の動作へ移れる速さ(ギャザー時間)を決める。
+  // 飛行中のパスの質(1=ぴったり手元)。捕球時のギャザー時間を決める。
   passQ = 1;
-  // このポゼッションでボールがフロントコートに定着したら true —
-  // 以降、ハーフウェイを越えて戻すとバックコートバイオレーション
+  // このポゼッションでボールがフロントコートに定着したら true（以降バックコート違反）
   frontT = false;
-  // 速攻ウィンドウ: ライブボールでのポゼッション交代(スティール/守備リバウンド)
-  // 後の数秒間 >0。ボールがまだバックコートにあり守備が戻る途中の間。この間、
-  // ハンドラーはリムを突き、ウイングはレーンをスプリントする — オープンコートで
-  // SPEED/加速力/敏捷性 が効く場面(ハーフコートはスポット基準)。
+  // 速攻ウィンドウ: ライブでのポゼッション交代後の数秒間 >0（ボールがバックコートにある間）
   pushT = 0;
 
   // パスのアニメ
   passFrom = new Vector3();
-  passCatch = new Vector3();   // ボールが飛ぶ固定のリードポイント — 一定速度、ガタつきなし
-  passMiss = 0;                // 配球が目標から外れる距離(m、P精度依存) — 散らばりと捕球ギャザーの両方に効く
-  passMissY = 0;               // 外れパスの縦方向の散らばり(高い/低い)、P精度から
+  passCatch = new Vector3();   // ボールが飛ぶ固定のリードポイント
+  passMiss = 0;                // 配球が目標から外れる距離(m)
+  passMissY = 0;               // 外れパスの縦方向の散らばり
   passTo: Player | null = null;
   passT = 0;
   passDur = 0;
-  // パスの種類: chest=通常 / bounce=バウンドパス(相手の手の下を通し床で一つ跳ねる)
-  // / jump=ジャンプパス(ダンク級に跳んで最高点から頭上を越して放つ)
+  // パスの種類: chest=通常 / bounce=バウンドパス / jump=ジャンプパス
   passStyle: "chest" | "bounce" | "jump" = "chest";
-  // ジャンプパスのウィンドアップ: 跳んでから放つ — 滞空でこの時間だけ保持する
+  // ジャンプパスのウィンドアップ: 滞空でこの時間だけ保持する
   pendingPassTo: Player | null = null;
   pendingPassT = 0;
-  // 保留中のパスがジャンプパスでなくターンパス(上体の正面〜側面の弧より後ろに
-  // いた対象を射程へ入れるため体をピボット)であること。
+  // 保留中のパスがターンパス(対象を射程へ入れるため体をピボット)であること。
   pendingPassTurn = false;
-  // ノールック(outside): 体を向けていない対象へ、現在の構えのまま振り抜くパス —
-  // 別種のノールック・リリースモーション。
+  // ノールック: 体を向けていない対象へ現在の構えのまま振り抜くパス。
   noLookPass = false;
-  // ターンパス完了のリリース中のみ設定: 弧チェックをスキップ(既に正対済み)する
-  // が、レーン/リスクの安全ゲートはスキップしない(ピボット中にローテートしてきた
-  // 守備者はスローを拒否できる — でないと相手へ撃ち込む)。
+  // ターンパス完了のリリース中のみ true: 弧チェックはスキップ、安全ゲートはスキップしない。
   turnReleased = false;
   passer: Player | null = null;                         // 現在のパスを放った選手
   passSteal: { def: Player; at: number } | null = null; // パス時に一度だけ決定
@@ -132,21 +124,20 @@ export class Game {
   shotFrom = new Vector3();
   shotTarget = new Vector3();   // ボールが実際に飛ぶ先 — 成功ならリム、ミスなら的を外した点
   shotMade = false;
-  shotWasDunk = false;   // 直前のフィニッシュがダンク(ベンチの歓声が大きくなる)
+  shotWasDunk = false;   // 直前のフィニッシュがダンク
   shotPoints = 2;
   shotT = 0;
   shotDur = 0;
   shooter: Player | null = null; // 現在シュートを打っている選手
   shooterFinishing = false;      // レイアップ/ダンクで true(リムへ突っ込む)
-  finishSpot = new Vector3();    // フィニッシャーがギャザーして跳ぶ位置 — リムの手前、真下ではない
-  finishVX = 0;                   // フィニッシュへ持ち込むドライブの勢い(空中で減衰)
+  finishSpot = new Vector3();    // フィニッシャーがギャザーして跳ぶ位置
+  finishVX = 0;                   // フィニッシュへ持ち込むドライブの勢い
   finishVZ = 0;
   shotApex = 2.2;   // 弧の高さ — レイアップ/ダンクは低く、ジャンパーは高い
-  evadedFinish = false;   // このフィニッシュは実際のブロック試行をかわした(ダブルクラッチ)
-  evadeDirX = 0;          // 空振りしたブロッカーから離れる水平の単位方向 —
-  evadeDirZ = 0;          // クラッチでボールを相手の脇へ回す
-  // ロングショットのボールカメラ: アーク外からの一発が空中にある間(と着弾後の
-  // 一拍)、放送カメラがボール自体を追う。視聴者が放物線を追い、決まるか見られる
+  evadedFinish = false;   // ブロック試行をかわしたフィニッシュ(ダブルクラッチ)
+  evadeDirX = 0;          // 空振りしたブロッカーから離れる水平の単位方向
+  evadeDirZ = 0;
+  // ロングショットのボールカメラ: 遠距離の一発が空中にある間、カメラがボールを追う
   longShot = false;     // 飛行中のシュートが遠距離である
   longShotHoldT = 0;    // 着弾までボールカメラを維持
 
@@ -156,41 +147,37 @@ export class Game {
   looseOff = 0;      // ボールがこぼれた時の攻撃側チーム(リバウンド表示用)
   lastTouch: Player | null = null;   // 最後にボールに触れた選手 — アウトオブバウンズのスローインを決める
   looseIsRebound = false; // ルーズボールがシュートミス由来なら true
-  looseFromTip = false;   // 開始ティップのタップで true — ティップ役+最寄りの相手のみが競る(スクラムなし)
-  looseFromRim = false;   // リム接触由来のみ true — 攻撃側の確保でショットクロックがリセットされる唯一のケース
+  looseFromTip = false;   // 開始ティップのタップで true — ティップ役+最寄りの相手のみが競る
+  looseFromRim = false;   // リム接触由来のみ true — 攻撃側確保でショットクロックがリセット
   looseStealBy: Player | null = null;     // はたいて/はじいてこぼした守備者
   looseStealVictim: Player | null = null; // 失ったボールハンドラー/パサー
   looseAge = 0;                            // ボールがルーズになってからの経過時間
-  looseGrabAfter = 0;                      // 確保できるまでの遅延(見える形での争奪)
+  looseGrabAfter = 0;                      // 確保できるまでの遅延
   blockHoldT = 0;                          // はたかれたボールがブロッカーの手に留まる一拍
   blockHoldVel = new Vector3();            // 保持が終わる時に適用されるはじきの速度
 
   // スローイン/インバウンド機能（状態と処理は InboundSystem が所有 / 方式A）
   readonly inbound = new InboundSystem(this);
 
-  // アシストの記録: 今まさにシュートに繋がったパスを誰が投げ、潜在アシストが
-  // 誰に付くか
+  // アシストの記録
   assistFrom: Player | null = null;
   assistTo: Player | null = null;
   pendingAssist: Player | null = null; // 現在のシュートが決まれば加算
-  // 決めたシュートでファウルされた: ボールは通常どおり飛んで決まり、
-  // その後 resolveShot が AND-1 として数え、1本のフリースローへ送る
+  // 決めたシュートでのファウル(AND-1): resolveShot が処理し1本のフリースローへ
   pendingAndOne: Player | null = null;
 
-  // 開始のジャンプボール
   // ティップオフ機能（状態と処理は TipoffSystem が所有 / 方式A）
   readonly tipoff = new TipoffSystem(this);
 
   // フリースロー機能（状態と処理は FreeThrowSystem が所有 / 方式A: Game 参照）
   readonly ft = new FreeThrowSystem(this);
 
-  // デッドボールの一時停止。再開前に得点/ファウルを視聴者が把握できるようにする
+  // デッドボールの一時停止
   private pauseT = 0;
   private pauseNext: (() => void) | null = null;
-  // デッドボールの一時停止中にボールが実際に落下+バウンドしている間 true
-  // (例: 得点後にネットを抜けて落ち、バウンドする)
+  // 一時停止中にボールが落下+バウンドしている間 true
   ballFalling = false;
-  coastT = 0;   // ブザー後の短いプレーオン猶予(惰性で少し続く)
+  coastT = 0;   // ブザー後の短いプレーオン猶予
   hoops: Hoops | null = null;     // 成功時にスウィッシュさせるネット/リムのメッシュ
   netSwish: [number, number] = [0, 0];   // フープ別のスウィッシュタイマー(>0 でアニメ中)
   swishTeam: [number, number] = [0, 0];  // 誰が決めたか(フラッシュ色)
@@ -212,8 +199,7 @@ export class Game {
   /** 得点時にスウィッシュできるよう、フープのネット/リムのメッシュを接続する。 */
   attachHoops(hoops: Hoops): void { this.hoops = hoops; }
 
-  /** カメラが放送のワイドではなくボール自体を追うべき間 true(遠距離シュートの
-   *  飛行+着弾後の一拍)。 */
+  /** カメラがボール自体を追うべき間 true(遠距離シュートの飛行+着弾後の一拍)。 */
   get camFollowBall(): boolean {
     return (this.ballMode === "shot" && this.longShot) || this.longShotHoldT > 0;
   }
@@ -249,7 +235,7 @@ export class Game {
   teamPlayers(team: number): Player[] {
     return team === 0 ? this.players.slice(0, 5) : this.players.slice(5, 10);
   }
-  // p の相手チーム（守備側）。効果層の関数(pass-risk 等)へ渡す用。
+  // p の相手チーム（守備側）。
   oppTeam(p: Player): Player[] {
     return this.teamPlayers(1 - p.team);
   }
@@ -258,10 +244,7 @@ export class Game {
   private secondHalf(): boolean {
     return this.quarter >= 3;
   }
-  /**
-   * この半分で `team` が攻めるゴールの Z 符号(+1 / -1)。ハーフタイムでコートを
-   * 入れ替えるので、同じチームが Q3/Q4 では反対のフープを攻める。
-   */
+  /** この半分で `team` が攻めるゴールの Z 符号(+1 / -1)。ハーフタイムでコートを入れ替える。 */
   attackSign(team: number): number {
     const base = team === 0 ? 1 : -1;
     return this.secondHalf() ? -base : base;
@@ -281,10 +264,7 @@ export class Game {
     const s = this.attackSign(team);
     const hz = s * RIM.z;
     const dir = -s; // ミッドコート方向
-    // ゾーンブレイク: セットされたゾーンに対し、攻撃側は 1-3-1 型の配置に組み替え、
-    // ゾーン守備者の間の隙間に選手を置き、1人がハイポスト(フリースローライン)へ
-    // フラッシュする — そこで受けるとゾーンの後列が前に出ざるを得ず、ペイントが開く。
-    // 2つの「ブロック」スポットはハイポスト+リム下のダンカーになる。
+    // ゾーンブレイク: ゾーンに対し 1-3-1 型で守備者の隙間に配置、1人がハイポストへフラッシュ。
     if (team === this.possession && this.zoneScheme) {
       return [
         new Vector3(0, 0, hz + dir * 8.5),     // 0 ポイント、ゾーンの頂点の上
@@ -297,19 +277,14 @@ export class Game {
       ];
     }
     return [
-      // ペリメーターのスポットはアークに張り付く(ライン 6.75m): そこで受けると
-      // ラインぎりぎりのスリー = 最大確率。遠距離のエリートだけがさらに外へ
-      // 流れる(updateOffBallMotion のスポットジョグ参照)。
+      // ペリメーターのスポットはアークに張り付く(ライン 6.75m)
       new Vector3(0, 0, hz + dir * 7.1),     // トップ(7.1m 外)
       new Vector3(-4.7, 0, hz + dir * 5.3),  // 左ウイング(約7.08m 外)
       new Vector3(4.7, 0, hz + dir * 5.3),   // 右ウイング
-      // ディープコーナー: ベースライン近くのコーナースリー(3&D/スポットアップの
-      // シューターが待つ場所)。旧来の 2.5m 外のスポットより広くフロアを広げ、
-      // 余裕あるスリーを保つ
+      // ディープコーナー: ベースライン近くのコーナースリー
       new Vector3(-6.7, 0, hz + dir * 1.5),  // 左コーナー
       new Vector3(6.7, 0, hz + dir * 1.5),   // 右コーナー
-      // ローブロック、レーンラインのすぐ外 — ポストビッグの定位置。ガードや
-      // 本物のストレッチビッグはここを取らない(bestOpenSpot 参照)。
+      // ローブロック、レーンラインのすぐ外 — ポストビッグの定位置
       new Vector3(-2.8, 0, hz + dir * 1.4),  // 左ローブロック
       new Vector3(2.8, 0, hz + dir * 1.4),   // 右ローブロック
     ];
@@ -323,12 +298,8 @@ export class Game {
   }
 
   nearestDefenderDist(p: Player): number {
-    let best = Infinity;
-    for (const d of this.teamPlayers(1 - p.team)) {
-      const dd = dist2D(d.pos, p.pos);
-      if (dd < best) best = dd;
-    }
-    return best;
+    const d = this.nearestDefender(p);
+    return d ? dist2D(d.pos, p.pos) : Infinity;
   }
 
   nearestDefender(p: Player): Player | null {
@@ -353,11 +324,7 @@ export class Game {
     return n;
   }
 
-  // 精神: >0 = 動揺(精度低下)、<0 = プレッシャーで奮起(精度上昇)。プレッシャーは
-  // 疲労、スコアでのビハインド、4Q終盤の接戦から積み上がる。精神80が分岐点:
-  // 未満だとプレッシャーが害になり(0で0..1にスケール)、超えると同じプレッシャーが
-  // クラッチな選手を後押しする(100で最大 -0.5)。呼び出し側は factor×weight を
-  // 引くので、負の factor はバフ。
+  // 精神: >0 = 動揺(精度低下)、<0 = 奮起(精度上昇)。呼び出し側は factor×weight を引くので負の factor はバフ。
   clutchFactor(p: Player): number {
     const diff = this.score[p.team] - this.score[1 - p.team];
     let stress = p.fatigue * 0.5;
@@ -373,10 +340,8 @@ export class Game {
 
   setEvent(text: string, team: number, dur = 1.8,
                    info?: { scorer?: string; assist?: string }): void {
-    // 目立つプレーだけが画面バナーになる — 得点、AND-1、ファウル、ピリオドの
-    // 区切り。ルーティンの流れ(リバウンド、スティール、ブロック、ミス等)は
-    // 画面が散らからないようスコアボードに任せる。得点バナーには画面表示用に
-    // 誰が決めたか(誰がアシストしたか)を載せる。
+    // 目立つプレーだけが画面バナーになる（得点/AND-1/ファウル/ピリオド区切り）。
+    // 得点バナーには誰が決めた/アシストしたかを載せる。
     if (!this.bannerWorthy(text)) return;
     this.lastEvent = { text, team, scorer: info?.scorer, assist: info?.assist };
     this.eventT = dur;
@@ -391,14 +356,14 @@ export class Game {
       || text === "SHOT CLOCK VIOLATION"   // ショットクロック違反(攻撃側)
       || text.includes(" BALL")            // どちらのボールか明示する再開バナー
       || text.startsWith("THROW-IN")       // スローイン再開 — どちらのボールか
-      || text === "TIP-OFF"                // 試合が明確に始まる…
+      || text === "TIP-OFF"
       || text === "HALFTIME"
       || text === "2ND HALF"
       || text === "FINAL"
       || text.endsWith("WINS!")            // 試合終了ブザーの勝利コール
       || text === "DRAW"
-      || text.startsWith("END OF Q")       // …そして各ピリオドが明確に終わる
-      || /^Q\d START$/.test(text);         // …そして明確に再開する
+      || text.startsWith("END OF Q")
+      || /^Q\d START$/.test(text);
   }
 
   // ---- ライフサイクル ----------------------------------------------------
@@ -457,9 +422,7 @@ export class Game {
     }
   }
 
-  /** (編集された可能性のある)ロスターのロール/優先度/派生値を再適用する。
-   *  能力値はライブ参照なので既に反映済み。ロール/優先度の変更を取り込むため
-   *  ティップオフ前の試合前画面から呼ぶ。 */
+  /** ロスターのロール/優先度/派生値を再適用する（試合前画面から呼ぶ）。 */
   applyRoster(): void {
     for (let t = 0; t < 2; t++) {
       for (let i = 0; i < ROSTER_SIZE; i++) this.roster[t][i].applyDef(ROSTER[t][i]);
@@ -479,9 +442,8 @@ export class Game {
     }
   }
 
-  // 実際のルール: 第2・3・4ピリオドはハーフコートのセットでなく、センターライン
-  // (スコアラーテーブルの反対側)からのスローインで始まる。ウイングがミッドコートで
-  // スローインし、ポイントガードが戻って受け取り運び上げる。守備はゴール側でマッチ。
+  // 第2・3・4ピリオドはセンターラインからのスローインで始まる。
+  // ウイングがスローインし、PG が戻って受け取り運び上げる。守備はゴール側でマッチ。
   startQuarterInbound(team: number, prePlaced = false): void {
     this.possession = team;
     const offense = this.teamPlayers(team);
@@ -492,13 +454,11 @@ export class Game {
       const protect = this.attackFloor(team);    // 守備が守るバスケット
       for (const d of defenders) {
         const man = offense[d.slot];
-        const dx = protect.x - man.pos.x, dz = protect.z - man.pos.z;
-        const len = Math.hypot(dx, dz) || 1;
-        d.pos.set(man.pos.x + (dx / len) * 1.4, 0, man.pos.z + (dz / len) * 1.4);
+        const gs = towardPoint(man.pos.x, man.pos.z, protect.x, protect.z, 1.4); // マークのゴール側
+        d.pos.set(gs.x, 0, gs.z);
       }
-      // スローイン役(ウイング)はセンターラインのアウトオブバウンズに立つ。
-      // PG はミッドコート付近へ戻ってスローインを受ける
-      offense[2].pos.set(-(COURT.halfW + 0.3), 0, 0); // センターライン、左サイドライン
+      // スローイン役(ウイング)はセンターラインのアウトオブバウンズに立つ
+      offense[2].pos.set(-(COURT.halfW + OOB_OUTSET), 0, 0); // センターライン、左サイドライン
     }
     const taker = offense[2];
     this.handler = taker;
@@ -507,7 +467,7 @@ export class Game {
     this.shotClock = SHOT_CLOCK;
     this.resetMotion();
     this.inbound.receiver = offense[0];           // ポイントガード
-    // スローイン準備とともに新ピリオドが目に見えて始まる — どちらのボールか告げる
+    // 新ピリオド開始バナー — どちらのボールか
     this.setEvent(this.quarter === 3
       ? `2ND HALF — ${teamShort(team)} BALL`
       : `Q${this.quarter} START — ${teamShort(team)} BALL`, team, 2.0);
@@ -518,9 +478,7 @@ export class Game {
   update(dt: number): void {
     if (this.eventT > 0) this.eventT = Math.max(0, this.eventT - dt);
     if (this.eventT === 0) this.lastEvent = null;
-    // 交代フィードを経過させる。HOME(チーム0)のチップが先。HOME のチップが1つでも
-    // 生きている間は AWAY(チーム1)のチップは凍結(ttl 保持、UI も隠す) —
-    // つまり HOME の交代を全て流し、消えてから AWAY を流す。
+    // 交代フィードを経過させる（HOME を先に流し、消えてから AWAY）
     const homeLive = this.subEvents.some((e) => e.team === 0);
     for (let i = this.subEvents.length - 1; i >= 0; i--) {
       const e = this.subEvents[i];
@@ -529,8 +487,7 @@ export class Game {
       if (e.ttl <= 0) this.subEvents.splice(i, 1);
     }
 
-    // ベンチが得点を祝う — 全モードで走る(得点は一時停止へ繋がる)。最後の得点も
-    // 反映されるよう `final` の早期リターンより前に置く
+    // ベンチが得点を祝う — 全モードで走る。`final` の早期リターンより前に置く
     updateBenchCheer(this, dt);
 
     if (this.state === "final") {
@@ -538,7 +495,7 @@ export class Game {
       return;
     }
 
-    // 後で実速度を測るため、各自がフレーム開始時にどこにいたか記録
+    // 実速度を測るため、各自のフレーム開始位置を記録
     for (const p of this.players) { p.prevX = p.pos.x; p.prevZ = p.pos.z; }
 
     // クロック — デッドボール中は凍結(ジャンプボール、フリースロー、一時停止、交代)
@@ -557,12 +514,9 @@ export class Game {
           shotClockViolation(this);
         }
       }
-      // ブザー: 既に空中の — もしくはギャザー中の — シュートは完了を許す
-      // (ブザービーター)。着弾したら resolveShot がピリオド終了を引き継ぐ
+      // ブザー: 空中/ギャザー中のシュートは完了を許す(ブザービーター)。着弾で resolveShot がピリオド終了を引き継ぐ
       if (this.gameClock <= 0 && this.ballMode !== "shot" && this.ballMode !== "charge") {
-        // ホーンが鳴った瞬間に凍結しない — ピリオドが実際に終わる前に、ライブプレーを
-        // 一拍だけ惰性で続けさせる(選手は勢いを保ち、ボールは転がり続け/飛行中のパスは
-        // 弧を描き切る)。パスは軌道全体が描かれるよう長めのウィンドウを取る。
+        // ホーンが鳴っても一拍だけ惰性でライブプレーを続ける。パスは長めのウィンドウを取る。
         if (this.ballMode === "held" || this.ballMode === "loose" || this.ballMode === "pass" || this.ballMode === "inbound") {
           if (this.coastT <= 0) this.coastT = this.ballMode === "pass" ? 1.4 : 0.8;
           this.coastT -= dt;
@@ -588,22 +542,19 @@ export class Game {
       case "finale": updateFinale(this, dt); break;
     }
 
-    // 踏ん張るキーパー: ボールを守る下手なハンドラー(keepShieldT)がダブルチームの
-    // 押しで後退させられてはならない — 踏ん張る。衝突の押しの前にリムまでの距離を
-    // 記録(自分の抑えた じりじり/保持の動きはこのフレームで既に実行済み)。押しで
-    // 距離が増えたら、その線まで引き戻す。横方向の小突きは放置し、後退のドリフト
-    // ("どんどん下げられる")だけを拒否。前進はそのまま。
+    // 踏ん張るキーパー: ボールを守るハンドラー(keepShieldT)を押しで後退させない。
+    // 衝突前にリムまでの距離を記録し、押しで増えたらその線まで引き戻す（後退のみ拒否、横/前進は放置）。
     const keeper = this.handler && this.handler.keepShieldT > 0 ? this.handler : null;
-    const keepDist0 = keeper ? dist2D(keeper.pos, this.attackFloor(keeper.team)) : 0;
+    const keepFloor = keeper ? this.attackFloor(keeper.team) : null;
+    const keepDist0 = keeper && keepFloor ? dist2D(keeper.pos, keepFloor) : 0;
     resolveCollisions(this);
-    if (keeper) {
-      const rim = this.attackFloor(keeper.team);
-      const dx = keeper.pos.x - rim.x, dz = keeper.pos.z - rim.z;
+    if (keeper && keepFloor) {
+      const dx = keeper.pos.x - keepFloor.x, dz = keeper.pos.z - keepFloor.z;
       const now = Math.hypot(dx, dz);
       if (now > keepDist0 + 1e-3) {
         const k = keepDist0 / now;
-        keeper.pos.x = rim.x + dx * k;
-        keeper.pos.z = rim.z + dz * k;
+        keeper.pos.x = keepFloor.x + dx * k;
+        keeper.pos.z = keepFloor.z + dz * k;
       }
     }
     const resting = this.ballMode === "pause" || this.ballMode === "freethrow"
@@ -615,8 +566,7 @@ export class Game {
       p.tickMotion(dt, resting);   // 実速度を計測、疲労のドレイン/回復
       p.updateLegs(dt);            // 計測速度から歩き/走りの脚サイクル
     }
-    // ベンチは座って回復し、小さな個人的な仕草でボールを見る — 歓声中
-    // (updateBenchCheer がアニメ)や交代の歩行中(目でボールを追うだけ)を除く
+    // ベンチは座って回復し、ボールを見る（歓声中/交代歩行中を除く）
     if (this.ballMode !== "finale") {   // フィナーレが全員をフロア外で管理する
       for (let t = 0; t < 2; t++) {
         const cheering = this.cheerT[t] > -1.6;   // updateBenchCheer の収束ウィンドウに合わせる
@@ -636,19 +586,12 @@ export class Game {
     syncAll(this);
   }
 
-  /** シミュを進めずに論理状態をメッシュへ反映する — 試合を保留したまま試合前の
-   *  カメラツアーが選手を描画する。 */
+  /** シミュを進めずに論理状態をメッシュへ反映する。 */
   syncVisuals(): void { syncAll(this); }
 
   // ---- ライブプレー(ボール保持中) ---------------------------------------
 
-  // 相対的なボール保持の攻防: 守備者の手(反応/敏捷/守備) 対 ハンドラーの
-  // コントロール(D精度/技術 + ドリブルキープ)。>0 なら守備者がボール争いで
-  // 勝っている — 下手なハンドラー対素早い手なら失い、上手いハンドラー対弱い手なら
-  // 決して失わない。はたきに関する全てがこの差でスケールするので、同じハンドラーでも
-  // 弱い相手には安全、強い相手には危うい。
-  // ドリブルが手元近くに上がっていれば true(安全)、床に落ちていれば false(露出)。
-  // リズム — どれだけ頻繁に手元にあるか — は D精度。
+  // ドリブルが手元近くに上がっていれば true(安全)、床に落ちていれば false(露出)。リズムは D精度。
   ballInHand(h: Player): boolean {
     return Math.abs(Math.cos(Math.PI * h.dribblePhase)) > 0.5;
   }
@@ -658,15 +601,13 @@ export class Game {
     return this.teamPlayers(1 - h.team)[h.slot];
   }
 
-  // ライブボールでのポゼッション交代後、ボールがバックコートにあれば速攻ウィンドウ
-  // を開く(守備をフロアで抜き去る本物のチャンス)。
+  // ライブでのポゼッション交代後、ボールがバックコートなら速攻ウィンドウを開く。
   maybeStartPush(): void {
     const h = this.handler;
     if (h && !this.frontT && this.attackSign(h.team) * h.pos.z < 6) this.pushT = 4.5;
   }
 
-  // 自由に選べる時の攻撃サイドを選ぶ: 利き手が主導、逆手頻度が反対側へ行くのを
-  // どれだけ厭わないかを決める。
+  // 攻撃サイドを選ぶ: 利き手が主導、逆手頻度で反対側も選ぶ。
   pickSide(h: Player): number {
     return chance(h.strongSideBias()) ? h.strongSide() : -h.strongSide();
   }
@@ -684,13 +625,8 @@ export class Game {
     h.driveTarget.set(rim.x + lx * off, 0, rim.z + lz * off);
   }
 
-  // リム→ハンドラーの線に沿って、リムから `standoff` メートル外の点にハンドラーを
-  // 向ける(バスケットへドライブするが手前で止まる)。
-  // (tx,tz) へのまっすぐな経路上に立つ体を避けて回る: 前方の通路の最初の数メートルに
-  // 別の選手がいる時、接触に突っ込んで衝突の押しで処理させる代わりに、その脇の
-  // ステップ地点を狙う。意図的な接触の動き(ポストのグラインド、スクリーン、
-  // オンボールの攻防)はこれを呼ばない。`opponentsOnly` は味方をかすめる(スクリーン、
-  // ハンドオフ)のを対象外にする。
+  // (tx,tz) への経路上に立つ体を避けて回る。意図的な接触の動きはこれを呼ばない。
+  // `opponentsOnly` は味方(スクリーン/ハンドオフ)を対象外にする。
   steerAround(p: Player, tx: number, tz: number, opponentsOnly = false): { x: number; z: number } {
     const dx = tx - p.pos.x, dz = tz - p.pos.z;
     const dist = Math.hypot(dx, dz);
@@ -708,13 +644,10 @@ export class Game {
       if (t < bestT) { bestT = t; ob = q; obLat = lat; }
     }
     if (!ob) return { x: tx, z: tz };
-    // ブロッカーがまだ寄せていない側を通す(逸れがフレーム毎にちらつかないよう
-    // 決定論的なタイブレーク)
+    // ブロッカーがまだ寄せていない側を通す（決定論的なタイブレーク）
     const side = obLat > 0.05 ? -1 : obLat < -0.05 ? 1 : (p.idx % 2 ? 1 : -1);
     const sx = ob.pos.x - uz * side, sz = ob.pos.z + ux * side;
-    // かわされた守備者が応じる: 一拍、新しいレーンの入り口を塞ぐため横へスライド
-    // する(runDefense がスライドを実行) — 両者の動きが accelToward/plant を通る
-    // ので、速い方が勝つステップの勝負
+    // かわされた守備者が応じる: 一拍、新レーンの入口を塞ぐため横へスライド(runDefense が実行)
     if (this.ballMode === "held" && ob.team !== p.team && ob.team !== this.possession) {
       ob.wallT = Math.max(ob.wallT, 0.25);
       ob.wallX = sx;
@@ -724,32 +657,27 @@ export class Game {
   }
 
   setDrive(h: Player, rimFloor: Vector3, standoff: number): void {
-    const dx = h.pos.x - rimFloor.x, dz = h.pos.z - rimFloor.z;
-    const len = Math.hypot(dx, dz) || 1;
-    h.driveTarget.set(
-      rimFloor.x + (dx / len) * standoff,
-      0,
-      rimFloor.z + (dz / len) * standoff,
-    );
+    const t = towardPoint(rimFloor.x, rimFloor.z, h.pos.x, h.pos.z, standoff);
+    h.driveTarget.set(t.x, 0, t.z);
+  }
+
+  /** ショットクロックの部分リセット(下限 SHOT_CLOCK_PARTIAL)。 */
+  partialShotClock(): void {
+    this.shotClock = Math.max(this.shotClock, SHOT_CLOCK_PARTIAL);
   }
 
   // ---- アクション --------------------------------------------------------
 
-  // シュート決断はチャージ(ギャザー)を開始する — 放つ前に一拍ボールを溜める。
-  // ウィンドアップは遠距離/低い S技術 ほど長く、キャッチ&シュートで最短。この
-  // ギャザーが、マークする選手がシュートを読んでクローズアウトしてコンテストできる
-  // ウィンドウ(updateCharge 参照)。実際の成功率/ブロック/放ちはリリース時
-  // (releaseShot)に起きる。
+  // シュート決断はチャージ(ギャザー)を開始する — 放つ前に一拍溜める。
+  // この間に守備がコンテストできる(updateCharge)。成功率/ブロック/放ちはリリース時(releaseShot)。
   chargeT = 0;
   chargeShooter: Player | null = null;
   chargeDHoop = 0;
   chargeDDef = 0;
   shotWindup = 0;   // 放たれるシュートのギャザー長(tryBlock 用)
 
-  // `target`(シューター/ボール)へのシュートに跳んで挑む。正面で正対(小さな隙間)
-  // → 通常の垂直ジャンプで最大の高さ。横にずれている → シュートへの斜めの跳躍:
-  // 軌道に手を掛けるため水平にランジし、高さを射程と引き換える(低いジャンプだが
-  // 「何とか止める」)。
+  // target へのシュートに跳んで挑む。正対なら垂直ジャンプで最大の高さ、
+  // 横にずれていれば斜めにランジ(高さを射程と引き換え)。
   contestLeap(d: Player, target: { x: number; z: number }, baseHeight: number, dur: number): void {
     const gx = target.x - d.pos.x, gz = target.z - d.pos.z;
     const gap = Math.hypot(gx, gz);
@@ -762,8 +690,7 @@ export class Game {
 
   // ---- ファウル & フリースロー -------------------------------------------
 
-  // シーンを一瞬凍結(デッドボール)し、次のフェーズを走らせる。プレー切り替え前に
-  // 得点やファウルを把握させる。
+  // シーンを一瞬凍結(デッドボール)し、次のフェーズを走らせる。
   pauseThen(seconds: number, next: () => void): void {
     this.pauseT = seconds;
     this.pauseNext = next;
@@ -774,8 +701,7 @@ export class Game {
     // 得点後はボールがネットを抜けて床でバウンドする。それ以外は静かに落ち着くだけ
     if (this.ballFalling) stepBallFreeFlight(this, dt);
     else this.ball.pos.y = Math.max(0.3, this.ball.pos.y - 3 * dt);
-    // アウトオブバウンズ: スロー役がアナウンス中にスポットへ歩いていく
-    // (tickMotion/updateLegs が移動位置から歩行をアニメ)
+    // アウトオブバウンズ: スロー役がスポットへ歩いていく
     if (this.inbound.oobWalker) {
       moveToward2D(this.inbound.oobWalker.pos, this.inbound.oobSpot.x, this.inbound.oobSpot.z,
         this.inbound.oobWalker.runSpeed * 0.6 * dt);
@@ -790,8 +716,7 @@ export class Game {
     }
   }
 
-  // ボールを自由に落下する争奪可能な状態にする。`offense` はこぼれた時に攻撃して
-  // いたチーム(リバウンド表示/クロックを決める)。
+  // ボールを争奪可能なルーズ状態にする。`offense` はこぼれた時に攻撃していたチーム。
   goLoose(offense: number, timeout: number,
                   opts: { rebound?: boolean; fromRim?: boolean; stealBy?: Player | null; victim?: Player | null; grabAfter?: number; tip?: boolean } = {}): void {
     this.looseOff = offense;
@@ -799,53 +724,46 @@ export class Game {
     this.looseTips = 0;
     this.looseIsRebound = opts.rebound ?? false;
     this.looseFromTip = opts.tip ?? false;
-    // ボールはリム由来か(本物のリバウンド)? その時だけ攻撃側の確保が
-    // ショットクロックをリセット(部分値へ)。ブロック/はたき/ファンブルはリムに
-    // 当たっていないので、攻撃側はクロックを回したままプレー続行 — リセットなし
-    // (NBAルール7: 14秒リセットにはリム接触が必要)。
+    // リム由来のリバウンドのみ、攻撃側確保でショットクロックをリセット。
+    // ブロック/はたき/ファンブルはリセットなし。
     this.looseFromRim = opts.fromRim ?? false;
     this.looseStealBy = opts.stealBy ?? null;
     this.looseStealVictim = opts.victim ?? null;
     this.looseAge = 0;
-    this.looseGrabAfter = opts.grabAfter ?? 0;  // 誰かが確保できる前に、ボールが目に見えて自由な一拍
+    this.looseGrabAfter = opts.grabAfter ?? 0;  // 確保できる前の、目に見えて自由な一拍
     this.handler = null;
     this.ballMode = "loose";
     for (const p of this.players) p.touchCool = 0;
-    // ボールがこぼれた反応: 全員が反応して追うまで一拍必要で、反応がその長さを
-    // 決める。反応の速い選手が先に飛びつき、遅い選手はまだ振り向いている途中 —
-    // 争奪はもはや最も近くに立っていた者だけが勝つのではない。(reactionLag ≈0.6
-    // エリート .. ≈1.35 低い。)
+    // ボールがこぼれた反応: 反応の速い選手が先に飛びつく(reactionLag で遅延)。
     for (const p of this.players) p.looseReactT = reactionLag(p);
   }
 
-  // ミス後、ボールはリムに跳ねてライブになる: 重力で落ち、手が届く者がタップ
-  // または掴む(updateLoose 参照)。
+  // ミス後、ボールはリムに跳ねてライブになる(updateLoose 参照)。
   startRebound(): void {
     const rim = this.attackRim(this.possession);
     this.ball.pos.set(rim.x + rand(-0.3, 0.3), RIM.height + 0.1, rim.z + rand(-0.2, 0.2));
     // リング(鉄)から: 少し上へ、その後外側へ床に向かって
     this.ball.vel.set(rand(-3.4, 3.4), rand(1.2, 3.0), -Math.sign(rim.z || 1) * rand(0.8, 3.6));
-    this.goLoose(this.possession, 2.6, { rebound: true, fromRim: true });   // リングから出た
+    this.goLoose(this.possession, 2.6, { rebound: true, fromRim: true });
 
     // ビッグ(とリム直下の誰でも)がボードを争って跳ぶ
-    const rimFloor = this.attackFloor(this.possession);
+    this.crashReboundJump(this.attackFloor(this.possession));
+  }
+
+  // リム至近の選手(ビッグは広め)がリバウンドへ跳ぶ。
+  crashReboundJump(rimFloor: Vector3): void {
     for (const p of this.players) {
       const d = dist2D(p.pos, rimFloor);
       if (d < 2.8 && (this.isBig(p) || d < 1.4)) p.jump(this.isBig(p) ? 0.7 : 0.5, 0.6);
     }
   }
 
-  // ビッグ(パワーフォワード&センター)がリバウンドに飛び込みスクリーンを掛ける。
-  // ポジションのラベルが駆動するので、エディタでのロール変更が反映される。
+  // ビッグ(PF/C)か。ポジションラベルで判定。
   isBig(p: Player): boolean {
     return p.role === "PF" || p.role === "C";
   }
 
-  // この選手がハーフコートのセットでローブロックに属するか。ビッグはゴールに
-  // 住む — 本物のストレッチ脅威だけが代わりにペリメーターへ広がる(このDBの
-  // 圧縮スケールでは稀: C の L精度 は 65..83 なので基準は 75+、または 70+ の
-  // ロングレンジ)。ポスト/ペイントのスペシャリストはポジションに関わらずそこに
-  // 陣取る。
+  // この選手がローブロックに属するか。ビッグはゴールに住み、ストレッチ脅威のみペリメーターへ広がる。
   prefersPost(p: Player): boolean {
     // 指定された ストレッチ は能力値がどうあれポストせずフロアを広げる。
     // プレイメイキングビッグ はブロックでなくトップから働く。
@@ -857,9 +775,7 @@ export class Game {
     const acc = rate(p.attr.threeAcc);
     const stretch = acc >= 0.75 || (p.has("range") && acc >= 0.7);
     if (stretch) return false;
-    // ローポストのアンカーは一度に1人: C がポスト型なら、PF は代わりにフロアを
-    // 広げる — ゴールに2人のビッグを置くとペイントがスクラムになる(上位で
-    // ポスト/ペイントを持つ PF はそれでもそこを取る)
+    // ローポストのアンカーは一度に1人: C がポスト型なら PF はフロアを広げる
     if (p.role === "PF") {
       const c = this.teamPlayers(p.team).find((q) => q.role === "C");
       if (c && c !== p && this.prefersPost(c)) return false;
@@ -867,23 +783,18 @@ export class Game {
     return true;
   }
 
-  // ポゼッションが新たに始まる時に選手が取るフォーメーションスポット: ポストの
-  // ビッグは自分のブロックへ直行(PF は左、C は右)、それ以外は自分の枠に対応する
-  // ペリメーターのスポットを取る。
+  // フォーメーションスポット: ポストのビッグはブロックへ(PF=左, C=右)、他は自分の枠のスポット。
   homeSpotIdx(p: Player): number {
     if (this.isBig(p) && this.prefersPost(p)) return p.slot === 3 ? 5 : 6;
     return p.slot;
   }
 
-  // シュート時、ビッグ(PF/C)は激しくリバウンドに飛び込み、ガード/ウイングは
-  // 一歩下がって長いリバウンドやトランジションで戻る準備をする。
+  // シュート時、ビッグはリバウンドに飛び込み、ガード/ウイングは下がって戻る準備をする。
   crashBoards(dt: number): void {
     const rimFloor = this.attackFloor(this.possession);
     for (const p of this.players) {
-      // フィニッシャーはドライブの勢いを空中へ持ち込む: 走っていた速度で踏み切り、
-      // その速度は跳躍中に減衰する。先に減速して踏み切る(止まってから跳ぶように
-      // 見える)のでなく、踏み切りを勢いのまま通過する。ギャザー地点への軽い
-      // ステアリングが彼を巻き込んでリムでフィニッシュさせる。ボールはフープへ上がる。
+      // フィニッシャーはドライブの勢いを空中へ持ち込む(踏み切り速度が跳躍中に減衰)。
+      // ギャザー地点への軽いステアリングでリムへフィニッシュ。
       if (p === this.shooter && this.ballMode === "shot" && this.shooterFinishing) {
         const decay = Math.exp(-dt / 0.33);     // 勢いが抜けていく(τ≈0.33s)
         this.finishVX *= decay;
@@ -897,15 +808,11 @@ export class Game {
       // フォロースルー中のシューターは回復するまでリバウンドに飛び込めない
       if (p.rooted) { this.clampCourt(p.pos); continue; }
       const big = this.isBig(p) || p.has("centerSpot"); // センター: ビッグのように飛び込む
-      // ビッグはリムへ飛び込む。ウイングはリバウンド範囲からサポート。ポイントガードは
-      // 速攻を止めるセーフティとして後ろに残る
+      // ビッグはリムへ飛び込む。ウイングはサポート、PG は速攻を止めるセーフティとして残る。
       const standoff = big ? 0.8 : (p.role === "PG" ? 6.5 : 4.2);
-      const dx = p.pos.x - rimFloor.x, dz = p.pos.z - rimFloor.z;
-      const len = Math.hypot(dx, dz) || 1;
-      const tx = rimFloor.x + (dx / len) * standoff;
-      const tz = rimFloor.z + (dz / len) * standoff;
+      const t = towardPoint(rimFloor.x, rimFloor.z, p.pos.x, p.pos.z, standoff);
       const speed = p.accelSpeed(dt, big ? 0.95 : 0.6); // ビッグは踏み込み、ガードは下がって残る
-      moveToward2D(p.pos, tx, tz, speed * dt);
+      moveToward2D(p.pos, t.x, t.z, speed * dt);
       this.clampCourt(p.pos);
     }
   }
@@ -914,21 +821,20 @@ export class Game {
   throwIn(inb: Player): void {
     const r = this.inbound.receiver ?? this.inbound.pickReceiver(inb);
     this.passFrom.set(inb.pos.x, 1.3, inb.pos.z);
-    this.passCatch.set(r.pos.x, 1.3, r.pos.z);   // 飛行が安定するよう固定の目標(どのパスとも同様)
-    this.passMiss = 0; this.passMissY = 0; // 妨害のないアウトレットはきれいに届く — 散らばりなし
+    this.passCatch.set(r.pos.x, 1.3, r.pos.z);   // 固定の目標
+    this.passMiss = 0; this.passMissY = 0; // 散らばりなし
     this.passStyle = "chest";              // スローインはバウンド/ジャンプのスタイルを継がない
     this.passTo = r;
     this.passer = inb;
     this.passT = 0;
-    // P速度 が他のパス同様アウトレットを走らせる。ロング はフラットで速く放つ
+    // P速度 がアウトレットの速さを決める。ロング はフラットで速く放つ
     const spd = PASS_SPEED * (0.6 + rate(inb.attr.passSpd) * 0.95) * (inb.has("longThrow") ? 1.3 : 1);
     this.passDur = Math.max(0.3, dist2D(inb.pos, r.pos) / spd);
     this.passSteal = null;                 // スローインはここでは奪われない
     this.ballMode = "pass";
     this.handler = null;
     this.inbound.receiver = null;
-    // スロー役は他のパサー同様リリースの間その場に固定される — フォロースルーが
-    // 終わるまでコートへ踏み込めない
+    // スロー役はリリースの間その場に固定(フォロースルーが終わるまで踏み込めない)
     inb.coolT = rand(0.5, 0.9) * inb.recoveryMult();
   }
 
@@ -955,22 +861,17 @@ export class Game {
       p.screenT = 0;
       p.openRollT = 0;
     }
-    // ポゼッション交代は保留中のアシストを終わらせ、ボールは改めて運び上げ/
-    // フロントコートで定着させる必要がある
+    // ポゼッション交代は保留中のアシストを終わらせ、フロントコート定着をリセットする
     this.assistFrom = this.assistTo = null;
     this.frontT = false;
     this.pushT = 0;   // 新しいポゼッションは以前の速攻ウィンドウをクリア
     this.screen.clear();  // ライブのピック&ロールのカバレッジはポゼッションとともに終わる
   }
 
-  // 守備側はこのポゼッションの構えを決める: 運び上げにプレスをかける? ハーフコート
-  // ゾーンで構える(2-3 はペイントを固め、3-2 はペリメーターを守る)? それとも
-  // 素のマン(ピック&ロールのカバレッジが適用される)?
+  // 守備側のこのポゼッションの構え: プレス? ゾーン(2-3=ペイント/3-2=ペリメーター)? 素のマン?
   schemePoss = -1;
 
-  // 飛び出し: ライブボールのターンオーバー時、新しい攻撃側のリークアウト走者が
-  // 守備が戻る前に即座に自分のバスケットへ走り出す。ライブでのポゼッション交代
-  // 箇所で resetMotion()(cutting をクリアする)の後に呼ぶ。
+  // 飛び出し: ターンオーバー時、リークアウト走者が即座に自バスケットへ走り出す。resetMotion() の後に呼ぶ。
   leakOut(): void {
     for (const p of this.teamPlayers(this.possession)) {
       if (p === this.handler || !p.has("leakOut")) continue;
@@ -983,35 +884,27 @@ export class Game {
 
   // ---- ターンオーバー ----------------------------------------------------
 
-  // スティール試行はボールを守備者へワープさせず弾いてルーズにするので、視聴者は
-  // ボールがこぼれ、追いかけられるのを見る。巧みな盗り手は自分の方へ弾く(そして
-  // ハンドラーはバランスを崩し、一拍掴めない)ので大抵は確保する。弱いはたきは
-  // 誰にでも取れる形でこぼす。スティールとターンオーバーは守備が実際に確保した時に
-  // 初めて加算される(secureLoose で処理)。
+  // スティール試行はボールを弾いてルーズにする。巧みな盗り手は自分の方へ弾き大抵確保する。
+  // スティール/ターンオーバーは守備が確保した時に加算(secureLoose)。
   steal(d: Player): void {
     const h = this.handler;
     if (!h) return;
     // どれだけきれいに守備者の方へ弾かれるか(0=散らばる、~0.7=ぴったり相手へ)。
-    // 以前より低く抑え、ボールが弾けて2人の間の床でバウンドする — 争う本物の
-    // ルーズボール — ようにする。盗り手の手へまっすぐ吸い込まれる(魔法のような
-    // ゴリ押し確保に見える)のを避ける。
     const grip = clamp(0.2 + rate(d.attr.reaction) * 0.55 - rate(h.attr.handling) * 0.3, 0.05, 0.7);
     const ax = d.pos.x - h.pos.x, az = d.pos.z - h.pos.z;
     const len = Math.hypot(ax, az) || 1;
     const ux = ax / len, uz = az / len;            // ハンドラー→守備者
-    // 下方向かつ外へ弾かれる — 低く始まり(腰の辺りのドリブルからはたき出される)
-    // 床で跳ねるので、ボールは手へ浮くのでなく明らかにオフボールに見える
-    const power = rand(2.2, 5.5);   // 広い散らばり — 軽い引っかけ 対 強いはたき出し
+    // 下方向かつ外へ弾かれる — 低く始まり床で跳ねる
+    const power = rand(2.2, 5.5);   // 軽い引っかけ 〜 強いはたき出し
     this.ball.pos.set(h.pos.x + ux * 0.35, 0.75, h.pos.z + uz * 0.35);
     this.ball.vel.set(
       ux * power * grip + rand(-2.2, 2.2) * (1 - grip),   // 強い水平方向の飛散
       rand(-0.2, 0.6),                             // 低く — ディグであってロブではない
       uz * power * grip + rand(-2.2, 2.2) * (1 - grip),
     );
-    // 長めの自由な一拍(0.35 → 0.55)で、誰かが確保する前にはたき出しの争奪が
-    // 実際に見えるようにする — その間、2人のダイバーが手を伸ばす
+    // 自由な一拍で、確保前にはたき出しの争奪が見えるようにする
     this.goLoose(h.team, 1.6, { stealBy: d, victim: h, grabAfter: 0.55 });
-    d.digReach(new Vector3(this.ball.pos.x, 0.9, this.ball.pos.z));   // ランジ — 今すぐはたきに手を掛ける
+    d.digReach(new Vector3(this.ball.pos.x, 0.9, this.ball.pos.z));   // ランジ
     d.defWin("steal");                             // 争奪が片付いたら祝いのガッツポーズ
     h.touchCool = 0.5;                             // バランスを崩された — 即座には掴めない
   }
@@ -1024,8 +917,7 @@ export class Game {
   finaleWalkers: { p: Player; tx: number; tz: number }[] = [];   // フロアで喜ぶ勝者
   finaleTrudge: { p: Player; tx: number; tz: number }[] = [];    // 落胆して退く敗者
 
-  /** 試合終了ブザー: 勝ったベンチがフロアへなだれ込んで5人を囲み、負けた5人は
-   *  うつむいて自ベンチへ重い足取りで退く(負けたベンチは既に着席済み)。引き分けは
-   *  両チームがその場で、より控えめに祝う。バナーに "○○ 勝利!" が流れる。 */
+  /** 試合終了ブザー: 勝ったベンチがフロアへなだれ込み、負けた5人は自ベンチへ退く。
+   *  引き分けは両チームがその場で祝う。バナーに "○○ 勝利!" が流れる。 */
 
 }

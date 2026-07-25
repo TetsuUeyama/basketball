@@ -1,32 +1,27 @@
 // 純粋な「評価プリミティブ」群 — コンテストの質、シュート射程、反応時間、溜め時間
-// などを算出する。ゲーム状態は一切持たず、入力は全て引数で受け取る。これにより
-// 認知層(decide*)と効果層(シュート成否・コンテスト)が同一の計算式を共有できる。
-// game.ts からレイヤ分割の第一弾として抽出（workPlan.md 参照）。
+// などを算出する。ゲーム状態を持たず入力は全て引数で受け取る純粋関数。
 import { Player } from "./objects/player/player";
-import { RIM, THREE_DIST } from "./config";
-import { rate } from "./attributes";
-import { clamp, rand } from "./util";
+import { RIM, THREE_DIST, BURST_SPEED } from "./config";
+import { rate, clamp, rand } from "./util";
 
 // L速度(3P射程)の基準点: 75 → 3Pライン、95 → センターライン（これが上限）。
 const SHOOT_ARC = THREE_DIST;   // 6.75m（3Pライン）
 const SHOOT_HALF = RIM.z;       // 13.0m（リング→センターライン）
 
-// この守備者が「このシューター」に対してどれだけリムを守れるか — ロールラベルに
-// 依らず、位置と体格のみ: シューターに対する高さ、ヘッド(リム保護)、ジャンプ、守備。
-// 長身のショットブロッカーは高スコア、スイッチした小さいガードは低スコア。平均的な
-// コンテストが ≈0 になるよう中心化。
+// この守備者がこのシューターに対してどれだけリムを守れるか — 位置と体格のみで算出
+// （高さ、ヘッド=リム保護、ジャンプ、守備）。平均的なコンテストが ≈0 になるよう中心化。
 export function rimProtect(d: Player, shooter: Player): number {
   return clamp(
     (d.height - shooter.height) * 0.5
     + rate(d.attr.dunk) * 0.35            // ヘッド = リム保護 / ショットブロック
     + rate(d.attr.jump) * 0.25
     + rate(d.attr.defense) * 0.35
-    - 0.505,                              // 基準: 平均的なコンテストが0付近になるよう
+    - 0.505,                              // 平均的なコンテストが0付近になる基準
     -0.4, 0.6);
 }
 
 // この守備者がジャンパーをどれだけコンテストできるか — クローズアウトの速さ(反応/敏捷)、
-// 守備、わずかな高さ。平均的なコンテストが ≈0 になるよう中心化。
+// 守備、高さ。平均的なコンテストが ≈0 になるよう中心化。
 export function perimContest(d: Player, shooter: Player): number {
   return clamp(
     rate(d.attr.reaction) * 0.35 + rate(d.attr.agility) * 0.3 + rate(d.attr.defense) * 0.5
@@ -68,8 +63,7 @@ export function gatherFor(p: Player, dHoop: number): number {
   return over <= 0 ? 0 : over * 0.22;   // 射程超過1mあたり約0.22秒
 }
 
-// ディープ3の資格: L精度とL速度がともに90以上のエリートだけがラインの遥か外から
-// 放つ価値がある。それ以外の深い3は確率を捨てるだけ。
+// ディープ3の資格: L精度とL速度がともに90以上のエリートか。
 export function deepThreeOK(p: Player): boolean {
   return p.attr.threeAcc >= 90 && p.attr.threeRange >= 90;
 }
@@ -107,12 +101,35 @@ export function jukeDiscipline(d: Player): number {
     + rate(d.attr.reaction) * 0.25 + (d.has("manMark") ? 0.1 : 0);
 }
 
-// 剥がしの優位度 = 守備の手(反応/敏捷/守備＋スライディング) − ハンドラーの保持力
-// (D精度/技術＋ドリブルキープ)。正なら守備有利。スティール/ディグ確率のベースに使う。
-export function stripEdge(d: Player, h: Player): number {
-  const hands = rate(d.attr.reaction) * 0.45 + rate(d.attr.agility) * 0.35 + rate(d.attr.defense) * 0.2
+// シュート脅威: 3Pとミドルのうち高いほうのS精度係数(0..1)。
+export function shotThreat(p: Player): number {
+  return Math.max(rate(p.attr.threeAcc), rate(p.attr.midAcc));
+}
+
+// バースト持続時間(秒): 距離を BURST_SPEED で詰める想定に揺らぎと優位度延長を掛ける。
+export function burstTime(dist: number, edge: number): number {
+  return clamp(dist / BURST_SPEED, 0.5, 1.3) * rand(0.95, 1.15)
+    * (1 + Math.max(0, edge) * 0.2);
+}
+
+// 守備の手: 反応/敏捷/守備＋インターセプター特能。スティール・ポーク確率の共通ベース。
+export function defHands(d: Player): number {
+  return rate(d.attr.reaction) * 0.45 + rate(d.attr.agility) * 0.35 + rate(d.attr.defense) * 0.2
     + (d.has("interceptor") ? 0.15 : 0);
-  const secure = rate(h.attr.dribbleAcc) * 0.62 + rate(h.attr.handling) * 0.38
+}
+
+// ボール保持力: D精度/技術＋ドリブルキープ特能。剥がされ耐性の共通ベース。
+export function ballSecurity(h: Player): number {
+  return rate(h.attr.dribbleAcc) * 0.62 + rate(h.attr.handling) * 0.38
     + (h.has("keepDribble") ? 0.28 : 0);
-  return hands - secure;
+}
+
+// コンテスト踏切の跳躍高さ(m)。
+export function leapHeight(d: Player): number {
+  return 0.55 + rate(d.attr.jump) * 0.3;
+}
+
+// 剥がしの優位度 = 守備の手 − ハンドラーの保持力。正なら守備有利。
+export function stripEdge(d: Player, h: Player): number {
+  return defHands(d) - ballSecurity(h);
 }

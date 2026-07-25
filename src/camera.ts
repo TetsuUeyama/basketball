@@ -1,19 +1,19 @@
 import { Scene, ArcRotateCamera, Vector3 } from "@babylonjs/core";
 import { lerp } from "./util";
 
-// ボールをサイドラインに沿って滑らかに追う放送スタイルのカメラ。
-// ユーザーはドラッグ/ズーム可能。オートフォローは注視点だけを調整する。
+// イントロで1人を撮る被写体（Player が満たす）。
+export type IntroSubject = { pos: { x: number; z: number }; team: number; faceDirWorld(): { x: number; z: number } };
+
+// ボールを追う放送スタイルのカメラ。ドラッグ/ズーム可、オートフォローは注視点のみ調整。
 export class BroadcastCamera {
   readonly cam: ArcRotateCamera;
   autoFollow = true;
   private targetX = 0;
   private targetZ = 0;
   private targetY = 1.2;
-  // 試合前の選手紹介ツアー: true の間、introShot() が毎フレーム カメラを支配し、
-  // 放送フォローは停止する
+  // 選手紹介ツアー中は true。introShot() がカメラを支配する。
   private introMode = false;
-  // クラブ選択のショーケース: true の間、選んでいるチームを固定フレームで映し続ける
-  // （そのユニフォームが画面に映り、色替えが目に見えるようにするため）
+  // クラブ選択のショーケース中は true。選択チームを固定フレームで映す。
   private showcase = false;
 
   constructor(scene: Scene, canvas: HTMLCanvasElement) {
@@ -27,32 +27,43 @@ export class BroadcastCamera {
     this.cam.panningSensibility = 0;
   }
 
-  /** `followBall`（飛行中／着地直後のディープショット）: ボール自体を追い、狙いを
-   *  その弾道方向へ持ち上げることで、放物線とリムがフレームに収まり、決まるかどうかを
-   *  視聴者が見られるようにする。それ以外: 放送のワイド。 */
+  /** イントロモードに入る（寄りの構図を許可）。 */
   private enterIntro(): void {
     if (this.introMode) return;
     this.introMode = true;
-    this.cam.lowerRadiusLimit = 2;     // 寄りの構図を許可する(endIntro で復元)
+    this.cam.lowerRadiusLimit = 2;     // 寄りの構図を許可（endIntro で復元）
   }
 
-  /** 試合前イントロで選手を1人フレーミングする: カメラは、その選手の顔が実際に
-   *  レンダリングされる側（faceDirWorld = 目メッシュのワールド上の側。numberSide の
-   *  慣習に左右されない）に数メートル離れて目線の高さで構え、体を狙う — 少し引いた
-   *  ポートレートで全身がフレームに入る — そしてホールドの間（`k` 0→1）にゆっくり
-   *  寄る。ツアー実行中は毎フレーム呼ぶ。 */
-  introShot(p: { pos: { x: number; z: number }; faceDirWorld(): { x: number; z: number } },
-            k: number, dir?: { x: number; z: number }): void {
+  /** イントロで選手を1人フレーミングする。顔側（faceDirWorld）から少し引いて構え、
+   *  k(0→1) でゆっくり寄る。others を渡すと遮蔽回避角を選ぶ。毎フレーム呼ぶ。 */
+  introShot(p: IntroSubject, k: number, others?: IntroSubject[]): void {
     this.enterIntro();
-    const dist = 4.3 - k * 0.7;        // 少し引き — 全身、ゆっくり寄る
-    const f = dir ?? p.faceDirWorld(); // 呼び出し側が遮蔽回避済みの角度を渡すことがある
+    const dist = 4.3 - k * 0.7;        // 少し引き、ゆっくり寄る
+    const f = others ? this.framingDir(p, others) : p.faceDirWorld();
     this.cam.target.set(p.pos.x, 1.05, p.pos.z);
     this.cam.setPosition(new Vector3(p.pos.x + f.x * dist, 1.7, p.pos.z + f.z * dist));
   }
 
-  /** ベンチの列全体を一度にフレーミングする、引きの1カット: カメラは、着席した全員が
-   *  収まるだけコート側へ下がり、列を中央に据え、ホールドの間にゆっくり寄る。着席した
-   *  選手は真っ直ぐ座り、ボールの方ではなくレンズを見る（チーム写真）。 */
+  /** 被写体の顔側で、他の選手がレイに被らない最初の角度を選ぶ（正面→±31°→±54°）。密集時は正面。 */
+  private framingDir(p: IntroSubject, others: IntroSubject[]): { x: number; z: number } {
+    const f = p.faceDirWorld();
+    // 回り込む向きはチームで逆（0=右回り / 1=左回り）
+    const s = p.team === 0 ? 1 : -1;
+    for (const a of [0, 0.55 * s, -0.55 * s, 0.95 * s, -0.95 * s]) {
+      const d = { x: f.x * Math.cos(a) - f.z * Math.sin(a), z: f.x * Math.sin(a) + f.z * Math.cos(a) };
+      const blocked = others.some((q) => {
+        if (q === p) return false;
+        const rx = q.pos.x - p.pos.x, rz = q.pos.z - p.pos.z;
+        const t = rx * d.x + rz * d.z;                 // レイに沿った成分
+        if (t < 0.4 || t > 4.4) return false;          // 被写体とレンズの間にいない
+        return Math.abs(rx * d.z - rz * d.x) < 0.65;   // レイに近すぎる = かぶり
+      });
+      if (!blocked) return d;
+    }
+    return f;   // 密集 — 正面で妥協
+  }
+
+  /** ベンチの列全体を1カットでフレーミングする。k で寄る。着席選手はレンズを向く。 */
   benchShot(players: { pos: { x: number; z: number }; faceToward(x: number, z: number): void }[],
             k: number): void {
     if (players.length === 0) return;
@@ -62,10 +73,10 @@ export class BroadcastCamera {
       minZ = Math.min(minZ, p.pos.z); maxZ = Math.max(maxZ, p.pos.z);
       sumX += p.pos.x;
     }
-    const cx = sumX / players.length;          // ベンチの列(x ≒ コートサイドの座席)
+    const cx = sumX / players.length;          // ベンチの列（x ≒ コートサイドの座席）
     const cz = (minZ + maxZ) / 2;
     const span = maxZ - minZ;
-    // 列が収まるまでコート側へ下がる(座席はフロアの方を向いている)
+    // 列が収まるまでコート側へ下がる
     const dist = Math.max(4.5, span * 0.62 + 2.4) - k * 0.5;
     const side = cx >= 0 ? -1 : 1;             // コート側から寄る
     const camX = cx + side * dist;
@@ -74,10 +85,7 @@ export class BroadcastCamera {
     this.cam.setPosition(new Vector3(camX, 2.1, cz));
   }
 
-  /** クラブ選択中、1チームを固定フレームで映し続ける: カメラはグループの前（コート中央
-   *  側）にほどほどの高さで構え、5人全員が収まるまで下がる。これによりチーム全体 — と
-   *  そのリアルタイムなユニフォーム色替え — が選択シートの上に映り続ける。ステップが開いた
-   *  ときに一度だけ呼ぶ。 */
+  /** クラブ選択中、1チームを固定フレームで映す。5人が収まるまで下がる。 */
   showcaseTeam(players: { pos: { x: number; z: number } }[]): void {
     if (players.length === 0) return;
     this.showcase = true;
@@ -91,13 +99,12 @@ export class BroadcastCamera {
     const cz = (minZ + maxZ) / 2;
     const span = Math.max(maxZ - minZ, 6);
     const dist = span * 0.95 + 6;
-    // 手前のサイドライン(−X)から見て、少し持ち上げて胸の高さを狙う。注視点はフレームの
-    // 上寄りに置き、下部のシートが選手を隠さないようにする。
+    // 手前サイドライン(−X)から胸の高さを狙う。注視点は上寄りでシートに隠れないように。
     this.cam.target.set(cx, 1.7, cz);
     this.cam.setPosition(new Vector3(cx - dist, 3.4, cz));
   }
 
-  /** ショーケースを抜けて放送のワイドへ戻る。 */
+  /** 放送のワイドへ戻る。 */
   endShowcase(): void {
     if (!this.showcase) return;
     this.showcase = false;
@@ -109,7 +116,7 @@ export class BroadcastCamera {
     this.cam.radius = 24;
   }
 
-  /** ツアー終了 — 放送のワイドとそのズーム制限を復元する。 */
+  /** ツアー終了 — 放送のワイドへ戻す。 */
   endIntro(): void {
     if (!this.introMode) return;
     this.introMode = false;
@@ -122,16 +129,16 @@ export class BroadcastCamera {
   }
 
   update(dt: number, ballX: number, ballZ: number, ballY = 1.2, followBall = false): void {
-    if (this.introMode) return;        // イントロツアーがカメラを支配する
-    if (this.showcase) return;         // クラブ選択のショーケースがカメラを支配する
+    if (this.introMode) return;        // ツアーがカメラを支配
+    if (this.showcase) return;         // ショーケースがカメラを支配
     if (!this.autoFollow) return;
     if (followBall) {
-      const e = Math.min(1, dt * 5);   // ワイドフレームより機敏に — ボールは速い
+      const e = Math.min(1, dt * 5);   // ボールは速いので機敏に
       this.targetX = lerp(this.targetX, ballX, e);
       this.targetZ = lerp(this.targetZ, ballZ, e);
       this.targetY = lerp(this.targetY, Math.min(1.2 + ballY * 0.35, 4.0), e);
     } else {
-      // 注視点をボールへ寄せる。ワイドを保つためコート中央寄りにバイアスをかける
+      // 注視点をボールへ。ワイド維持のため中央寄りにバイアス
       this.targetX = lerp(this.targetX, ballX * 0.5, Math.min(1, dt * 2));
       this.targetZ = lerp(this.targetZ, ballZ * 0.85, Math.min(1, dt * 2));
       this.targetY = lerp(this.targetY, 1.2, Math.min(1, dt * 2));

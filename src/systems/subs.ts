@@ -1,13 +1,13 @@
-// 交代の判断・実行ロジック一式。方式A: game を受け取る関数群。要否判断
-// (subDesire/matchupSubs/planSubs)に加え、実際の入れ替え(substitute)・歩行アニメ
-// (subWalkers/updateSubs)・凍結ゲート(withSubs)もここへ集約（エントリ307で Game 残置
-// から移設）。game.ts から分離（workPlan.md 参照）。
+// 交代の判断・実行ロジック一式。要否判断(subDesire/matchupSubs/planSubs)・入れ替え(substitute)・
+// 歩行アニメ(subWalkers/updateSubs)・凍結ゲート(withSubs)を集約。
 import { Player } from "../objects/player/player";
 import { QUARTERS } from "../config";
-import { STARTERS, rate, scoringPower } from "../attributes";
-import { clamp, dist2DTo, moveToward2D, rand } from "../util";
+import { STARTERS } from "../roster";
+import { scoringPower } from "../roles";
+import { rate, clamp, dist2DTo, moveToward2D } from "../util";
 import { roleFit, overallOf, refreshChoiceRanks } from "./lineups";
 import { benchSeat } from "../core/bench";
+import { pushApart } from "../core/collision";
 import type { Game } from "../game";
 
 // この選手がどれだけ交代を必要とするか: 疲れた脚、不調(TO過多で結果なし)、
@@ -194,9 +194,7 @@ export function substitute(game: Game, out: Player, sub: Player): void {
 // 全員が(安全タイムアウト付きで)配置に着いたら保留中の再開が走る。
 export function updateSubs(game: Game, dt: number): void {
   game.subT += dt;
-  // 注: ここで交代チップは保持されない — 通常どおり経過する(update() のフィード
-  // ループが HOME→AWAY の順で走る)。プレー再開は全チップが消えてから(下の再開
-  // ゲート参照)なので、ライブプレー中にチップが残ることはない。
+  // 交代チップは通常どおり経過する。プレー再開は全チップが消えてから(下の再開ゲート参照)。
   game.ball.pos.y = Math.max(0.12, game.ball.pos.y - 3 * dt);   // 床へ落ち着く
 
   const timedOut = game.subT >= 9;   // 安全上限: 歩行/フィードで試合を止めない
@@ -204,13 +202,10 @@ export function updateSubs(game: Game, dt: number): void {
   for (const w of game.subWalkers) {
     if (!timedOut && dist2DTo(w.p.pos, w.tx, w.tz) > 0.25) {
       done = false;
-      // 単純なジョグ、accelSpeed ではない: 退場者はもう `players` にいないため
-      // 実測 curSpd が更新されず、accelSpeed だと ~0 で固まる — 両歩行者が
-      // 同じ一定ペースで一緒に動く
+      // 単純なジョグで両歩行者を一定ペースで動かす(退場者は players にいないため accelSpeed 不可)
       const jog = w.p.runSpeed * 0.85 * (1 - w.p.fatigue * 0.2);
       moveToward2D(w.p.pos, w.tx, w.tz, jog * dt);
-      // 向かう先を向く(でないとベンチへ後ろ向きに走る)。脚/腕のサイクルを回して
-      // 硬直したまま滑らないようにする
+      // 向かう先を向き、脚/腕のサイクルを回す
       w.p.faceToward(w.tx, w.tz);
       w.p.twistToward(w.tx, w.tz, dt);   // プレーで残ったツイストをほどく
       w.p.curSpd = jog;
@@ -220,34 +215,16 @@ export function updateSubs(game: Game, dt: number): void {
       w.p.pos.set(w.tx, 0, w.tz);
     }
   }
-  // 入る選手と出る選手が同じ線上で位置を交換 — 歩く体を押し離し、
-  // すり抜けずに互いを(そして立っている誰かを)避けて流れるようにする
-  const MIN = 0.62;
+  // 歩く体同士を押し離し、すり抜けないようにする
   const bodies = new Set<Player>(game.players);
   for (const w of game.subWalkers) bodies.add(w.p);
-  const all = [...bodies];
-  for (let i = 0; i < all.length; i++) {
-    for (let j = i + 1; j < all.length; j++) {
-      const a = all[i], b = all[j];
-      let dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
-      let d = Math.hypot(dx, dz);
-      if (d >= MIN) continue;
-      if (d < 1e-4) { dx = rand(-1, 1); dz = rand(-1, 1); d = Math.hypot(dx, dz) || 1; }
-      const push = (MIN - d) / 2;
-      const nx = dx / d, nz = dz / d;
-      a.pos.x -= nx * push; a.pos.z -= nz * push;
-      b.pos.x += nx * push; b.pos.z += nz * push;
-    }
-  }
+  pushApart([...bodies]);
   for (const w of game.subWalkers) w.p.sync(); // 退場者は `players` を離れた — ここで sync
-  // 再開は歩行者が配置に着き、かつ交代フィード(HOME→AWAY)が完全に流れ切って
-  // 消えてから — アウェイのチップがボールがライブになる前に消え、再開へ残らない
-  // ようにする。timedOut はハード上限。
+  // 再開は歩行者が配置に着き、かつ交代フィードが消えてから。timedOut はハード上限。
   if ((done && game.subEvents.length === 0) || timedOut) {
     for (const w of game.subWalkers) {
       w.p.pos.set(w.tx, 0, w.tz);
-      // 不変条件: ベンチのヨーを持ったままコート上に立つ者はいない — 歩行フェーズが
-      // 選手をライブプレーへ戻す時に必ず強制する
+      // コート上に立つ者はベンチのヨーを持たない — ここで強制
       if (game.onCourt(w.p)) w.p.resetFacing();
       else w.p.sit();   // ベンチに着いた者は座り直す
       w.p.sync();

@@ -1,14 +1,13 @@
-// ラインナップ/ユーセージの「コーチング」判断（誰を先発させ、誰にボールを集めるか、
-// どのポジションに適格か）。方式A: Game を受け取る関数群 / Player・PlayerDef を受け取る
-// 純ヘルパ。実際の入れ替えアニメ(substitute/updateSubs)は Game 側、交代の要否判断は
-// systems/subs.ts。game.ts から分離（workPlan.md / [[game-split-optionb]] 参照）。
+// ラインナップ/ユーセージの「コーチング」判断（先発選び・使用率・ポジション適格性）。
+// 実際の入れ替えは Game 側、交代の要否判断は systems/subs.ts。
 import { Player } from "../objects/player/player";
-import { ROSTER, EXTRA_POSITIONS, rate, scoringPower, usageFromRank,
-  type PlayerDef } from "../attributes";
-import { clamp } from "../util";
+import { ROSTER, EXTRA_POSITIONS } from "../roster";
+import { type PlayerDef } from "../attributes";
+import { scoringPower, usageFromRank } from "../roles";
+import { rate, clamp } from "../util";
 import type { Game } from "../game";
 
-// 総合的な才能、誰を出場させるか選ぶ用（全能力値の平均、0..1）。
+// 総合的な才能（全能力値の平均、0..1）。
 export function overallOf(p: Player): number {
   const a = p.attr as unknown as Record<string, number>;
   let sum = 0, n = 0;
@@ -16,22 +15,15 @@ export function overallOf(p: Player): number {
   return n ? sum / n / 100 : 0.5;
 }
 
-// ポジション適格性（厳格ルール）: 選手は自分にリストされたロール、および明示的に
-// 付与された EXTRA_POSITIONS のみプレー可能。隣接も能力による代替もなし——選手が
-// 自分のものでないポジションに置かれることは決してない。スロットに適格なら 1、
-// 不適格なら 0 を返す（セレクタは 0 を「埋められない」として扱う）。
+// ポジション適格性: 自分のロールと EXTRA_POSITIONS のみ可。適格なら 1、不適格なら 0。
 export function roleFit(p: { role: string; name: string }, slot: string): number {
   if (slot === p.role) return 1;
   return (EXTRA_POSITIONS[p.name] ?? []).includes(slot) ? 1 : 0;
 }
 
 // ---- 相手を考慮した先発ラインナップ（コーチング） -------------------------
-// 各チームの13人からベスト5を、相手チームの脅威で重み付けして選ぶ: 危険な
-// インサイドのスコアラーは守備型のビッグを引き込み、強いオンボールプレッシャー
-// はより確実なハンドラーを引き込む。ROSTER[t] をインプレースで並べ替える
-// （ベスト5を先頭、PG-SG-SF-PF-C 順）。マッチアップが最初に確立されたとき
-// （エディタ表示前）に UI から呼ばれるので、ユーザーがその後自由に編集する
-// デフォルトになる——ティップオフで再実行されないため、手で組んだラインナップが上書きされることはない。
+// 各チームの13人からベスト5を相手の脅威で重み付けして選ぶ。ROSTER[t] をインプレースで
+// 並べ替える（ベスト5を先頭、PG-SG-SF-PF-C 順）。
 export function optimizeLineups(game: Game): void {
   const oppInfo = (opp: number) => {
     let bigThreat = 0;
@@ -50,19 +42,14 @@ export function optimizeLineups(game: Game): void {
   for (let team = 0; team < 2; team++) {
     const info = oppInfo(1 - team);
     const pool = ROSTER[team];
-    // 相手の脅威が状況バイアスをどれだけ強めるか（0 = 平凡な相手 → 能力で
-    // ベスト5を選ぶ。1 = 極端 → マッチアップ項が実際の能力差を上回り、
-    // 選択を入れ替えうる）。
+    // 相手の脅威が状況バイアスをどれだけ強めるか（0..1）。
     const bigDom = clamp((info.bigThreat - 0.45) / 0.30, 0, 1);   // 支配的な相手ビッグ
     const heavyPress = clamp((info.press - 0.50) / 0.40, 0, 1);   // 強いオンボールプレッシャー
     const value = (d: PlayerDef, slot: string): number => {
-      // ここに到達するのは適格な選手のみ（下のゲートで残りは除外）。副次的な
-      // (EXTRA_POSITIONS) ポジションより主ポジションを優先する。能力と相手による
-      // 傾きが、どの適格選手が先発するかを選ぶ。
+      // 適格な選手のみが到達。主ポジションを副次(EXTRA_POSITIONS)より優先。
       const fit = d.role === slot ? 1.0 : 0.5;
       let v = fit + overall(d) * 0.4;
-      // 支配的なビッグに対しては、守備型のビッグ(守備+身長+ジャンプ)がより優れた
-      // スコアラーより先発させる価値がある——どのビッグが先発するかを調整する。
+      // 支配的な相手ビッグには守備型のビッグ(守備+身長+ジャンプ)を優先。
       if (slot === "PF" || slot === "C") {
         v += bigDom * (rate(d.attr.defense) * 0.60 + (d.height - 1.9) * 0.55 + rate(d.attr.jump) * 0.20);
       }
@@ -84,8 +71,7 @@ export function optimizeLineups(game: Game): void {
       }
       if (best) { picked.add(best); starters.push(best); }
     }
-    // 安全策: 適格な選手が残っていないスロット（そのポジションでロスターが不足）は
-    // 残りのベストで埋め、5人を揃える
+    // 安全策: 適格な選手が残らないスロットは残りのベストで埋め、5人を揃える
     if (starters.length < 5) {
       const rest = pool.filter((d) => !picked.has(d)).sort((a, b) => overall(b) - overall(a));
       for (const d of rest) { if (starters.length >= 5) break; picked.add(d); starters.push(d); }
@@ -96,12 +82,8 @@ export function optimizeLineups(game: Game): void {
   }
 }
 
-// 選択順を各コート上選手のユーセージ（offPriority = 誰にボールを集めるか）へ
-// 変換する。明示的な choiceRank を持つ選手はそれを保持。重複した明示ランクは
-// 等しいまま = ボールを分け合う「共同エース」。残りはスコアリング力で残りの
-// 1..5 スロットへ自動ランク付け——これがユーザーの求めた「能力で自動」の
-// デフォルト。コート上ユニットごとに再計算するので、交代で序列が再シャッフル
-// される。
+// 選択順を各コート上選手のユーセージ(offPriority)へ変換する。明示的な choiceRank は保持、
+// 重複ランクは「共同エース」、残りはスコアリング力で 1..5 へ自動ランク付け。
 export function refreshChoiceRanks(game: Game, team: number): void {
   const on = game.teamPlayers(team);
   const used = new Set<number>();
@@ -115,7 +97,7 @@ export function refreshChoiceRanks(game: Game, team: number): void {
   }
   for (const p of on) {
     const rank = p.choiceRank ?? p.autoRank;
-    // 指名されたショットクリエイター(エース)はランクに加えて小さなユーセージ加算を得る
+    // 指名されたエースは小さなユーセージ加算を得る
     p.offPriority = clamp(usageFromRank(rank) + (p.offAction === "score" ? 0.06 : 0), 0, 1);
   }
 }

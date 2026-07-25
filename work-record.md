@@ -4155,3 +4155,164 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - 検証: tsc✓ / vite build✓(15.08s) / **数値定数バイト一致**(分割前 count2542・sum6300276203.4320 と全ui/*.ts合算が完全一致=コード不変・逐語移動)。
 - ⚠️ **重要**: UIは headless非対象(headlessはui.tsを読まない)。型・ビルド・逐語一致は保証したが、**実際の画面表示・モーダル操作・イベントはブラウザでの目視確認が必須**(未検証)。
 - ⚠️ 未コミット(c8d1edd の上に 314〜320)。
+
+## 2026-07-25 (321) src/club/ フォルダへクラブ4ファイル集約
+
+- clubabbr.ts / clubdb.ts / clubflags.ts / clubkits.ts を src/club/ へ git mv。
+- clubkits の ./config→../config、利用側(attributes.ts / config.ts / ui/*.ts)の import を club/ へ更新。
+- 検証: tsc✓ / vite build✓。純データ3つはimport無し、clubkitsのみconfig型参照。
+
+## 2026-07-25 (322) playerdb を統一ID付き3ファイルへ分割（src/player-data/）
+
+- ユーザー要望「選手ごとの統一ID＋3分割（identity+look / 能力 / 特殊能力）を選手フォルダに」。
+- 事実確認: playerdb/clubdb は自動生成(手編集不可)、clubdbは選手を PLAYER_DB の配列indexで参照。→ id=現index にすれば clubdb 無改修。
+- 構成 src/player-data/:
+  - identity.ts : [id, name, role, heightCm, hand, look[skin,hair,style]]
+  - ratings.ts  : [id, ratings[25], extras[安定度,逆手精度,逆手頻度]]
+  - abilities.ts: [id, abilityMask]
+  - index.ts    : 3テーブルを id 整列結合し、従来と同一形状の PLAYER_DB(DbPlayer[]) を再構築。DbPlayer型もここへ。
+- 既存consumer(makeDefFromDb等の位置アクセス p[0..7])と clubdb の index参照は無改修（PLAYER_DB形状・順序を保存）。importerのパスのみ playerdb→player-data に更新(attributes.ts + ui/*.ts 8箇所)。旧 src/playerdb.ts 削除。
+- 手法: scratchpad/split-players.cjs が旧タプルをJSON.parseし3ファイルへ。id=0..4014。
+- 検証: **データ往復完全一致**(git HEAD の旧全4015タプル == 再結合PLAYER_DB, 不一致0) / tsc✓ / vite build✓ / headless 40試合 27.8(基準内)。
+- 再生成フロー: Excel→生成→bake-look(look付与)→split-players(3分割)。※外部ジェネレータは1ファイルしか吐かないため、再生成後にこの後処理2段が必要。
+- ⚠️ 未コミット(9251269 の上に 321/322)。
+
+## 2026-07-25 (323) attributes.ts を3系統に分割（rate→util / roles.ts / roster.ts）
+
+- ユーザー要望「attributes.ts の各関数を機能別に適所へ」。506行の複合ハブ（スキーマ+ロール評価+ロスター）を分離。
+- ①`rate`→`util.ts`: 0..100→0..1 の汎用正規化。26consumerの import を attributes→util へ統合（scratchpad/fix-rate-imports.cjs）。
+- ②`src/roles.ts`(新, 133行): ロール定義＋評価。ROLE_BEHAVIOR / OFF_ROLE_ACTION / OffAction / offActionOf / DEF_ROLE_BEHAVIOR / RANK_USAGE / usageFromRank / ROLE_OFFENSE / roleOffense / scoringPower / computeOffPriority。連続領域を逐語移動、attributesへは型参照のみ(循環回避)。11consumer更新。
+- ③`src/roster.ts`(新, 194行): ロスター状態・生成。makeDefFromDb / applyDbPlayer / randomizeTeam / randomizeRosters / clubTeam / slotValue / A / MIN / MAX / ROLE_FALLBACK / ROLE_KEY_ATTRS / BENCH_ROLES / mk / ROSTER / STARTERS / ROSTER_SIZE / EXTRA_POSITIONS。逐語移動。11consumer更新。重複import統合＋attributes不要import掃除(type PlayerLookのみ残す)。
+- attributes.ts は 506→185行（純スキーマ: Attributes/ATTR_META/AbilityKey/ABILITY_META/PlayerDef/Tactics/TACTICS）。
+- スクリプト起因の不具合2件を修正: (a) bash単一引用符内の正規表現 `["']` 分断→スクリプトはファイル化して回避、(b) `[\s\S]*?` が複数import跨ぎ誤マッチ→`[^}]*` 単一文限定へ。
+- 検証: **数値保存**(HEAD attributes 3861.4300 == 現 attributes+roles+roster+rate分200) / tsc✓ / vite build✓ / headless 40試合 27.9(基準内)。
+- ⚠️ 未コミット(9251269 の上に 321〜323)。
+
+## 2026-07-25 (324) main.ts のイントロ演出を IntroTour(camera側)へ括る＋introDir を camera.ts へ
+
+- ユーザー選択C: 試合前の選手紹介ツアー全体を camera 側へ集約。
+- `camera.ts`: 旧 main の `introDir`（遮蔽回避のフレーミング角度計算）を `BroadcastCamera.framingDir` として統合。`introShot(p,k,others?)` に変更し、others を渡すと自動で遮蔽回避角を選ぶ。IntroSubject 型を追加。
+- `src/intro.ts`(新, 191行): `IntroTour` クラス。ショット列(queue)・タイミング(HOLD_PLAYER/HOLD_BENCH/holdOf)・スキップ・下部字幕ボード(DOM: teamHex/posBadge/setNameTags/updateBoard)・毎フレーム進行(step)を集約。カメラ操作は BroadcastCamera へ委譲、game.syncVisuals で凍結中も同期。
+- `main.ts`: イントロ関連(約139行)を撤去し `const intro = new IntroTour(game, camera)` に。onStart→intro.begin()、pointerdown→intro.skip()、レンダーループ→intro.active()/step()/clear()/abort()。未使用の TEAM_NAMES/TEAM_COLORS import 除去。379→210行。
+- 検証: tsc✓ / vite build✓(14.76s) / 数値: main+camera+intro は count 268→267・**sum 9246.5290 完全一致**。count-1 はレンダーループの `introQueue.length>0` 2箇所を active() 1メソッドへ集約し冗長な `0` 比較が1つ減ったため（挙動不変）。
+- ⚠️ **重要**: イントロ演出・カメラ・DOM字幕は headless非対象。型/ビルド/数値保存は担保したが、**実際の演出はブラウザ目視が必須**（未検証）。
+- ⚠️ 未コミット(9251269 の上に 321〜324)。
+
+## 2026-07-25 (325) main.ts の照明・影を scene-setup.ts へ分離
+
+- ユーザー選択A（カメラではなくシーン環境モジュールへ）。照明/影はカメラ視点と独立のレンダリング環境のため、camera.ts ではなく専用モジュールに集約。
+- `src/scene-setup.ts`(新, 42行): `addLights(scene): {sun}`（hemi/sun/fill）、`addShadows(sun, game)`（ShadowGenerator＋各選手体メッシュ・ボールの影キャスター登録）。addShadows は game 生成後に呼ぶ（選手/ボール依存）。
+- `main.ts`: 照明ブロック(15行)＋影ブロック(16行)を撤去し `const {sun}=addLights(scene)` / `addShadows(sun,game)` に。未使用の ShadowGenerator import 除去。210→184行。
+- 検証: tsc✓ / vite build✓(14.95s) / **数値保存**(旧 main 88/2188.7790 == 現 main+scene-setup と完全一致=逐語移動)。
+- ⚠️ 照明/影の実描画は headless非対象。逐語移動で不変だが最終はブラウザ目視。
+- ⚠️ 未コミット(9251269 の上に 321〜325)。
+
+## 2026-07-25 (326) 全ファイルのコメントを「何をしているか」だけに刈り込み
+
+- ユーザー指摘「コメントが経緯など周辺情報の説明的過ぎる。何をしているかだけに」。方針を feedback-terse-comments メモリに保存。
+- 並列サブエージェント8体で機能別に分担刈り込み（action×2 / core+reaction+eval / systems+roots / objects+player / ui×2 / game.ts）。私は未割当分（camera/intro/main/scene-setup ＋ club ヘッダ）を担当。
+- 削除対象: 修正の経緯・過去の不具合・「〜という報告」・rationale（なぜその値/設計か）・sim検証/チューニング履歴・冗長な補足。保持: 何をするかの簡潔説明・非自明な単位/規約・区画見出し・eslintディレクティブ。文字列リテラル(tip等)は不変。
+- 検証: 開始時に67ファイルのコメント除去コードを基準保存 → 完了後**全67ファイルでコード（コメント除去後）バイト不変**を機械確認（コメントのみ変更）。tsc✓ / vite build✓(14.39s) / headless 40試合 30.4(基準内)。
+- 例: game.ts はコメント221行削減。roles「sim検証で中庸が最良」/ roster「メッシがSGの座を…」/ scene-setup「肩が光を失った報告」等を除去。
+- ⚠️ 未コミット(9251269 の上に 321〜326)。
+
+## 2026-07-25 (327) 移動系を src/action/move/ へ活動別4ファイル化
+
+- ユーザー要望: action/ 内に move/ を作り walk/run/jump/turn を別ファイルで。プロトタイプ拡張は維持（呼び出し側 p.X() 不変）。
+- 割り振り:
+  - run.ts: recoveryMult/setPlant/tickCooldown/accelSpeed/accelToward/tickMotion（加速・速度・毎フレーム移動tick・硬直減算）
+  - turn.ts: turnFactor/leanFactor/leanRecoverRate/decayLean（方向転換・傾きコストと回復）
+  - jump.ts: jump/updateJump/reachTopY
+  - walk.ts: updateLegs/updateAcornFeet/syncAcornLegs（脚・足の運び＝ストライドのアニメ）
+- 移動でない残置: benchRecover/breakRecover（スタミナ回復）→ player-state.ts へ。sit/stand/foldSeatedLegs/foldAcornSeat/unfoldAcornSeat（着席姿勢）→ player-legs.ts に残置（着席専用に縮小）。player-move.ts は全移設で削除。
+- 補足(正直): 歩く/走るは同一コード（速度パラメータで共有）のため厳密分離は不能。walk=脚アニメ、run=加速/速度という区分にした。game.ts の副作用importを player-move除去＋move/4追加に更新。
+- 検証: tsc✓ / vite build✓(15.21s) / headless 40試合 28.4(基準内) / **数値保存**(旧 player-move+legs+state 216/172.3741 == 新 run+turn+jump+walk+legs+state と完全一致=逐語移動)。
+- ⚠️ 未コミット(9251269 の上に 321〜327)。
+
+## 2026-07-25 (328) ポーズ/ジェスチャのアニメを src/action/animation/ へ集約
+
+- ユーザー要望「arm等に残っているアニメーション定義を action/animation/ に集約し、Move/アクション/リアクションのアニメ部分を統一管理」。
+- objects/player/ に残っていたポーズ系アニメ3ファイルを移設:
+  - player-arms.ts → action/animation/arms.ts（腕・手のジェスチャ）
+  - player-facing.ts → action/animation/facing.ts（胸/頭の向き）
+  - player-react.ts → action/animation/react.ts（ファウル/守備成功/うなだれ/ベンチidleのポーズ）
+- プロトタイプ拡張は維持。変更は Player 参照パス（import＋declare module: ./player → ../../objects/player/player）と game.ts の副作用import3行のみ。呼び出し側 p.X() 不変。
+- 検証: tsc✓ / vite build✓(13.11s) / headless 40試合 29.8(基準内) / **数値保存**(旧 arms+facing+react 313/183.6101 == 現 action/animation/* と完全一致=パスのみ変更)。
+- 残: 脚アニメは move/walk.ts（走行ストライド）と player-legs.ts（着席姿勢）に分散。統一するなら animation/ へ寄せる余地あり（未実施・要確認）。
+- ⚠️ 未コミット(9251269 の上に 321〜328)。
+
+## 2026-07-25 (330) action/animation/basic/ に関節ルール層を新設し全アニメを従わせる
+
+- ユーザー要望: animation/ に basic/ を作り「腕・脚の速度/回転方向/角度など基本情報」を定義、各アクション/Moveのモーションはそのルール内で動く。
+- basic/joints.ts: JOINT テーブル（chestTwist/headTurn/elbow/hip/knee/acornFoot）に {軸, 可動域(min/max rad), 最大速度(rad/s)} を一元定義。
+- basic/rotate.ts: clampAngle / setJoint（可動域クランプして即セット）/ rotateToward（可動域内で速度レート制限）。
+- 各アニメを JOINT 経由に:
+  - facing.ts: 胸ツイスト/頭ヨーの可動域・速度を JOINT から取得（旧 Player.TWIST_MAX/HEAD_MAX/rate と同値）。
+  - arms.ts: bendElbow を JOINT.elbow でクランプ、runArms のツイストも JOINT.chestTwist。
+  - move/walk.ts: hip/knee/foot を setJoint(JOINT) 経由。
+  - animation/legs.ts: 着席の hip/knee を setJoint 経由。
+  - player.ts: TWIST_MAX/HEAD_MAX static を撤去（JOINT が唯一の情報源）。
+- 可動域は現行モーションを内包する値に設定（hip±1.6/knee±1.7/foot±0.8/elbow±2.8/chest±1.15/head±0.95）→ 既存の動きはクランプに触れず＝挙動不変、ルール層のみ確立。facing の数値は完全一致。
+- 検証: tsc✓ / vite build✓(22.90s) / headless 40試合 30.1(基準内、ゲームロジック不変)。※関節クランプ/レート制限は視覚要素のため最終はブラウザ目視推奨（可動域が現行を内包するため見た目は不変の想定）。
+- ⚠️ 未コミット(9251269 の上に 321〜330)。
+
+## 2026-07-25 (331) 重複コードの共通関数化（SAFE群のみ・挙動不変）
+
+- ユーザー要望「べた書き・宣言重複・都度計算を統一し共通ファンクションから呼ぶ形に」。全域スキャンで重複を特定し、コピー間で係数・閾値が完全一致する SAFE 群のみ実施。係数差のある RISKY 群は未実施（統一＝バランス変更になるため要判断、下記に列挙）。
+- 新設ヘルパ:
+  - util.ts: normAngle(±π正規化) / dirTo2D(XZ単位ベクトル+距離) / towardPoint(方向へdist進んだ点) / nearestOf(最小キー探索) / expEase(指数イーズ)
+  - eval.ts: shotThreat(3P/ミドル精度の高い方) / burstTime(バースト持続時間)
+  - config.ts: BURST_SPEED=7.5 / BODY_MIN_DIST=0.62 / OOB_OUTSET=0.3 / INBOUNDS_INSET=1.0 を追加。未使用かつハーフ入替非対応だった hoopCenter/hoopFloor を削除。
+  - core/collision.ts: pushApart(重みなし押し離し) / core/bench.ts: benchSideSign・benchGatherSpot / game.ts: crashReboundJump・partialShotClock / action/offense.ts: clockPush(ローカル) / animation/facing.ts: worldYawTo / move/run.ts: applyReactLag
+- 置換（挙動同一のみ。変種は全てスキップ）:
+  - action系: 角度正規化7 / clockPush4 / shotThreat3 / burstTime2 / applyReactLag8 / dirTo2D・towardPoint系11 / expEase1（setArmDir は Quaternion.Slerp のためスキップ）
+  - game・core・systems系: 最寄り探索ループ6 / towardPoint4（setDrive・crashBoards・守備ゴール側配置2） / 押し離し2 / リバウンド飛び込み2 / ベンチ集合3 / attackFloor同フレーム二重計算1 / 部分ショットクロック2（inbound側は値式のためスキップ） / OOB_OUTSET 7箇所・INBOUNDS_INSET 8箇所
+  - ui系: 未使用import一掃（ui-*6ファイル+ui.ts、型はimport type化） / rate・clamp共通化（可変上限で不等価の3箇所はスキップ） / weightedScore集約3（posValueは別式でスキップ） / colorOf再利用1 / CSSトークン化 BTN_BG8・INK12・NEUTRAL_GRAY6・ELLIPSIS13（近似値の変種は不変のまま）
+- 検証: tsc✓ / vite build✓(16.71s) / headless 40試合×3回: BLUE平均 40.1/39.3/39.9・RED 0.1〜0.3・99側全勝・NaN無し・全試合完走。**変更前コード（前セッションの src-before スナップショット）を同一ハーネス・同一dtで実測: BLUE 40.0/39.5・RED 0.6/0.1 → 分布一致＝挙動保存**。※過去記録の「40試合 30.4」等はハーネス定義が異なるため直接比較不能（今回は scratchpad/harness.ts, dt=1/60, state==="final" まで実行）。
+- 未実施（RISKY: コピー間で係数・閾値が異なり、統一するならバランス調整として別途判断）: ボール保持力(secure)式5変種 / 守備の手(hands)式4変種 / ブザー窓0.9秒vs1.0秒 / 点-線分射影7箇所(閾値バラバラ) / コンテスト踏切高さ3変種 / 歩行アニメブロック4 / マテリアル生成19+箇所 / OVR3式(ovrOf・overallOf・starter評価=目的が別、統合禁止) / colorOf丸め差(intro・ui-hud)
+- ⚠️ UIのCSS・DOM変更はheadless検証対象外（同一文字列置換のみだが最終はブラウザ目視推奨）。
+- ⚠️ 未コミット(9251269 の上に 321〜331)。
+
+## 2026-07-25 (332) RISKY群1〜6の統一（係数の正準化＝バランスに触れる変更）
+
+- ユーザー指示「(331)のRISKY群1〜6を統一」。方針: **素の式は正準係数へ完全統一**、特能ボーナスの構造差は原則維持（例外は下記defense.ts）。
+- ①ボール保持力: eval.ts `ballSecurity`（D精度0.62+技術0.38+キープ0.28=stripEdge正準）に5箇所統一。
+  変更点: defense.ts resist(0.6/0.4/0.25)、schemes zone(0.6/0.4・キープ無し→有りに)、schemes press(0.5/0.4/0.2)、
+  defense.ts クロスオーバーsecure(0.5/0.3+敏捷0.2→敏捷項が消えキープ項が入る=意味変更)。
+- ②守備の手: eval.ts `defHands`（反応0.45+敏捷0.35+守備0.2+インターセプター0.15=正準）に4箇所統一。
+  変更点: schemes zone(0.4/0.3/0.3)、shooting poke(0.4/0.35/0.25+0.12)、
+  defense.ts stl は素の式一致だがインターセプターが乗数×1.3→加算0.15へ変更（二重計上回避のためslide乗数を廃止）。
+  ※schemes:170 のトラップ2人合成handsは構造が別（primary+trapper）のため対象外。
+- ③ブザー窓: config `BUZZER_WINDOW=0.9` に3箇所統一。shooting.ts:144 の make%減衰窓のみ 1.0→0.9 に変更（0.1秒狭まる）。
+- ④点-線分射影: util.ts `segPerp`（射影率t+垂直距離、len²||1）に6箇所統一（laneClear/cutLaneClear/laneOpenness/clogPenalty/laneBlock/longBallBest）。
+  **各サイトのtカットオフ・半径閾値は意図的なバランス値として全て現状維持**＝数値はビット同一。driveImpederはパラメタ化が別物のため対象外。
+- ⑤コンテスト踏切高さ: eval.ts `leapHeight`（0.55+ジャンプ0.3=多数派）に3箇所統一。shooting.ts:96 のみ 0.5+0.35→正準に変更。
+  shooting.ts:238 のシュートジャンプ高さは別概念のため不変。踏切durの差(0.62/0.6)も不変。
+- ⑥マテリアル生成: objects/materials.ts `makeMat`（diffuse/spec/emissive/alpha/cull/unlit、未指定はBabylon既定値）新設。
+  court 9 / player 9(kit用mkMatはmakeMat委譲の1行ラッパ化) / player-visual 1 / ball 1 / main(プレビュー背景) 1 = 全21箇所を経由化。プロパティ値は全サイト同一。
+- 検証: tsc✓ / vite build✓(16.68s) / headless 40試合×各2回: 統一前(scratchpad/src-safe331) BLUE 38.1/39.8 ↔ 統一後 40.0/38.8・RED 0.1〜0.2・99側全勝・NaN無し・完走 → 分布重なり=極端値ロスターでは有意差なし。
+- ⚠️ 現ROSTERは特殊能力が全員無しのため、①②の特能絡みの変更（×1.3→+0.15等）はこの計測に現れない。現実的ロスター導入時（Phase 2）に再計測要。
+- ⚠️ ⑥はheadless検証不可（値同一の機械置換だが最終はブラウザ目視）。
+- リバート用スナップショット: scratchpad/src-safe331（統一前の全src）。
+- ⚠️ 未コミット(9251269 の上に 321〜332)。
+
+## 2026-07-25 (333) アニメ層再編: basic/=部位の基本ルール、animation/=アクション毎のファイル
+
+- ユーザー要望「basic/ に腕など部位の定義と速度・角度等の基本ルールを置き、各アクションのアニメはそのルールを踏襲、アクション毎にファイルを分ける」。
+- 新構成（全て逐語移動、変更は import / declare module のみ。呼び出し側 p.X() 不変）:
+  - animation/basic/（部位の定義と基本ムーバ）:
+    - joints.ts（既存: 関節の可動域・速度テーブル）/ rotate.ts（既存: 適用ヘルパ）
+    - arms.ts（新）: bendElbow / setArmDir / aimArm / handsRest — armRateCap と JOINT.elbow の規約
+    - torso.ts（新, 旧facing.ts全体）: worldYawTo / twistToward / lookToward / faceChestToward / relativeChestAngle / resetTwist / faceToward / faceSmooth / resetFacing — JOINT.chestTwist / headTurn の規約
+    - legs.ts（新）: syncAcornLegs — 脚・足の規約は JOINT.hip / knee / acornFoot
+  - animation/（アクション毎、basic経由で動く）:
+    - locomotion.ts: runArms（旧arms.ts）+ updateLegs / updateAcornFeet（旧move/walk.ts）
+    - dribble.ts: reachDribble / hold.ts: holdBallHands / reach.ts: reach + digReach
+    - guard.ts: guardDrive + denyLane + handsUp + armsWide
+    - sit.ts: sit / stand / foldSeatedLegs / foldAcornSeat / unfoldAcornSeat（旧animation/legs.ts）
+    - bench-idle.ts: benchIdle / foul-react.ts: foulReaction + poseFoulReaction / defwin.ts: defWin + poseDefWin / dejected.ts: dejectedPose（旧react.ts を4分割）
+- 削除: animation/arms.ts / facing.ts / legs.ts / react.ts、move/walk.ts。game.ts の副作用importを差し替え（walk1+旧4 → basic3+アクション10）。
+- 検証: tsc✓ / vite build✓(15.44s) / **逐語移動の機械照合: 全68プロトタイプ関数の本体が移設前後で完全一致**（scratchpad/verify-anim-move.cjs、空白正規化比較）/ headless 40試合: BLUE 40.4・RED 0.1・99側全勝・NaN無し・完走（基準帯 38〜40 内）。
+- リバート用スナップショット: scratchpad/src-before-anim。
+- ⚠️ アニメは視覚要素のため最終はブラウザ目視推奨（逐語移動なので見た目不変の想定）。
+- ⚠️ 未コミット(9251269 の上に 321〜333)。

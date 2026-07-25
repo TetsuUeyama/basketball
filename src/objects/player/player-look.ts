@@ -4,7 +4,6 @@
 // - resolveLook: 番号 → 色/髪型（PlayerLook）を解決。playerdb 由来の見た目はこれ。
 // - lookIndicesFromName / playerLook: DB未登録の選手（初期ダミー等）向けに、名前
 //   ハッシュから番号を導くフォールバック。playerdb への番号焼き込み生成にも使う。
-// util.ts から移設（①汎用ヘルパーと②見た目生成が同居していたのを分離）。
 
 // 見た目の番号3つ組: [肌index, 髪色index, 髪型index]
 export type LookIdx = [number, number, number];
@@ -36,8 +35,7 @@ export function resolveLook(idx: LookIdx): PlayerLook {
 
 // ---------------------------------------------------------------------------
 // 以下は DB未登録の選手向けフォールバック（名前ハッシュから番号を導く）。
-// playerdb.ts への番号焼き込み（scripts/bake-look）にも同じロジックを使うため、
-// これで生成した番号を resolveLook に通すと、旧 playerLook(name) と同一の見た目になる。
+// playerdb.ts への番号焼き込み（scripts/bake-look）にも同じロジックを使う。
 // ---------------------------------------------------------------------------
 
 // 文字列のFNV-1aハッシュ → 安定した32bitシード。見た目は選手の名前をキーにするので、

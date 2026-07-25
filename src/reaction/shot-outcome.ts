@@ -1,11 +1,8 @@
-// シュートの「効果」= 成功率の算出（判定ルール）。状態を変更しない純粋関数として
-// game.ts の releaseShot から切り出す。呼び出し側(game.ts)が最寄り守備者・ヘルプ人数・
-// クラッチ値・ブザー有無などの文脈を計算して渡し、ここでは確率のみを返す。
-// レイヤ分割: 効果(resolution)を発動/状態変更(game.ts)から分離（workPlan.md 参照）。
+// シュートの「効果」= 成功率の算出（判定ルール）。状態を変更しない純粋関数。
+// 呼び出し側が最寄り守備者・ヘルプ人数・クラッチ値・ブザー有無などの文脈を渡し、確率のみ返す。
 import { Player } from "../objects/player/player";
 import { THREE_DIST } from "../config";
-import { rate } from "../attributes";
-import { clamp, chance } from "../util";
+import { rate, clamp, chance } from "../util";
 import { perimContest, palmRadius, rimProtect } from "../eval";
 
 // ジャンプシュート（ミドル/3P）の成功確率。距離・射程・コンテストから算出し、
@@ -29,24 +26,20 @@ export function jumpShotMakeProbability(
   let falloff = isThree ? 0.05 - rate(h.attr.threeRange) * 0.035 : 0.03;
   if (h.has("range")) falloff *= 0.65;
   const over = Math.max(0, dHoop - distRef);
-  // 距離は線形で効くが、遠投は二次で崩れる（最大L精度/L速度でも深いと急落、
-  // ハーフコートの祈りは数%）。L速度が崩れを少し緩める。
+  // 遠投は二次で崩れる。L速度が崩れを少し緩める。
   const heaveDrop = isThree ? over * over * 0.011 * (1 - rate(h.attr.threeRange) * 0.33) : 0;
   let p = baseLine + skill * 0.42 - over * falloff - heaveDrop;
-  // ダイレクトプレイ: キャッチ&シュートのリズムが彼のシュート
+  // ダイレクトプレイ: キャッチ&シュートのリズム
   if (h.quickT > 0 && h.has("oneTouch")) p += 0.05;
-  // お膳立て: 良いパスからオープンで受けた膳立て（アシストが決定を作る）
+  // お膳立て: 良いパスからオープンで受けた膳立て
   if (h.setupT > 0) p += h.setupBonus;
-  // コンテスト — S威力は接触を突いて打つ。1対1シュート特化は単独守備をほぼ感じない
-  // （本当のヘルプだけが効く）。係数(0.78)と罰(0.24)は平均得点不変で傾きだけ急に。
+  // コンテスト — S威力は接触を突いて打つ。1対1シュート特化は単独守備をほぼ感じない。
   let contestScale = 1 - rate(h.attr.shotStrength) * 0.78;
   if (h.has("isoShooter") && ctx.helpCount <= 1) contestScale *= 0.6;
-  // 誰がクローズアウトするか: 速く長いペリメーター守備は飛んでくる、スイッチした
-  // 遅いビッグは遅れる — 位置＋体格でタグ無し。
+  // クローズアウトの質は位置＋体格で決まる（速い外守備は飛んでくる、遅いビッグは遅れる）。
   const cn = ctx.nearestDef;
   const perimQ = cn ? clamp(1 + perimContest(cn, h), 0.6, 1.5) : 1;
-  // コンテストのリーチ = 手のひら当たり判定（有効時、def−off でサイズ可変）。
-  // 良い守備者ほど遠くから手が届き、広いギャップでも make% を削る。無効時は固定1.8m。
+  // コンテストのリーチ = 手のひら当たり判定（有効時 def−off でサイズ可変、無効時は固定1.8m）。
   const cReach = ctx.palmHitbox && cn ? palmRadius(cn, h) : 1.8;
   p -= clamp(cReach - dDef, 0, cReach) * 0.24 * contestScale * perimQ;
   // 体勢の崩れ（移動しながらの射撃）— S技術がメカニクスを保つ
@@ -55,8 +48,7 @@ export function jumpShotMakeProbability(
   }
   // 精神: 疲労・劣勢・終盤の重圧が弱い心を乱す
   p -= ctx.clutch * 0.12;
-  // 終了間際の駆け込み: 体勢を作れず放るので精度が大きく落ちる。S技術が高いほど
-  // 崩れた態勢でも決められるので落ち込みは小さい（×0.5(技術0)〜×0.7(技術100)）。
+  // 終了間際の駆け込み: 精度が落ちる。S技術が高いほど落ち込みは小さい（×0.5〜×0.7）。
   if (ctx.buzzer) {
     p *= 0.5 + rate(h.attr.shotTech) * 0.2;
   }
@@ -64,8 +56,7 @@ export function jumpShotMakeProbability(
 }
 
 // リング下のフィニッシュ（レイアップ/ダンク）の効果。ダンクにするか(dunk)を抽選し、
-// それに応じた成功率(p, 0.05〜0.97)を算出して返す。dunk フラグは呼び出し側で
-// アニメ・演出にも使うため一緒に返す。
+// 成功率(p, 0.05〜0.97)とともに返す。
 export function rimFinishOutcome(
   h: Player, dDef: number,
   ctx: {
@@ -85,17 +76,14 @@ export function rimFinishOutcome(
     p -= (1 - h.offhandAcc / 8) * 0.1;
   }
   const strong = rate(h.attr.shotStrength);
-  // 誰がコンテストするかが距離と同じくらい重要: リム保護ビッグは壁、スイッチした
-  // ガードはほぼ邪魔にならない（rimProtect は位置＋体格でロールタグ無し）。
+  // コンテストの質は位置＋体格で決まる（リム保護ビッグは壁、スイッチしたガードは邪魔にならない）。
   const near = ctx.nearestDef;
   const contestQ = near ? clamp(1 + rimProtect(near, h), 0.5, 1.6) : 1;
   p -= clamp(1.1 - dDef, 0, 1.0) * 0.42 * (1 - strong * 0.7) * contestQ;
-  // マークを突いてフィニッシュ — オフェンスは守備が付いている時だけ効き、密着度で
-  // スケール（オープン(dDef≥1.5)は不変、密着ほどオフェンスが決める）。75が中立。
+  // マークを突いてフィニッシュ — 守備が付いている時だけ効き、密着度でスケール（75が中立）。
   const mark = clamp((1.5 - dDef) / 1.5, 0, 1);   // 0 オープン .. 1 密着
   p += (rate(h.attr.offense) - 0.75) * 1.6 * mark;
-  // リム付近の追加の人だかりは壁 — 2-3人へ突っ込むのは低確率、S威力もほぼ効かない
-  // （オープンのキャッチ&フィニッシュ(人だかり0/1)は高確率を維持）。
+  // リム付近の人だかりは壁 — 2-3人へ突っ込むのは低確率。
   if (ctx.crowd >= 2) p -= (ctx.crowd - 1) * 0.23 * (1 - strong * 0.2);
   p -= ctx.clutch * 0.1;
   return { dunk, p: clamp(p, 0.05, 0.97) };

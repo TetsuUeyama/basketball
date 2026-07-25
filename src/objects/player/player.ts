@@ -1,12 +1,10 @@
-import {
-  Scene, Vector3, Quaternion, MeshBuilder, StandardMaterial, Color3, Mesh, TransformNode,
-  DynamicTexture, VertexData,
-} from "@babylonjs/core";
+import { Scene, Vector3, Quaternion, MeshBuilder, StandardMaterial, Color3, Mesh, TransformNode, DynamicTexture, VertexData, } from "@babylonjs/core";
 import { TEAM_COLORS, HUD_OPTS, uniformOf, type RGB } from "../../config";
-import { Attributes, AbilityKey, PlayerDef, rate, roleOffense, computeOffPriority, ROLE_BEHAVIOR,
-  DEF_ROLE_BEHAVIOR, OffAction, offActionOf } from "../../attributes";
-import { clamp } from "../../util";
+import { Attributes, AbilityKey, PlayerDef } from "../../attributes";
+import { roleOffense, computeOffPriority, ROLE_BEHAVIOR, DEF_ROLE_BEHAVIOR, OffAction, offActionOf } from "../../roles";
+import { rate, clamp } from "../../util";
 import { playerLook, type PlayerLook } from "./player-look";
+import { makeMat } from "../materials";
 import type { Stats } from "./stats";
 
 // 既定の下向きの腕 (0,-1,0) を単位ベクトルへ回転させるクォータニオン。
@@ -24,9 +22,7 @@ export function aimDownTo(vx: number, vy: number, vz: number): Quaternion {
 // メッシュは毎フレームそこから同期する。物理ボディは持たない。
 // ---------------------------------------------------------------------------
 export class Player {
-  // ヘッドレスバッチ実行: (純粋に見た目だけの)スワップ毎の髪再構築+ネームタグ
-  // 再描画をスキップし、数千回のロースター入替でBabylonメッシュが増殖/リークしない
-  // ようにする。シミュレーション前にヘッドレスランナーがtrueにする。画面表示のゲームではfalseのまま。
+  // ヘッドレスバッチ実行時true: 髪再構築+ネームタグ再描画（見た目のみ）をスキップ。
   static HEADLESS = false;
 
   // ═════════ 同一性・能力・ロール（ロースターdef / applyDef 由来） ═════════
@@ -65,8 +61,7 @@ export class Player {
   // ═════════ 位置・速度・加速・疲労（毎フレーム計測/更新） ═════════
   readonly pos = new Vector3();  // 論理位置（足元）
   // --- コンディション（スタミナ/加速） ---
-  // 前フレームで実際に達した速度(m/s)、変位から計測。加速モデルはこれを基に
-  // 積み上げるので、静止からの発進はトップスピードまで立ち上がる。
+  // 前フレームで実際に達した速度(m/s)、変位から計測。
   curSpd = 0;
   fatigue = 0;     // 0（元気）.. 1（バテ） — 速度と精度を削る
   prevX = 0;       // フレーム開始時の位置、curSpd計測用
@@ -77,67 +72,40 @@ export class Player {
   prevVelZ = 0;
 
   // ═════════ 硬直・回復タイマー（tickCooldown/accelSpeed が消費） ═════════
-  // パスやシュート後の回復クールダウン — これが経過するまで選手は根が生えた
-  // 状態（動き出せない）で、リリースのフォロースルーを表現する
+  // パス/シュート後の回復クールダウン — 経過するまで動き出せない（フォロースルー）。
   coolT = 0;
-  // 着地の回復 — ジャンプから降りてきた後、次のジャンプやスプリントへ爆発する
-  // 前に重心が落ち着く必要がある（完全に根が生えるわけではない: すり足はできるが
-  // 再ジャンプや全速の踏み出しはできない）
+  // 着地の回復 — 降りた後、再ジャンプ/全速前に重心が落ち着くまでの時間。
   landT = 0;
-  landDur = 0;   // 着地硬直の全長。accelSpeedがこれをかけて移動スロットルを
-                         // 徐々に戻せるようにする（長い回復でも平坦なほぼ静止では
-                         // ない — 動き出せるが再ジャンプはできない）
-  // 動き直し: 急な方向転換後のプラント&再プッシュ。全速で切り返すことはできない
-  // — 新しい方向へ踏み出す前に足を踏み直す必要があり、これが動いている間は
-  // 加速がスロットルされる（accelSpeed参照）。素早い(敏捷性)選手はすぐ立て直す。
-  // 遅い選手は実際に一拍失い、速く動いていた(ダッシュ)ほどプラントが大きくなる。
-  // tickMotionで設定。
+  landDur = 0;   // 着地硬直の全長。accelSpeedが移動スロットルを徐々に戻すのに使う
+  // 動き直し: 急な方向転換後のプラント&再プッシュ。動いている間は加速がスロットル
+  // される（accelSpeed）。tickMotionで設定。
   plantT = 0;
   plantDur = 0;  // 同上、クロスオーバー/停止のプラント用（動き直し）
-  // ルーズボールを手で床からすくい上げる（ホップなし）: ボールは足首の高さから
-  // このウィンドウをかけて保持位置へ上がり、手はそれを下→上に追う
+  // ルーズボールを手で床からすくい上げる: ボールが保持位置へ上がり、手が下→上に追う
   pickupT = 0;
   pickupDur = 0;
-  // 硬直: こぼしかけたキャッチをまだ収めている最中。これが動いている間ボールは
-  // 手の中で揺れ（まだ確保していない）、密着した守備者がはたき出せる。
-  // 長さは配球がどれだけ逸れたかと本人の技術（ハンドリング）でスケールする。
+  // 硬直: こぼしかけたキャッチを収めている最中。ボールは手の中で揺れ、密着守備者がはたき出せる。
   gatherT = 0;
-  gatherDur = 0;   // ギャザーの全長。キャッチが収まるにつれてボールを段階的に
-                   // シールド（遠い腰へ振る）できるようにする — 収める前に
-                   // 手が届いた守備者がはたき出す。
-  // ルーズボールに触れた後の短いロックアウト。1回のタップが同じフレーム区間で
-  // 何十回もの接触を再発火させないように
+  gatherDur = 0;   // ギャザーの全長
+  // ルーズボールに触れた後の短いロックアウト（1タップが多重接触を再発火しないように）
   touchCool = 0;
-  // 直前に手放したばかり: ボールを手放してから数秒間この選手はパス先として
-  // 低優先になり、ボールがすぐ彼に跳ね返らないようにする（ショットクロックを
-  // 浪費するだけの2人のピンポン）。本当にリムへカットすれば（本物のギブ&ゴー）
-  // 解除される。tickCooldownで減算。
+  // 直前に手放したばかり: 数秒間パス先として低優先。リムへカットすれば解除。tickCooldownで減算。
   justPassedT = 0;
-  // トラップ記憶: この選手が最後に本物のダブルチーム（2人以上の守備者が寄った）
-  // の中にいてからの秒数。>0の間はボールを彼へ振り戻さない/戻さない — トラップが
-  // まだ生きている（あるいは直前まで生きていて、瞬間的な2.0m判定ではボール到着時に
-  // 再び寄り集まるトラップを見逃しうる）。これがオフェンスが脱出したばかりの
-  // トラップへA→B→Aで戻すのを実際に止める。トラップ中は判断毎に更新、tickCooldownで減算。
+  // トラップ記憶: 最後にダブルチームの中にいてからの秒数。>0の間はボールを彼へ振り戻さない。
+  // 判断毎に更新、tickCooldownで減算。
   trappedT = 0;
-  // キープドリブルのシールド: 下手なハンドラー（低D精度）がマークされて前進できず
-  // — 半身になってボールをシールドする。>0の間はドリブルがじりじりと進み、
-  // 体をボールと守備者の間に入れる。keepDribbleDecideが設定、tickCooldownで減算。
+  // キープドリブルのシールド: >0の間はドリブルがじりじり進み、体をボールと守備者の間に
+  // 入れる。keepDribbleDecideが設定、tickCooldownで減算。
   keepShieldT = 0;
   // ダイレクトプレイ: パスを受けた後のワンタッチプレー用ウィンドウ（秒）
   quickT = 0;
-  // ピック&ロール: このスクリナーが守備の空けたスペースへロールした（ヘッジ/
-  // スイッチでマークが後ろに残った） — 供給する価値のあるポケットパスのウィンドウ
+  // ピック&ロール: スクリナーが空いたスペースへロールした — ポケットパスのウィンドウ
   openRollT = 0;
-  // お膳立て: 良いパスからリズムよく受けた — 次のシュートが `setupBonus` を得る
-  // キャッチ&シュートのウィンドウ（優れたパサーは限られたスコアラーにも決めやすい
-  // 形を作り出す。速いパスほどウィンドウが長く開く）。
+  // お膳立て: 良いパスからリズムよく受けた — 次のシュートが `setupBonus` を得るウィンドウ
   setupT = 0;
   setupBonus = 0;
   baitT = 0;
-  // 通路ブロック: 攻撃側がこの守備者の脇をサイドステップで抜いた直後 — 一拍の間
-  // (wallX, wallZ)、新しいレーンの入口へスライドして再び壁で塞ぐ。steerAroundが
-  // 設定する。スライド自体はaccelToward経由で走るので、素早さ
-  // (turnFactor / 動き直しのプラント)がステップ勝負の勝者を決める。
+  // 通路ブロック: 抜かれた直後、一拍(wallX,wallZ)へスライドして再び壁で塞ぐ。steerAroundが設定。
   wallT = 0;
   wallX = 0;
   wallZ = 0;
@@ -164,24 +132,17 @@ export class Player {
   // (leanAxisX, leanAxisZ) * lean。leanを変更する箇所で設定する。
   leanAxisX = 0;
   leanAxisZ = 0;
-  // オンボール守備のスタンス。ヒステリシスで保持し、ハンドラーの速度が閾値付近で
-  // ぶれても毎フレームポーズが切り替わらないようにする（その切り替わりが
-  // 「手を小刻みに動かす」ように見えた）。true=腕を大きく広げてサイドドライブを壁で防ぐ、
-  // false=前の手を下げてストレートドライブを止める/ボールをはたく。
+  // オンボール守備のスタンス（ヒステリシスで保持）。true=腕を大きく広げサイドドライブを
+  // 壁で防ぐ、false=前の手を下げストレートを止める/ボールをはたく。
   stanceWide = false;
   // キャッチをどう扱うか。キャッチの瞬間に決めて姿勢を確定させる:
   // "shield"=プレッシャー下、遠い腰へしまう。"shoot"=キャッチ&シュート、
   // ポケットへ上げる。"drive"=オープン、次の動き（リム）へ運び出す。
   catchIntent: "shield" | "shoot" | "drive" = "drive";
-  // ドリブルの持ち位置: ライブドリブルがハンドラーに対してどこにあるか（ワールド
-  // XZオフセット）。ゲームは速い前方キャリーと守られた横キャリーの間を、D精度が
-  // 決める速さで補間する。baitTは意図的に「見せたボール」のウィンドウで、
-  // ハンドラーが仕留める準備のあるリーチインを誘う。
+  // ドリブルの持ち位置: ライブドリブルのハンドラーに対するワールドXZオフセット。
   carryX = 0;
   carryZ = 0;
-  // ドリブルのカデンツ位相（ハンドラー毎）: D精度が高いハンドラーほど速く進む。
-  // 下手なハンドラーはゆっくり突くのでボールが手から離れている時間が長くなる
-  // （はたかれる隙になり、次の動作はボールが手に戻ってからしか始められない）。
+  // ドリブルのカデンツ位相（ハンドラー毎）。
   dribblePhase = 0;
   // ボールスクリーン（ピック）の状態 — ハンドラーを解放するためスクリーンをセット/保持
   screening = false;
@@ -198,9 +159,7 @@ export class Player {
   jumpRemaining = 0;
   jumpDur = 0;
   jumpHeight = 0;
-  // 斜めの跳躍: ジャンプ全体に分散させた水平移動(メートル)。コンテスト/ブロックが
-  // 正面にないシュートへ横方向へ踏み込めるようにする — 高さと引き換えにリーチを得る。
-  // 通常の垂直ジャンプでは0。updateJumpで適用。
+  // 斜めの跳躍: ジャンプ全体に分散させた水平移動(m)。通常の垂直ジャンプでは0。updateJumpで適用。
   leapX = 0;
   leapZ = 0;
 
@@ -221,11 +180,8 @@ export class Player {
   foulStumble = false;
   foulStaggerX = 0;
   foulStaggerZ = 0;
-  // 守備成功の演出 — 守備プレーに勝った直後に再生される、純粋に見た目だけの
-  // 短い喜び/主張。良いストップが画面上でちゃんと伝わるように:
-  // "block"（勝ち誇って拳を上げてホップ）、"steal"（低い両拳のガッツポーズ）、
-  // "stop"（踏ん張った — 腕を広げ前へ踏ん張る）。tickCooldownで減算され、
-  // runArms/poseFoulReactionの後にposeDefWin()でポーズ付けする。
+  // 守備成功の演出（見た目のみ）: "block"（拳を上げてホップ）、"steal"（低い両拳）、
+  // "stop"（腕を広げ前へ踏ん張る）。tickCooldownで減算、poseDefWin()でポーズ付け。
   defWinT = 0;
   defWinDur = 0;
   defWinKind: "block" | "steal" | "stop" = "block";
@@ -238,8 +194,7 @@ export class Player {
   elbowL!: TransformNode;   // 上腕 ↔ 前腕の関節（静止時は曲げ、伸ばして届かせる）
   elbowR!: TransformNode;
   // 上半身のキャリア: 胴・頭・腕・背番号がこれに乗り、プレー方向へTWISTする
-  // (twistToward)。一方でroot — そして脚と足 — は進行方向を向く。胴を回して
-  // 受け・パス・ドライブへの追随をしながら、片方向へ走り続けられるようにする。
+  // (twistToward)。root（脚/足）は進行方向を向く。
   torsoNode!: TransformNode;
   torsoTwist = 0;   // 平滑化したツイスト(rad)、±TWIST_MAXにクランプ
   headNode!: TransformNode;   // 頭のキャリア — 胴のツイストの上にヨーを重ねる
@@ -338,19 +293,15 @@ export class Player {
     // 独立して着色される4つのキットパーツ（top/bottom/sleeve/shoes）。キット切替時に
     // applyUniform()がライブに再着色できるようPlayerに保持する。
     const u = uniformOf(team);
-    const mkMat = (tag: string, rgb: RGB): StandardMaterial => {
-      const m = new StandardMaterial(`${tag}_${team}_${idx}`, scene);
-      m.diffuseColor = new Color3(rgb.r, rgb.g, rgb.b);
-      m.specularColor = new Color3(0.1, 0.1, 0.1);
-      m.backFaceCulling = false;
-      return m;
-    };
+    const mkMat = (tag: string, rgb: RGB): StandardMaterial =>
+      makeMat(scene, `${tag}_${team}_${idx}`, {
+        diffuse: new Color3(rgb.r, rgb.g, rgb.b), spec: new Color3(0.1, 0.1, 0.1), cull: false,
+      });
     const topMat = mkMat("topmat", u.top);        // 上半身（胸）
     const bottomMat = mkMat("botmat", u.bottom);  // 下半身（ショーツ/腰）
     const sleeveMat = mkMat("slvmat", u.sleeve);  // そで + 上腕
     this.topMat = topMat; this.bottomMat = bottomMat; this.sleeveMat = sleeveMat;
-    // レガシーエイリアス: TOPキットのマテリアルが、付随パーツ（ヘッドバンド等）で
-    // 旧来の単一ユニフォーム色の代わりを務める
+    // 付随パーツ（ヘッドバンド等）はTOPキットのマテリアルを流用する
     const bodyMat = topMat;
     // 胴 = 2つの角丸長方形プリズム（小さな角のフィレットRを持つ矩形断面を垂直に
     // 押し出したもの）。Core Babylonには角丸ボックスがないので、角丸長方形の
@@ -406,12 +357,9 @@ export class Player {
     const backZ = 0.18;
 
     // 「どんぐり」の姿 — 代替スタイルとして保持し、HUDメニューから切り替える。
-    // 3つのパーツで、接合部はすべて平ら（切断面に丸みなし — 輪切りにした
-    // どんぐりのように）: 旧カプセルのr0.3のシルエットをそのまま保つ長い胸
-    // （腰の切断面で平らな底、半球の肩）、その下のより細い腰（平らな上面、
-    // 床のすぐ上に垂れる半球の底）、そしてペンギンの足 — つま先だけが前に覗く。
-    // Core Babylonには片端が平らなカプセルがないので、各パーツはプロファイルの
-    // 旋盤（lathe）で作る。
+    // 3つのパーツ、接合部はすべて平ら（輪切りのどんぐり）: 長い胸（平らな底、半球の肩）、
+    // より細い腰（平らな上面、半球の底）、ペンギンの足。Babylonに片端が平らなカプセルが
+    // ないので各パーツはプロファイルの旋盤（lathe）で作る。
     const acornNode = new TransformNode(`acorn_${team}_${idx}`, scene);
     acornNode.parent = torsoNode;   // 胸+腰はツイストする。足はrootに留まる
     this.acornNode = acornNode;
@@ -423,16 +371,12 @@ export class Player {
     waistPivot.parent = acornNode;
     waistPivot.position.y = ACUT;
     this.acornWaistPivot = waistPivot;
-    // 腰は最上部で広がって胸と面一（WTOP ≈ 胸の半径AR）で接するので、より広い胸が
-    // より狭い腰にもう張り出さない — その接合部の張り出した縁が、上半身側の
-    // 大きな「R」だった。小さなフィレット(RF)が上の外縁をほんの少し和らげる。
-    // 円柱形: 丸い先端もフィレットRもない真っ直ぐなシリンダー。切断面(y=0)から
+    // 腰は円柱形: 丸い先端もフィレットもない真っ直ぐなシリンダー。切断面(y=0)から
     // 先端高さまで、平らな上下キャップ、一定半径WR。
-    const WBOT = (WTIP - ACUT) * 0.66;            // 腰の底のy — 腰を少し長く(上端はカット面のまま)。下げるほど脚は短くなる
-    // 注意: 下のscaling.y=-1反転の後、プロファイルのy=WBOT端が上（胸の下）へ、
-    // y=0端が見える底へ対応する。y=WBOTのキャップ（胸の下に隠れる）は保持するが、
-    // y=0端は開ける（軸点を落とす）ので、本物の溝を持つカスタムの底キャップが
-    // そこの平らな円盤を置き換えられる。
+    const WBOT = (WTIP - ACUT) * 0.66;            // 腰の底のy（上端はカット面のまま）
+    // scaling.y=-1反転の後、プロファイルのy=WBOT端が上（胸の下）へ、y=0端が見える底へ
+    // 対応する。y=WBOTのキャップは保持し、y=0端は開ける（軸点を落とす）ので、カスタムの
+    // 底キャップが平らな円盤を溝で置き換えられる。
     const lowerShape: Vector3[] = [
       new Vector3(0, WBOT, 0),                    // 軸 → 隠れた端（胸の下）を閉じる
       new Vector3(WR, WBOT, 0),                   // その端の縁
@@ -460,16 +404,14 @@ export class Player {
     // 丸い先端が上に）。DOUBLESIDEの旋盤なので、反転した巻き方向でも両面が描画される。
     acornLower.scaling.y = -1;
     acornLower.position.y = WBOT;
-    // ズボン化: 底面に彫り込んだ本物の溝。旋盤の平らな底の円盤は（上で）除去した。
-    // このカスタムキャップがそれを本物の溝で置き換える — 中心(x≈0)を体の内側へ
-    // 押し上げ、前↔後(Z)の中心線に沿って最も深く、縁で面一へフェードする。だから
-    // 下から見上げると窪んだ溝へ入っていく: ショーツを2本の脚に分ける切れ込み。
-    // キャップは腰の半径にクリップしたz方向スライスのグリッド（滑らかな円形の縁）。
-    // waistPivotに乗るのでショーツとともにツイスト&折り畳む。Xに対称。
-    const grooveMat = new StandardMaterial(`groovemat_${team}_${idx}`, scene);
-    grooveMat.diffuseColor = bottomMat.diffuseColor.clone();   // ショーツの色
-    grooveMat.specularColor = new Color3(0.05, 0.05, 0.05);
-    grooveMat.backFaceCulling = false;                         // 溝の壁がどの角度からも見える
+    // ズボン化: 底面に彫り込んだ溝でショーツを2本の脚に分ける。中心(x≈0)を体の内側へ
+    // 押し上げ、前↔後(Z)の中心線で最も深く、縁で面一へフェード。腰の半径にクリップした
+    // z方向スライスのグリッド。waistPivotに乗るのでショーツとともにツイスト&折り畳む。Xに対称。
+    const grooveMat = makeMat(scene, `groovemat_${team}_${idx}`, {
+      diffuse: bottomMat.diffuseColor.clone(),   // ショーツの色
+      spec: new Color3(0.05, 0.05, 0.05),
+      cull: false,                               // 溝の壁がどの角度からも見える
+    });
     const GD = 0.09, GHW = 0.05;      // 溝の深さ（体の内側へ）/ 半幅
     const NZ = 24, NX = 12;
     const gpos: number[] = [];
@@ -505,14 +447,12 @@ export class Player {
     const head = MeshBuilder.CreateSphere(`head_${team}_${idx}`, { diameter: 0.34, segments: 10 }, scene);
     head.position.y = 1.78;
     this.head = head;
-    // 肌/髪のトーンはHUDの顔アイコンと一致する（共有のplayerLook、NAMEをシードに
-    // するので見た目は選手のアイデンティティに紐づき、ロースターのスロットには紐づかない）。
-    // 髪のメッシュはbuildHairMeshesが（再）構築する。ロースター入替でこのスロットの
-    // 占有者が変わると、applyLook()が両方を再実行する。
+    // 肌/髪のトーンはHUDの顔アイコンと一致（共有のplayerLook、NAMEをシード）。髪メッシュは
+    // buildHairMeshesが構築し、ロースター入替時はapplyLook()が再実行する。
     const look = this.look;
-    const headMat = new StandardMaterial(`hmat_${team}_${idx}`, scene);
-    headMat.diffuseColor = new Color3(look.skin.r, look.skin.g, look.skin.b);
-    headMat.specularColor = new Color3(0.05, 0.05, 0.05);
+    const headMat = makeMat(scene, `hmat_${team}_${idx}`, {
+      diffuse: new Color3(look.skin.r, look.skin.g, look.skin.b), spec: new Color3(0.05, 0.05, 0.05),
+    });
     head.material = headMat;
     // 頭は胸のツイストの上にヨーを重ねるキャリアに乗るので、胸が別方向を向いた
     // ままボール/マークを見るために回れる（lookToward参照）
@@ -522,17 +462,17 @@ export class Player {
     head.parent = headNode;
     this.headMat = headMat;
 
-    const hairMat = new StandardMaterial(`hair_${team}_${idx}`, scene);
-    hairMat.diffuseColor = new Color3(look.hair.r, look.hair.g, look.hair.b);
-    hairMat.specularColor = new Color3(0.04, 0.04, 0.04);
+    const hairMat = makeMat(scene, `hair_${team}_${idx}`, {
+      diffuse: new Color3(look.hair.r, look.hair.g, look.hair.b), spec: new Color3(0.04, 0.04, 0.04),
+    });
     this.hairMat = hairMat;
     this.buildHairMeshes(look.style);
     // 目 — 頭の前面にある2つの小さな暗い球。前面 = ローカル -numberSide·Z
     // （腕/足と同じ規約）。ハーフタイムでチームがエンドを入れ替えると
     // setNumberSideがZを向け直す。
-    const eyeMat = new StandardMaterial(`eye_${team}_${idx}`, scene);
-    eyeMat.diffuseColor = new Color3(0.14, 0.1, 0.08);
-    eyeMat.specularColor = new Color3(0, 0, 0);
+    const eyeMat = makeMat(scene, `eye_${team}_${idx}`, {
+      diffuse: new Color3(0.14, 0.1, 0.08), spec: new Color3(0, 0, 0),
+    });
     const mkEye = (sx: number): Mesh => {
       const e = MeshBuilder.CreateSphere(`eye_${team}_${idx}_${sx}`, { diameter: 0.05, segments: 6 }, scene);
       e.material = eyeMat;
@@ -543,25 +483,22 @@ export class Player {
     this.eyeL = mkEye(-0.062);
     this.eyeR = mkEye(0.062);
 
-    // どんぐりのペンギンの足、シューズ型: 長く低いつま先ボックス + 丸いつま先の
-    // キャップ + 腰の底の下に収まる高めの足首シャフト。つま先がローカル -Z
-    // （numberSide = +1 のとき胸側）を指すように作る。シューズは前後非対称なので、
-    // ハーフタイムにsetNumberSideがz位置だけでなくヨーも反転する。
-    const shoeMat = new StandardMaterial(`shoemat_${team}_${idx}`, scene);
-    shoeMat.diffuseColor = new Color3(u.shoes.r, u.shoes.g, u.shoes.b);   // シューズ（キットの色）
-    shoeMat.specularColor = new Color3(0.08, 0.08, 0.08);
-    shoeMat.backFaceCulling = false;   // 手作りのくさびは巻き方向に関係なく表示される
+    // どんぐりのペンギンの足、シューズ型。つま先がローカル -Z（numberSide = +1 のとき胸側）を
+    // 指すように作る。シューズは前後非対称なので、setNumberSideがz位置とヨーを反転する。
+    const shoeMat = makeMat(scene, `shoemat_${team}_${idx}`, {
+      diffuse: new Color3(u.shoes.r, u.shoes.g, u.shoes.b),   // シューズ（キットの色）
+      spec: new Color3(0.08, 0.08, 0.08),
+      cull: false,   // 手作りのくさびは巻き方向に関係なく表示される
+    });
     this.shoeMat = shoeMat;
-    // 各シューズは1つのメッシュなので、一体成形されたパーツに見える（かつては
-    // 4つのプリミティブで接合部がすべて見えていた）: 側面図の輪郭 —
-    // ソール → 四分楕円のつま先カーブ → まっすぐな甲の対角 → 平らな
-    // 履き口の上端 → ソールへ向かってわずかに広がるかかとの背面 — をシューズの
-    // 全幅にわたってスイープし、両側面を三角形ファンで閉じる（輪郭は凸）。
+    // 各シューズは1つのメッシュ: 側面図の輪郭 — ソール → 四分楕円のつま先カーブ →
+    // まっすぐな甲の対角 → 平らな履き口の上端 → 広がるかかとの背面 — を全幅にスイープし、
+    // 両側面を三角形ファンで閉じる。
     const makeAcornFoot = (sx: number, tag: string): TransformNode => {
       const node = new TransformNode(`acornFoot_${tag}_${team}_${idx}`, scene);
       node.parent = this.root;   // 足はツイストする胴ではなく脚に属する
       node.position.set(sx, 0, 0.07);            // z/ヨーはnumberSideごとに向け直す
-      const hw = 0.22 / 2;                            // 半幅 — さらに横広に
+      const hw = 0.22 / 2;                            // 半幅
       const capZ = -0.20, capR = 0.08, capH = 0.13;   // つま先カーブ: 開始/膨らみ/高さ
       const topY = 0.25, slopeZ = -0.08;              // 履き口の上端 / 甲の端
       const heelTopZ = 0.11, heelBotZ = 0.18;         // かかとの背面: 下外へ広がって長めのかかとになる
@@ -599,12 +536,9 @@ export class Player {
     this.acornFootL = makeAcornFoot(-0.12, "L");
     this.acornFootR = makeAcornFoot(0.12, "R");
 
-    // 脚: （半分にした）腰の底とシューズの履き口の隙間を素肌のシリンダーで埋める
-    // — 色は顔/手と一致（headMat）、前腕より太い（腕⌀0.10 → 脚⌀0.20）。root（シューズ
-    // ではない）に固定: 垂直を保つので上面が腰の下から傾き出ることがない。
-    // syncAcornLegs()が各脚を、その足の持ち上げ/スタンスちょうどの分だけ上下（とz）へ
-    // スライドさせるので、足がパタパタしても上端は腰に収まり底はシューズに収まる
-    // — 両端が繋がっている。どんぐりモデルと連動して切り替わる。
+    // 脚: 腰の底とシューズの履き口の隙間を素肌のシリンダーで埋める（色はheadMat）。
+    // root（シューズではない）に固定して垂直を保つ。syncAcornLegs()が足の持ち上げ/スタンスに
+    // 合わせて上下（とz）へスライドさせるので、上端は腰・底はシューズに収まる。
     const makeAcornLeg = (sx: number, tag: string): TransformNode => {
       const node = new TransformNode(`acornLeg_${tag}_${team}_${idx}`, scene);
       node.parent = this.root;                     // 足と同様に固定（ツイストなし、傾きなし）
@@ -622,10 +556,8 @@ export class Player {
     this.acornLegL = makeAcornLeg(-0.12, "L");
     this.acornLegR = makeAcornLeg(0.12, "R");
 
-    // 背番号、ユニフォームの背面にプリント。デカールが数字をカプセルへ投影するので、
-    // 平らな面に浮くのではなく体の曲面に沿う。ボディはヨーしないので「背面」とは
-    // 単に攻めているバスケットから遠い側 — 各Zサイドごとに1つのデカールを焼き込み、
-    // setNumberSide()が正しい方を表示する（ハーフタイムで反転）。
+    // 背番号、ユニフォームの背面にプリント。ボディはヨーしないので「背面」とは攻める
+    // バスケットから遠い側 — 各Zサイドごとに1つ焼き込み、setNumberSide()が正しい方を表示する。
     const numTex = new DynamicTexture(`numtex_${team}_${idx}`, { width: 128, height: 128 }, scene, false);
     numTex.hasAlpha = true;
     const ctx = numTex.getContext() as unknown as CanvasRenderingContext2D;
@@ -636,12 +568,11 @@ export class Player {
     ctx.textBaseline = "middle";
     ctx.fillText(String(idx + 1), 64, 68);
     numTex.update();
-    const numMat = new StandardMaterial(`nummat_${team}_${idx}`, scene);
+    const numMat = makeMat(scene, `nummat_${team}_${idx}`, {
+      emissive: new Color3(1, 1, 1), unlit: true, cull: false,
+    });
     numMat.diffuseTexture = numTex;
     numMat.opacityTexture = numTex;
-    numMat.emissiveColor = new Color3(1, 1, 1);
-    numMat.disableLighting = true;
-    numMat.backFaceCulling = false;
     // 番号はカプセル面のすぐ外側で胴に沿う薄い曲面シェル（リボン）が担うので、
     // 数字はユニフォームのプリントのように体の曲面に沿う。頂点はここで明示的に
     // 計算する — 投影/UVの内部実装に依存しない。アークのスイープ方向はサイド
@@ -659,7 +590,7 @@ export class Player {
         top.push(new Vector3(x, yTop, z));
         bot.push(new Vector3(x, yBot, z));
       }
-      // [bot, top]でテクスチャのvが正しく上向きになる（画面上で確認済み）
+      // [bot, top]でテクスチャのvが正しく上向きになる
       const shell = MeshBuilder.CreateRibbon(`numshell_${tag}_${sign}_${team}_${idx}`, {
         pathArray: [bot, top], sideOrientation: Mesh.DOUBLESIDE,
       }, scene);
@@ -671,7 +602,7 @@ export class Player {
     // 人型: 平らな矩形の背中のすぐ外側（~60°の緩やかな巻き、上背部）
     this.numHumanPlus = makeNumberShell(1, "h", backZ + 0.012, 1.52, 1.08, Math.PI * 0.34);
     this.numHumanMinus = makeNumberShell(-1, "h", backZ + 0.012, 1.52, 1.08, Math.PI * 0.34);
-    // どんぐり: 0.3のカプセル半径のすぐ外側（~100°の巻き、従来通り）
+    // どんぐり: 0.3のカプセル半径のすぐ外側（~100°の巻き）
     this.numAcornPlus = makeNumberShell(1, "a", 0.315, 1.42, 0.88, Math.PI * 0.55);
     this.numAcornMinus = makeNumberShell(-1, "a", 0.315, 1.42, 0.88, Math.PI * 0.55);
 
@@ -684,19 +615,17 @@ export class Player {
     nameTex.hasAlpha = true;
     this.nameTex = nameTex;
     this.drawNameTag();              // 現在の名前を描画
-    const nameMat = new StandardMaterial(`namemat_${team}_${idx}`, scene);
+    const nameMat = makeMat(scene, `namemat_${team}_${idx}`, {
+      emissive: new Color3(1, 1, 1), unlit: true, cull: false,
+    });
     nameMat.diffuseTexture = nameTex;
     nameMat.opacityTexture = nameTex;
-    nameMat.emissiveColor = new Color3(1, 1, 1);
-    nameMat.disableLighting = true;
-    nameMat.backFaceCulling = false;
     namePlane.material = nameMat;
     namePlane.parent = this.root;
 
     // --- 腕: 上腕（ユニフォームのそで）→ 肘 → 前腕（肌）→ 手。肩のピボットが
-    // 腕全体をボールへ向ける（リーチ）。肘は静止時/走行中は曲がり、手のひらを
-    // ボールに当てるために伸びる。全長 = UP + FORE で、旧ARM_LENと一致するので
-    // リーチの計算は変わらない。 ---
+    // 腕全体をボールへ向ける（リーチ）。肘は静止/走行中は曲がり、手のひらをボールに
+    // 当てるために伸びる。全長 = UP + FORE。 ---
     const UP = 0.25, FORE = 0.25;
     const makeArm = (sx: number, tag: string): { pivot: TransformNode; elbow: TransformNode } => {
       const pivot = new TransformNode(`arm_${tag}_${team}_${idx}`, scene);
@@ -715,13 +644,12 @@ export class Player {
       // 到達 -0.068+0.0775×1.8 ≈ +0.072。全長≈0.14で断面±0.0675を数mmだけ超える。
       delt.position.set(sx > 0 ? -0.068 : 0.068, -0.005, 0);
       delt.scaling.z = 1.8;
-      // 実測(NullEngine): arc0.5 の占有域は z≤0。RotationY(-π/2)で -Z→+X なので
-      // 右腕(sx>0)は -π/2 で膨らみが外側(+X)・切断面が胴体側(内側)を向く。
+      // arc0.5 の占有域は z≤0。RotationY(-π/2)で -Z→+X なので右腕(sx>0)は -π/2 で
+      // 膨らみが外側(+X)・切断面が胴体側(内側)を向く。
       delt.rotation.y = sx > 0 ? -Math.PI / 2 : Math.PI / 2;   // 膨らみを外側へ
 
       delt.material = sleeveMat;   // そで: 肩のキャップをそでの色で
-      // 上腕は肩側が太く肘側へ細くなるテーパー: デルトイド球から途切れなく
-      // 「斜めに」流れる輪郭になる（旧: 平行断面の等径円柱）。
+      // 上腕は肩側が太く肘側へ細くなるテーパー。
       const upper = MeshBuilder.CreateCylinder(`upper_${tag}_${team}_${idx}`,
         { height: UP, diameterTop: 0.135, diameterBottom: 0.105, tessellation: 10 }, scene);
       upper.parent = pivot;
@@ -791,12 +719,7 @@ export class Player {
 
   readonly meshes: Mesh[];
 
-  // 胸が腰からどこまでツイストできるか（どちらの向きも）。実際の胴は足を回さねば
-  // ならなくなる前に~60-70°までいける。
-  static readonly TWIST_MAX = 1.15;
-
-  // 頭が胸を越えてどこまで回れるか（胴のツイストの上に）。
-  static readonly HEAD_MAX = 0.95;   // ~54°
+  // 胸ツイスト/頭ヨーの可動域・速度は action/animation/basic/joints.ts の JOINT が定義。
 
   // --- ベンチのアイドル: 各自の個性で試合を眺める ---
   benchGazeOff = 0;                       // 個人的な視線のオフセット(rad)
@@ -838,12 +761,8 @@ export class Player {
   static readonly ACORN_FOOT_Z = 0.02;  // 立ちスタンス: 足は後ろ寄りに配置
   static readonly ACORN_SPLAY = 0.30;   // 立ちスタンス: つま先を外へ開く（各~17°）
 
-  // どんぐりのボディを着席ポーズに折り畳む: 腰が胸側へ水平まで振り上がり（前 =
-  // -numberSide·Z なので、rotation.x = +90°·ns が下向きの腰を -ns·Z へ対応させる）、
-  // シューズは膝の下で前へ動き床へ戻る（rootは着席中sync()が落とす）。
-  // rootより下の、折り畳んだ腰の最下点（座面に置かれる部分）。
-  // 折り角度から導出するのでSIT_FOLDが変わっても正しいまま。90°の折りで
-  // 旧来の (ACORN_CUT - ACORN_WAIST_R)=0.47 になる。
+  // rootより下の、折り畳んだ腰の最下点（座面に置かれる部分）。折り角度から導出するので
+  // SIT_FOLDが変わっても正しいまま。
   static acornSeatDrop(): number {
     const f = Player.SIT_FOLD;
     return Player.ACORN_CUT - Player.ACORN_WAIST_R * (Math.cos(f) + Math.sin(f));

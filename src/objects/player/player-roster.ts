@@ -1,12 +1,9 @@
 // 選手のロースター適用（試合前エディタで編集され得る PlayerDef を選手モデルへ読み直す）。
 // 名前/身長/ロール/優先度/派生値/特殊能力を def から反映し、必要なら見た目（ネームタグ/
-// look/スケール）も更新する。プロトタイプ拡張で Player に紐づけ。本体は player.ts から
-// 逐語移動（this は Player のまま）。呼び出し側は不変。game.ts が副作用 import する。
-// 補足: PlayerDef 自体（ロースターのデータ）は attributes.ts、編成画面の UI は ui.ts。
-// ここは「def を選手へ適用する」モデル操作＝試合前の setup 関心を、試合中の挙動から分離する。
-import { rate, computeOffPriority, roleOffense, offActionOf, ROLE_BEHAVIOR,
-  DEF_ROLE_BEHAVIOR, type PlayerDef } from "../../attributes";
-import { clamp } from "../../util";
+// look/スケール）も更新する。プロトタイプ拡張で Player に紐づけ。
+import { type PlayerDef } from "../../attributes";
+import { computeOffPriority, roleOffense, offActionOf, ROLE_BEHAVIOR, DEF_ROLE_BEHAVIOR } from "../../roles";
+import { rate, clamp } from "../../util";
 import { playerLook } from "./player-look";
 import { Player } from "./player";
 

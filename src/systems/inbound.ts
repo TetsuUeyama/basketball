@@ -1,21 +1,19 @@
-// スローイン/インバウンド機能。方式A: Game 参照を受け取るサブシステム。固有状態
-// (投げ入れ残り時間/受け手/OOB歩行者と地点)はこのクラスが所有。実際の投げ入れ(throwIn)
-// はパス飛行の内部機構を使うため Game 側に残し、update() から this.game.throwIn を呼ぶ。
-// t/receiver/oobWalker/oobSpot は外部(クォーター開始・サイドイン・reset・updatePause)も参照。
+// スローイン/インバウンド機能。固有状態(残り時間/受け手/OOB歩行者と地点)はこのクラスが所有。
+// 実際の投げ入れ(throwIn)は Game 側に残し、update() から呼ぶ。
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
-import { COURT, RIM, SHOT_CLOCK, SHOT_CLOCK_PARTIAL, teamShort } from "../config";
-import { clamp, rand, dist2DTo, moveToward2D } from "../util";
+import { COURT, RIM, SHOT_CLOCK, SHOT_CLOCK_PARTIAL, OOB_OUTSET, INBOUNDS_INSET, teamShort } from "../config";
+import { clamp, rand, dist2DTo, moveToward2D, nearestOf } from "../util";
 import { runDefenseDuringDeadish } from "../action/defense";
 import type { Game } from "../game";
 
 export class InboundSystem {
-  t = 0;                            // 投げ入れまでの残り時間（旧 inboundT）
-  receiver: Player | null = null;   // 受け手（旧 inboundReceiver）
+  t = 0;                            // 投げ入れまでの残り時間
+  receiver: Player | null = null;   // 受け手
   oobWalker: Player | null = null;  // OOB地点へ歩く投げ手（updatePause が動かす）
   oobSpot = new Vector3();
   private oobTeam = 0;
-  private oobShotClock = 0;          // 投げ入れ時に戻すショットクロック(笛の時点で決定)
+  private oobShotClock = 0;          // 投げ入れ時に戻すショットクロック
 
   constructor(private game: Game) {}
 
@@ -27,11 +25,8 @@ export class InboundSystem {
     const sign = g.attackSign(scorer);
     const baselineZ = sign * RIM.z;
     const tp = g.teamPlayers(team);
-    let taker = tp[0];
-    for (const p of tp) {
-      if (Math.abs(p.pos.z - baselineZ) < Math.abs(taker.pos.z - baselineZ)) taker = p;
-    }
-    taker.pos.set(rand(-2, 2), 0, sign * (COURT.halfL + 0.3)); // エンドライン後方
+    const taker = nearestOf(tp, (p) => Math.abs(p.pos.z - baselineZ))!;
+    taker.pos.set(rand(-2, 2), 0, sign * (COURT.halfL + OOB_OUTSET)); // エンドライン後方
     g.handler = taker;
     g.ballMode = "inbound";
     this.t = 2.4;   // ゴール後、インバウンダーが持って投げ入れるまでの時間
@@ -51,17 +46,14 @@ export class InboundSystem {
     const overEnd = Math.abs(oz) - COURT.halfL;
     let sx: number, sz: number;
     if (overSide >= overEnd) {                     // サイドライン外
-      sx = Math.sign(ox || 1) * (COURT.halfW + 0.3);
-      sz = clamp(oz, -(COURT.halfL - 1), COURT.halfL - 1);
+      sx = Math.sign(ox || 1) * (COURT.halfW + OOB_OUTSET);
+      sz = clamp(oz, -(COURT.halfL - INBOUNDS_INSET), COURT.halfL - INBOUNDS_INSET);
     } else {                                        // エンドライン(ベースライン)外
-      sx = clamp(ox, -(COURT.halfW - 1), COURT.halfW - 1);
-      sz = Math.sign(oz || 1) * (COURT.halfL + 0.3);
+      sx = clamp(ox, -(COURT.halfW - INBOUNDS_INSET), COURT.halfW - INBOUNDS_INSET);
+      sz = Math.sign(oz || 1) * (COURT.halfL + OOB_OUTSET);
     }
     const tp = g.teamPlayers(team);
-    let taker = tp[0];
-    for (const p of tp) {
-      if (dist2DTo(g.ball.pos, p.pos.x, p.pos.z) < dist2DTo(g.ball.pos, taker.pos.x, taker.pos.z)) taker = p;
-    }
+    const taker = nearestOf(tp, (p) => dist2DTo(g.ball.pos, p.pos.x, p.pos.z))!;
     // ボールはその地点で死ぬ。OOBを告知し、投げ手が地点へ歩く(updatePauseが動かす)まで
     // 再開しない。finishOOB でボールを手に持たせライブへ。
     g.ball.pos.set(sx, 1.2, sz);
@@ -71,9 +63,8 @@ export class InboundSystem {
     this.oobWalker = taker;
     this.oobSpot.set(sx, 0, sz);
     this.oobTeam = team;
-    // 再開時のショットクロックを今決める(デッドボール中は止まる): ポゼッション交代は
-    // フルリセット、リムからの攻撃側維持は partial、ブロック/スティール(リム無し)は現状維持。
-    // …呼び出し側がクロックを既に指定した場合(ショットクロック違反等)はそれを優先。
+    // 再開時のショットクロックを決める: ポゼッション交代=フルリセット、攻撃側維持=partial、
+    // リム無し=現状維持。呼び出し側が指定した場合はそれを優先。
     this.oobShotClock = opts.clock ?? (team !== g.looseOff ? SHOT_CLOCK
       : g.looseFromRim ? Math.max(g.shotClock, SHOT_CLOCK_PARTIAL)
       : g.shotClock);
@@ -93,7 +84,7 @@ export class InboundSystem {
     g.possession = this.oobTeam;
     g.ballMode = "inbound";
     this.t = 0.9;
-    g.shotClock = this.oobShotClock;   // フル/partial/継続 — 笛の時点で決定済み
+    g.shotClock = this.oobShotClock;   // フル/partial/継続
     g.resetMotion();
     this.receiver = this.pickReceiver(taker);
     this.oobWalker = null;

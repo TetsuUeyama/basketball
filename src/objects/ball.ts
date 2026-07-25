@@ -1,4 +1,5 @@
-import { Scene, Mesh, MeshBuilder, StandardMaterial, Color3, Vector3 } from "@babylonjs/core";
+import { Scene, Mesh, MeshBuilder, Color3, Vector3 } from "@babylonjs/core";
+import { makeMat } from "./materials";
 
 // ボール本体オブジェクト。位置(pos)と自由飛行時の速度(vel)を持ち、sync でメッシュへ反映。
 export class Ball {
@@ -8,10 +9,8 @@ export class Ball {
 
   constructor(scene: Scene) {
     this.mesh = MeshBuilder.CreateSphere("ball", { diameter: 0.24, segments: 12 }, scene);
-    const mat = new StandardMaterial("ballmat", scene);
-    mat.diffuseColor = new Color3(0.85, 0.4, 0.12);
-    mat.specularColor = new Color3(0.25, 0.2, 0.15);
-    this.mesh.material = mat;
+    this.mesh.material = makeMat(scene, "ballmat",
+      { diffuse: new Color3(0.85, 0.4, 0.12), spec: new Color3(0.25, 0.2, 0.15) });
   }
 
   sync(): void {

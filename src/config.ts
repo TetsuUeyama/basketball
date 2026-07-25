@@ -1,7 +1,6 @@
 // ---------------------------------------------------------------------------
 // シミュレーション定数。距離はすべてメートル、速度はすべてメートル/秒。
-// 座標の取り決め（あえて単純に保つ — インポートモデルがないので、利き手系が
-// 目に見える向きのバグを生むことはない）:
+// 座標の取り決め:
 //   X = コート幅   (サイドラインは x = ±halfW)
 //   Z = コート長さ (ベースラインは z = ±halfL)
 //   Y = 上
@@ -23,16 +22,6 @@ export const RIM = {
   backboardZ: 13.6,
 };
 
-// チームが攻めるフープのリム中心(3D点)を返す。
-export function hoopCenter(team: number) {
-  const z = team === 0 ? RIM.z : -RIM.z;
-  return { x: 0, y: RIM.height, z };
-}
-// そのリムの真下のフロア上の点。
-export function hoopFloor(team: number) {
-  return { x: 0, z: team === 0 ? RIM.z : -RIM.z };
-}
-
 export const SHOOT_RANGE = 7.6;   // 選手が通常シュートを打つ最大距離
 export const THREE_DIST = 6.75;   // これより遠いと3Pとして数える
 
@@ -48,20 +37,23 @@ export const HUD_OPTS: { staminaOn: "name" | "icon"; showNames: boolean; model: 
 
 export const PLAYER_SPEED = 6.2;  // オフェンス時の走行速度
 export const DEF_SPEED = 6.5;     // 守備がリカバーできるよう少しだけ速い
+export const BURST_SPEED = 7.5;   // 抜き去りバーストの想定速度
+export const BODY_MIN_DIST = 0.62; // 選手同士の最小ボディ間隔(押し離しの基準)
+export const OOB_OUTSET = 0.3;     // アウトオブバウンズでラインの外に立つ距離
+export const INBOUNDS_INSET = 1.0; // コート内に収める際のラインからの内側距離
 export const PASS_SPEED = 13;     // パスの移動速度
 export const LANE_W = 1.1;        // 守備がパスレーンを脅かす横方向の距離(m)
 // 手のひら当たり判定モデル: 守備のリーチ半径を(守備−オフェンス)でスケール。false で
 // 旧来の固定距離モデルへ。スティール/コンテスト/ブロックの確率ゲートに使う。
 export const PALM_HITBOX = true;
-// これより長いパスは投げない(クロスコートの一発はリードではない)
+// これより長いパスは投げない
 export const MAX_PASS = 13;
-// 圧縮したクォーター(NBAの720sに対し60s)と速いペースに合わせてスケールしたショットクロック:
-// 14/10ではめったに効かなかったので、7で本物のプレッシャーになる。部分リセット
-// (ファウル / オフェンスリバウンド後) → 5。
+// クォーター圧縮とペースに合わせたショットクロック。部分リセット(ファウル/オフェンスリバウンド後)は短縮。
 export const SHOT_CLOCK = 12;
 export const SHOT_CLOCK_PARTIAL = 8;
 export const QUARTER_TIME = 60;   // 1クォーターあたりのゲーム内秒数(クロックに表示)
 export const QUARTERS = 4;
+export const BUZZER_WINDOW = 0.9; // 残りこの秒数を切ったらブザービーター扱い
 
 export const TEAM_COLORS = [
   { r: 0.86, g: 0.34, b: 0.12 }, // Team 0 — オレンジ (UIアクセント: バナー、ネットのフラッシュ、タグ)
@@ -72,9 +64,7 @@ export const TEAM_NAMES = ["BLAZE", "WAVE"];
 // ---------------------------------------------------------------------------
 // ユニフォーム。各チームはホームとアウェイのキットを持つ。各キットは4つの部位を
 // 独立に着色する: top (胸/上半身)、bottom (ショーツ/下半身)、sleeve (そで+上腕)、
-// shoes (シューズ)。TEAM_UNIFORM は各チームが今試合でどのキットを着るかを選ぶ
-// （デフォルトは team0 ホーム / team1 アウェイで、両者が衝突しないように）— 入れ替える
-// にはこれを書き換えて Game.applyUniforms を呼ぶ。
+// shoes (シューズ)。TEAM_UNIFORM は各チームが今試合でどのキットを着るかを選ぶ。
 // ---------------------------------------------------------------------------
 export interface RGB { r: number; g: number; b: number; }
 export interface Uniform { top: RGB; bottom: RGB; sleeve: RGB; shoes: RGB; }
@@ -94,22 +84,18 @@ export const UNIFORMS: [Uniform, Uniform][] = [
   ],
 ];
 
-// 各チームがどのキットを着るか(0 = ホーム, 1 = アウェイ)。設計上固定: team 0
-// (BLAZE側)は常にホーム、team 1 (WAVE側)は常にアウェイを着る — これはもうユーザーが
-// トグルできないので、team 0 に選んだクラブはホームキットを、team 1 に選んだクラブは
-// アウェイキットを表示する。
+// 各チームがどのキットを着るか(0 = ホーム, 1 = アウェイ)。team 0 は常にホーム、team 1 は常にアウェイ。
 export const TEAM_UNIFORM: [number, number] = [0, 1];
 
 // 各チームが現在代表しているクラブ(その名前、clubdb由来)、またはランダム / BLAZE-WAVE
 // ロスターの場合は ""。クラブピッカーが設定し、クラブごとのキットを駆動する。
 export const TEAM_CLUB: [string, string] = ["", ""];
 
-// (必要な型/データの後でインポートする。clubkits 内の型インポートは消去されるので、
-//  実行時のエッジは config → clubkits のみ — 循環はない。)
+// (型/データの後でインポート。実行時のエッジは config → clubkits のみで循環はない。)
 // eslint-disable-next-line @typescript-eslint/no-use-before-define
-import { CLUB_KITS } from "./clubkits";
+import { CLUB_KITS } from "./club/clubkits";
 // eslint-disable-next-line @typescript-eslint/no-use-before-define
-import { CLUB_ABBR } from "./clubabbr";
+import { CLUB_ABBR } from "./club/clubabbr";
 
 export function uniformOf(team: number): Uniform {
   // 実在のクラブは自分のキットを着る(CLUB_KITS のホーム/アウェイ)。ランダムロスターは
@@ -223,9 +209,8 @@ const CLUB_SHORT_OVERRIDE: Record<string, string> = {
   "ディナモ・ブカレスト": "ブカレスト",
 };
 
-// ゲーム内の通知バナー用のコンパクトなチーム名。クラブは短縮名を使う
-// (例: バイエルン・ミュンヘン → Bミュンヘン, レアル・マドリッド → Rマドリー)。
-// ランダムな BLAZE/WAVE ロスターは(すでに短い)その名前を保つ。
+// ゲーム内の通知バナー用のコンパクトなチーム名。クラブは短縮名を使い、
+// ランダムな BLAZE/WAVE ロスターはその名前を保つ。
 export function teamShort(team: number): string {
   const club = TEAM_CLUB[team];
   if (!club) return TEAM_NAMES[team];
@@ -235,10 +220,10 @@ export function teamShort(team: number): string {
     const parts = club.split("・");
     const last = parts[parts.length - 1];
     if (last.length <= 2) {
-      s = parts[0].slice(0, 2) + last;                    // 地名 + タグ: マンチェスター・U → マンU
+      s = parts[0].slice(0, 2) + last;                    // 地名 + タグ
     } else {
-      const ab = CLUB_ABBR[club];                          // ローマ字の頭文字を付けた都市:
-      s = (ab ? ab[0] : "") + last;                        //   バイエルン・ミュンヘン → Bミュンヘン
+      const ab = CLUB_ABBR[club];                          // ローマ字の頭文字を付けた都市
+      s = (ab ? ab[0] : "") + last;
     }
   }
   return s.length > 6 ? `${s.slice(0, 5)}…` : s;           // オーバーフローしないようハードキャップ

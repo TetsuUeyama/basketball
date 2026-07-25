@@ -1,10 +1,8 @@
-// ディフェンスの特殊スキーム（ゾーン / フルコートプレス / スキーム選択）。Option B:
-// 状態は Game(=GameState)が持ち、ここは game を受け取る関数群。man ディフェンス本体は
-// runDefense(game 側)に残し、そこからスキーム時にこれらへ分岐する。
+// ディフェンスの特殊スキーム（ゾーン / フルコートプレス / スキーム選択）。man 本体は runDefense。
 import { Player } from "../objects/player/player";
 import { RIM } from "../config";
-import { rate } from "../attributes";
-import { clamp, chance, dist2D, moveToward2D } from "../util";
+import { defHands, ballSecurity } from "../eval";
+import { rate, clamp, chance, dist2D, moveToward2D, dirTo2D } from "../util";
 import { defEffort, defendOnBall, getBackOnDefense } from "./defense";
 import type { Game } from "../game";
 
@@ -13,7 +11,7 @@ export function pickDefScheme(game: Game): void {
   const defTeam = 1 - game.possession;
   const tac = game.tactics[defTeam].defense;
   game.pressOn = chance(tac.press);
-  // プレスのポゼッションもボールが上がれば man に落ちる。非プレスのみセットのゾーンに commit。
+  // プレスもボールが上がれば man に落ちる。非プレスのみゾーンに commit。
   if (!game.pressOn && chance(tac.zone)) {
     const bigs = game.teamPlayers(defTeam).filter((p) => game.isBig(p));
     const tall = bigs.length ? bigs.reduce((s, p) => s + p.height, 0) / bigs.length : 2;
@@ -78,8 +76,8 @@ export function runZoneDefense(game: Game, dt: number): void {
       const gap = dist2D(d.pos, h.pos);
       if (gap < 1.4) {
         const close = 1 - gap / 1.4;
-        const stl = rate(d.attr.reaction) * 0.4 + rate(d.attr.agility) * 0.3 + rate(d.attr.defense) * 0.3;
-        const resist = rate(h.attr.dribbleAcc) * 0.6 + rate(h.attr.handling) * 0.4;
+        const stl = defHands(d);
+        const resist = ballSecurity(h);
         if (chance(Math.max(0.004, 0.025 + stl * 0.08 - resist * 0.06) * close * dt)) { game.steal(d); return; }
       }
       continue;
@@ -87,8 +85,7 @@ export function runZoneDefense(game: Game, dt: number): void {
 
     const home = homes.get(d)!;
     let tx = home.x + shiftX, tz = home.z;
-    // マッチアップ風味: この守備者の区域にいるオフェンスを拾う(バンプ)。ただし後方の
-    // ビッグはアークの外まで追わない — それが外のシューターを空ける(ゾーンの代償)
+    // マッチアップ風味: 区域内のオフェンスを拾う。後方ビッグはアークの外まで追わない。
     const reach = game.isBig(d) ? 3.0 : 3.8;
     let claim: Player | null = null;
     let bestD = reach;
@@ -132,9 +129,7 @@ export function runPress(game: Game, dt: number): void {
   const deny = rest.filter((d) => d !== safety);
 
   // ハンドラー→リム方向と、挟み込む横軸
-  const dx = protect.x - h.pos.x, dz = protect.z - h.pos.z;
-  const len = Math.hypot(dx, dz) || 1;
-  const ux = dx / len, uz = dz / len;          // リム方向(ダウンコート)
+  const { ux, uz } = dirTo2D(h.pos.x, h.pos.z, protect.x, protect.z);   // リム方向(ダウンコート)
   const lx = -uz, lz = ux;                     // 横
 
   // PRIMARY: ボール側でボディアップ、中央を切る(バックコートのプレスでは全力)
@@ -145,8 +140,7 @@ export function runPress(game: Game, dt: number): void {
     moveToward2D(primary.pos, tx, tz, primary.accelToward(dt, tx, tz, 1.1) * dt);
     game.clampCourt(primary.pos);
   }
-  // TRAPPER: 反対側から挟むが2人目の押しは加えない(押すのは primary のみ)。腕一本分の
-  // 距離で逃げ道を塞ぎ、そこからボールを狙う(ディグのポーズは poseHands、リップは下の trapped)。
+  // TRAPPER: 反対側から挟む(押すのは primary のみ)。腕一本分の距離で逃げ道を塞ぎボールを狙う。
   {
     const side = h.pos.x >= 0 ? 1 : -1;
     const tx = h.pos.x + ux * 0.35 + lx * 1.0 * side;
@@ -171,16 +165,14 @@ export function runPress(game: Game, dt: number): void {
     game.clampCourt(safety.pos);
   }
 
-  // トラップがボールを吐き出させる: 両トラッパーが密着し、速い手(反応/敏捷)がリップ/暴投を
-  // 強要。保持力(技術/D精度)とキープ特化はより多く割る。
+  // トラップがボールを吐き出させる: 両トラッパー密着で速い手がリップ/暴投を強要。
   const trapped = dist2D(primary.pos, h.pos) < 1.6 && dist2D(trapper.pos, h.pos) < 1.9;
   if (trapped) {
     const hands = rate(primary.attr.reaction) * 0.25 + rate(primary.attr.agility) * 0.2
       + rate(trapper.attr.reaction) * 0.25 + rate(trapper.attr.agility) * 0.2;
-    const secure = rate(h.attr.dribbleAcc) * 0.5 + rate(h.attr.handling) * 0.4
-      + (h.has("keepDribble") ? 0.2 : 0);
+    const secure = ballSecurity(h);
     const p = Math.max(0.01, 0.06 + hands * 0.12 - secure * 0.14);
-    // トラッパーが奪う(自由な手でボールを狙っているのは彼、primary はボディアップで手一杯)
+    // トラッパーが奪う(primary はボディアップで手一杯)
     if (chance(p * dt * 6)) { game.steal(trapper); return; }
   }
 }

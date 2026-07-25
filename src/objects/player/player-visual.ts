@@ -1,8 +1,7 @@
-// 選手の見た目/メッシュ管理（髪の構築・モデル切替・背番号側・スケール・胴の奥行き・
-// メッシュ同期・ネームタグ描画・ユニフォーム再着色）。プロトタイプ拡張で Player に
-// 紐づけ。本体は player.ts から逐語移動（this は Player のまま）。呼び出し側は不変。
-// game.ts が副作用 import する。※描画系のため headless では見た目未検証。
-import { MeshBuilder, StandardMaterial, Color3, TransformNode, Mesh } from "@babylonjs/core";
+// 選手の見た目/メッシュ管理（髪構築・モデル切替・背番号側・スケール・胴の奥行き・
+// メッシュ同期・ネームタグ描画・ユニフォーム再着色）。プロトタイプ拡張で Player に紐づけ。
+import { MeshBuilder, Color3, TransformNode, Mesh } from "@babylonjs/core";
+import { makeMat } from "../materials";
 import { TEAM_COLORS, HUD_OPTS, uniformOf } from "../../config";
 import { clamp } from "../../util";
 import { Player } from "./player";
@@ -30,11 +29,8 @@ declare module "./player" {
 Player.prototype.buildHairMeshes = function(style: number): void {
     const { head, hairMat, team } = this;
     // slice = ドームがどこまで下りてくるか（顔ではなく側面/後ろを覆う）。
-    // tilt = 後傾で、後頭部を覆ったまま前が目の上へ乗り上がる（numberSideで反転
-    // するので前 = -numberSide·Z）。
-    // slice ≲0.6 + 適度なtiltでクラウンを顔から外す（ヘルメット感なし）。
-    // 長さは後頭部を垂れる別の `back` パネル（下記）が担い、大きなsliceでは担わない
-    // — 大きなドームは後ろと同じくらい顔も覆ってしまう。
+    // tilt = 後傾で、後頭部を覆ったまま前が目の上へ乗り上がる（numberSideで反転、前 = -numberSide·Z）。
+    // 長さは後頭部を垂れる別の `back` パネル（下記）が担う。
     type HStyle = { d: number; slice: number; sy: number; y: number; tilt: number;
                     back?: { d: number; sx: number; sy: number; sz: number; y: number } };
     const HS: (HStyle | null)[] = [
@@ -70,9 +66,8 @@ Player.prototype.buildHairMeshes = function(style: number): void {
       this.hairTilt = hs.tilt;
     }
     if (hs?.back) {
-      // 後ろ髪: 後頭部を垂れる扁平な楕円体（後ろ = +numberSide·Z なので、ハーフタイムに
-      // setNumberSideでzが反転する）。頭の後ろかつ下に位置するので顔に届かない
-      // — 前を覆わずに長さを出す。
+      // 後ろ髪: 後頭部を垂れる扁平な楕円体（後ろ = +numberSide·Z、setNumberSideでz反転）。
+      // 頭の後ろかつ下で顔に届かない。
       const b = hs.back;
       const back = MeshBuilder.CreateSphere(`hairback_${team}_${this.idx}`, { diameter: b.d, segments: 12 }, this.scene);
       back.material = hairMat;
@@ -84,11 +79,10 @@ Player.prototype.buildHairMeshes = function(style: number): void {
     if (style === 4) {
       // ヘッドバンド — 頭を囲うチームカラーのリング
       const band = MeshBuilder.CreateTorus(`band_${team}_${this.idx}`, { diameter: 0.355, thickness: 0.05, tessellation: 12 }, this.scene);
-      const bandMat = new StandardMaterial(`bandmat_${team}_${this.idx}`, this.scene);
       const tc = TEAM_COLORS[team];
-      bandMat.diffuseColor = new Color3(tc.r, tc.g, tc.b);
-      bandMat.specularColor = new Color3(0.05, 0.05, 0.05);
-      band.material = bandMat;
+      band.material = makeMat(this.scene, `bandmat_${team}_${this.idx}`, {
+        diffuse: new Color3(tc.r, tc.g, tc.b), spec: new Color3(0.05, 0.05, 0.05),
+      });
       band.parent = head;
       band.position.y = 0.035;       // 額の高さ
       this.headband = band;
@@ -137,9 +131,8 @@ Player.prototype.buildHairMeshes = function(style: number): void {
     }
 };
 
-  // このスロットを今占有する選手のために、手続き的な見た目（肌/髪の色+髪型メッシュ）
-  // 全体を再適用する。ロースター入替（applyDef）で呼ばれ、NAMEをキーにした見た目が
-  // 構築時のまま留まらず実際に選手に追随するようにする。
+  // このスロットを今占有する選手のために、見た目（肌/髪色+髪型メッシュ）を再適用する。
+  // ロースター入替（applyDef）で呼ばれる。
 Player.prototype.applyLook = function(): void {
     const look = this.look;
     this.headMat.diffuseColor = new Color3(look.skin.r, look.skin.g, look.skin.b);
@@ -157,8 +150,7 @@ Player.prototype.applyLook = function(): void {
 
   /** 指定のZサイド(+1 / -1)に背番号を表示する — 選手の背中側、すなわち
    *  攻めるバスケットから遠い側。ハーフタイムで反転する。
-   *  肩はわずかに前寄りなので、（反対側の）胸側に追随する — さもないと-Zを攻める
-   *  チームが前後逆に見え、腕が背中に付いているように見える。 */
+   *  肩はわずかに前寄りなので、（反対側の）胸側に追随する。 */
 Player.prototype.setNumberSide = function(sign: number): void {
     this.sideApplied = true;
     this.numberSide = sign >= 0 ? 1 : -1;
@@ -262,10 +254,9 @@ Player.prototype.sync = function(): void {
       return;
     }
     this.root.position.set(this.pos.x, this.jumpY(), this.pos.z);
-    // 見える体の傾き: 姿全体を確定した重心へ傾ける。ワールドの傾きベクトル →
-    // コードベースで検証済みの規約（RotationY(θ)がローカル+Zを(sinθ,0,cosθ)へ
-    // 対応させる — faceToward参照）を使ってヨーローカルフレームへ変換し、rootを
-    // ピッチ/ロールする。平滑化するので揺さぶりがカクつきでなく重心移動に見える。
+    // 見える体の傾き: 姿全体を確定した重心へ傾ける。ワールドの傾きベクトルを規約
+    // （RotationY(θ)がローカル+Zを(sinθ,0,cosθ)へ対応、faceToward参照）でヨーローカル
+    // フレームへ変換し、rootをピッチ/ロールする。平滑化する。
     const m = this.lean * 0.30;                     // フルの傾きで最大~17°
     let tx = 0, tz = 0;
     if (Math.abs(m) > 0.02) {

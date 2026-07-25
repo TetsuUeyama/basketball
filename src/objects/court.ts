@@ -1,5 +1,6 @@
 import { Scene, MeshBuilder, StandardMaterial, Color3, DynamicTexture, Mesh } from "@babylonjs/core";
 import { COURT, RIM, THREE_DIST } from "../config";
+import { makeMat } from "./materials";
 
 // フロア（ライン付き）、周囲のエプロン、両フープを構築する。
 // 各エンドに1つずつ、得点時に光らせられるフープ部品（ネットの揺れ + リムのフラッシュ）を
@@ -23,15 +24,11 @@ function buildFloor(scene: Scene): void {
   // コートの下・周囲の暗いエプロン。これでライン入りフロアがコートらしく見える。
   const apron = MeshBuilder.CreateGround("apron", { width: COURT.width + 6, height: COURT.length + 6 }, scene);
   apron.position.y = -0.02;
-  const apronMat = new StandardMaterial("apronmat", scene);
-  apronMat.diffuseColor = new Color3(0.06, 0.07, 0.09);
-  apronMat.specularColor = new Color3(0, 0, 0);
-  apron.material = apronMat;
+  apron.material = makeMat(scene, "apronmat", { diffuse: new Color3(0.06, 0.07, 0.09), spec: new Color3(0, 0, 0) });
 
   const floor = MeshBuilder.CreateGround("floor", { width: COURT.width, height: COURT.length }, scene);
-  const mat = new StandardMaterial("floormat", scene);
+  const mat = makeMat(scene, "floormat", { spec: new Color3(0.08, 0.08, 0.08) });
   mat.diffuseTexture = makeCourtTexture(scene);
-  mat.specularColor = new Color3(0.08, 0.08, 0.08);
   floor.material = mat;
   floor.receiveShadows = true;
 }
@@ -39,12 +36,8 @@ function buildFloor(scene: Scene): void {
 // 各チームの控え選手用ベンチ。ミッドコート付近の遠い(+X)サイドラインに沿って置く —
 // 選手が座る座面と、その後ろの低い背もたれ。完全に見た目だけのもの。
 function buildBenches(scene: Scene): void {
-  const seatMat = new StandardMaterial("benchseat", scene);
-  seatMat.diffuseColor = new Color3(0.14, 0.16, 0.2);
-  seatMat.specularColor = new Color3(0.05, 0.05, 0.05);
-  const legMat = new StandardMaterial("benchleg", scene);
-  legMat.diffuseColor = new Color3(0.08, 0.09, 0.11);
-  legMat.specularColor = new Color3(0, 0, 0);
+  const seatMat = makeMat(scene, "benchseat", { diffuse: new Color3(0.14, 0.16, 0.2), spec: new Color3(0.05, 0.05, 0.05) });
+  const legMat = makeMat(scene, "benchleg", { diffuse: new Color3(0.08, 0.09, 0.11), spec: new Color3(0, 0, 0) });
 
   const x = COURT.halfW + 2.3;            // 控えが座るのと同じサイドライン(コートから後方へ下げる)
   for (const end of [-1, 1]) {            // team 0 は -Z、team 1 は +Z に座る
@@ -161,9 +154,7 @@ function buildHoop(scene: Scene, end: number): { net: Mesh; rimMat: StandardMate
   const rimZ = end * RIM.z;
   const boardZ = end * RIM.backboardZ;
 
-  const white = new StandardMaterial(`board_${end}`, scene);
-  white.diffuseColor = new Color3(0.9, 0.9, 0.92);
-  white.specularColor = new Color3(0.2, 0.2, 0.2);
+  const white = makeMat(scene, `board_${end}`, { diffuse: new Color3(0.9, 0.9, 0.92), spec: new Color3(0.2, 0.2, 0.2) });
 
   const board = MeshBuilder.CreateBox(`backboard_${end}`, { width: 1.8, height: 1.05, depth: 0.05 }, scene);
   board.position.set(0, RIM.height + 0.3, boardZ);
@@ -172,15 +163,11 @@ function buildHoop(scene: Scene, end: number): { net: Mesh; rimMat: StandardMate
   // ベースライン裏の支柱ポール + アーム
   const pole = MeshBuilder.CreateCylinder(`pole_${end}`, { height: RIM.height + 0.3, diameter: 0.18 }, scene);
   pole.position.set(0, (RIM.height + 0.3) / 2, end * (COURT.halfL + 0.6));
-  const dark = new StandardMaterial(`pole_${end}`, scene);
-  dark.diffuseColor = new Color3(0.2, 0.2, 0.22);
-  pole.material = dark;
+  pole.material = makeMat(scene, `pole_${end}`, { diffuse: new Color3(0.2, 0.2, 0.22) });
 
   const rim = MeshBuilder.CreateTorus(`rim_${end}`, { diameter: RIM.radius * 2, thickness: 0.03, tessellation: 24 }, scene);
   rim.position.set(0, RIM.height, rimZ);
-  const rimMat = new StandardMaterial(`rimmat_${end}`, scene);
-  rimMat.diffuseColor = new Color3(0.95, 0.45, 0.1);
-  rimMat.emissiveColor = new Color3(0.3, 0.12, 0.0);
+  const rimMat = makeMat(scene, `rimmat_${end}`, { diffuse: new Color3(0.95, 0.45, 0.1), emissive: new Color3(0.3, 0.12, 0.0) });
   rim.material = rimMat;
 
   // 簡素なネット(不透明度の低い下向きの円錐)
@@ -188,11 +175,7 @@ function buildHoop(scene: Scene, end: number): { net: Mesh; rimMat: StandardMate
     height: 0.45, diameterTop: RIM.radius * 2, diameterBottom: RIM.radius * 1.2, tessellation: 12,
   }, scene);
   net.position.set(0, RIM.height - 0.22, rimZ);
-  const netMat = new StandardMaterial(`netmat_${end}`, scene);
-  netMat.diffuseColor = new Color3(1, 1, 1);
-  netMat.alpha = 0.25;
-  netMat.backFaceCulling = false;
-  net.material = netMat;
+  net.material = makeMat(scene, `netmat_${end}`, { diffuse: new Color3(1, 1, 1), alpha: 0.25, cull: false });
 
   return { net, rimMat, boardMat: white };
 }
@@ -201,10 +184,7 @@ function buildHoop(scene: Scene, end: number): { net: Mesh; rimMat: StandardMate
 export function makeHandlerRing(scene: Scene): Mesh {
   const ring = MeshBuilder.CreateTorus("handlerRing", { diameter: 1.1, thickness: 0.06, tessellation: 24 }, scene);
   ring.position.y = 0.03;
-  const mat = new StandardMaterial("ringmat", scene);
-  mat.emissiveColor = new Color3(1, 0.95, 0.3);
-  mat.disableLighting = true;
-  ring.material = mat;
+  ring.material = makeMat(scene, "ringmat", { emissive: new Color3(1, 0.95, 0.3), unlit: true });
   ring.isVisible = false;
   return ring;
 }

@@ -1,15 +1,9 @@
 // UI: ロスター評価（ロール/選択順位/OVR/軸/身長の算出・自動割当）。
-// プロトタイプ拡張で UI に紐づけ。本体は ui.ts から逐語移動（this は UI のまま）。
-// 呼び出し側は不変。main.ts が副作用 import する。
-import { Game } from "../game";
-import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS, TEAM_CLUB, teamAbbr, teamShort } from "../config";
-import { CLUB_ABBR } from "../clubabbr";
-import { CLUB_FLAGS } from "../clubflags";
-import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, clubTeam, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "../attributes";
-import { CLUBS } from "../clubdb";
-import { PLAYER_DB, type DbPlayer } from "../playerdb";
-import { playerLook } from "../objects/player/player-look";
-import { UI, colorOf, POP_STATS, type Phase } from "./ui";
+import { ROSTER, ROSTER_SIZE, STARTERS } from "../roster";
+import type { PlayerDef } from "../attributes";
+import { scoringPower } from "../roles";
+import { rate, clamp } from "../util";
+import { UI, INK } from "./ui";
 
 declare module "./ui" {
   interface UI {
@@ -38,10 +32,14 @@ declare module "./ui" {
   }
 }
 
-  // 抽選したスカッドから先発5人を最適化する: 各ポジション（PG..C）で最も適した
-  // 選手が先発し、残りはベンチに落ちる。強い選手が自分のスポットで弱い選手の
-  // 後ろに座ることがないようにする。ポジションは保たれる（PG スロットには依然
-  // PG が入る）— 変わるのは各ポジション内の先発/ベンチの順序だけ。
+// 6軸スコアと身長スコアの重み付き平均。
+function weightedScore(ax: number[], w: { ax: number[]; ht: number }, htScore: number): number {
+  let s = w.ht * htScore, tot = w.ht;
+  for (let k = 0; k < ax.length; k++) { s += w.ax[k] * ax[k]; tot += w.ax[k]; }
+  return s / tot;
+}
+
+  // 各ポジション（PG..C）で最も適した選手を先発にし、ポジション内の先発/ベンチ順序を最適化する。
 UI.prototype.optimizeLineup = function(team: number): void {
     const byPos: Record<string, number[]> = {};
     ROSTER[team].forEach((d, i) => { (byPos[d.role] ??= []).push(i); });
@@ -53,8 +51,7 @@ UI.prototype.optimizeLineup = function(team: number): void {
     }
 };
 
-  // 選手がそのポジションにどれだけ適合するか — 彼の6軸ダイジェストを、ポジション
-  // の必要性とその身長プレミアムで重み付けしたもの（戦力バーが使うのと同じ重み）。
+  // 選手のポジション適合度: 6軸をポジション重みと身長で重み付けした値。
 UI.prototype.posValue = function(def: PlayerDef, pos: string): number {
     const w = UI.ROLE_W[pos] ?? UI.ROLE_W.SF;
     const ax = this.axesOf(def);
@@ -63,18 +60,15 @@ UI.prototype.posValue = function(def: PlayerDef, pos: string): number {
     return s + w.ht * UI.heightValue(def.height * 100);
 };
 
-  /** 1チームの攻守ロール + プライマリ順序を、その現在のロスターに対して再最適化
-   *  する — 選手の入れ替え後に便利 — チームの構成員は変えずに。 */
+  /** 1チームの攻守ロール + プライマリ順序を現在のロスターに対して再最適化する。 */
 UI.prototype.reassignRoles = function(team: number): void {
     this.autoAssignRoles(team);
     this.autoAssignChoiceRanks(team);
     this.refreshEditors();
 };
 
-  // 新規抽選から各選手にデフォルトの評価ロールを割り当てる: 彼のポジションが
-  // 取れるロールの中で、彼のプロフィールに最も合うもの。5人のエースが決して
-  // 起きないようチームバランスのペナルティを付け、ロールをスカッド全体に散らす。
-  // 先発が先に割り当てられ（チームの形を決める）、次にベンチ。
+  // 各選手にデフォルトの評価ロールを割り当てる: ポジションが取れるロールのうち
+  // プロフィールに最も合うもの。重複にはバランスのペナルティを付ける。
 UI.prototype.autoAssignRoles = function(only?: number): void {
     for (let t = 0; t < 2; t++) {
       if (only !== undefined && t !== only) continue;
@@ -86,18 +80,16 @@ UI.prototype.autoAssignRoles = function(only?: number): void {
         let best = "";
         let bestS = -Infinity;
         for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
-          if (UI.DEF_ONLY.has(nm)) continue;   // 守備の仕事は今は DEF ロール側にある
+          if (UI.DEF_ONLY.has(nm)) continue;   // 守備ロールは DEF 側で扱う
           if (r.pos && !r.pos.includes(def.role)) continue;
-          let s = r.ht * hs, tot = r.ht;
-          for (let k = 0; k < ax.length; k++) { s += r.ax[k] * ax[k]; tot += r.ax[k]; }
-          s /= tot;
-          s -= (taken.get(nm) ?? 0) * 4;   // バランス: 重複ごとに 4 点のコスト
+          let s = weightedScore(ax, r, hs);
+          s -= (taken.get(nm) ?? 0) * 4;   // 重複ごとのバランスコスト
           if (s > bestS) { bestS = s; best = nm; }
         }
         def.evalRole = best || undefined;
         if (best) taken.set(best, (taken.get(best) ?? 0) + 1);
       }
-      this.assignDefRoles(t);   // ユニット全体でバランスの取れた守備ロールのセットをドラフトする
+      this.assignDefRoles(t);   // ユニットの守備ロールをドラフトする
     }
 };
 
@@ -105,11 +97,8 @@ UI.prototype.axesOf = function(def: PlayerDef): number[] {
     return UI.HEX_AXES.map((x) => x.calc(def.attr));
 };
 
-  // オフェンスの選択順位（プライマリ 1..5）を得点力から自動割り当てし、デフォルト
-  // ではボールが最良のスコアラーに集まるようにする。先発とベンチは別々に順位
-  // 付けされる（それぞれ 1..5）ので、先発の「1」とベンチの「1」が共存できる —
-  // それでよい（ユーザーが望まない限り2人の #1 が同時にコートに立つことはない;
-  // エンジンは本当のタイを共有の co-primary として扱う）。
+  // オフェンス選択順位（プライマリ 1..5）を得点力から自動割り当てする。
+  // 先発とベンチは別々に順位付けする（それぞれ 1..5）。
 UI.prototype.autoAssignChoiceRanks = function(only?: number): void {
     for (let t = 0; t < 2; t++) {
       if (only !== undefined && t !== only) continue;
@@ -124,8 +113,7 @@ UI.prototype.rankGroup = function(defs: PlayerDef[]): void {
       .forEach((o, k) => { o.d.choiceRank = Math.min(k + 1, 5); });
 };
 
-  // 新しく配置された1選手を、彼のユニット内で能力によって順位付けする（交代時に
-  // 使うので、チームメイトの手動設定の順位はそのまま）。タイは許容。
+  // 新しく配置された1選手を、ユニット内で能力によって順位付けする。タイは許容。
 UI.prototype.assignRankFor = function(def: PlayerDef, team: number, idx: number): void {
     const grp = idx < STARTERS ? ROSTER[team].slice(0, STARTERS) : ROSTER[team].slice(STARTERS);
     const mine = scoringPower(def.attr);
@@ -134,8 +122,7 @@ UI.prototype.assignRankFor = function(def: PlayerDef, team: number, idx: number)
     def.choiceRank = Math.min(higher + 1, 5);
 };
 
-  // 1選手にとって最良のオフェンスロールを、彼の能力軸から求める（チームバランス
-  // なし — 単一の交代時に使う; チーム全体でバランスした版は autoAssignRoles）。
+  // 1選手にとって最良のオフェンスロールを能力軸から求める（チームバランスなし）。
 UI.prototype.bestOffRole = function(def: PlayerDef): string | undefined {
     const ax = this.axesOf(def);
     const hs = UI.heightValue(def.height * 100);
@@ -143,28 +130,20 @@ UI.prototype.bestOffRole = function(def: PlayerDef): string | undefined {
     for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
       if (UI.DEF_ONLY.has(nm)) continue;
       if (r.pos && !r.pos.includes(def.role)) continue;
-      let s = r.ht * hs, tot = r.ht;
-      for (let k = 0; k < ax.length; k++) { s += r.ax[k] * ax[k]; tot += r.ax[k]; }
-      s /= tot;
+      const s = weightedScore(ax, r, hs);
       if (s > bestS) { bestS = s; best = nm; }
     }
     return best || undefined;
 };
 
-  // 選手の能力値からデフォルトの守備ロールを自動判定する: 強力なディフェンダーは
-  // ロックダウン（本人がスコアラーでもあれば両面）、リムを守るビッグはアンカー、
-  // 使用率の高いオフェンス専門家は温存（省エネ）、その他は皆バランス。
-  // この選手のポジション・体格・守備の強みから、各守備ロールへの適合スコアを出す
-  // — 高いほど適している。assignDefRoles はこれらからバランスの取れたラインナップ
-  // をドラフトする; pickDefRole は単一選手の選択。
+  // 選手のポジション・体格・守備の強みから、各守備ロールへの適合スコアを返す（高いほど適合）。
 UI.prototype.defRoleFits = function(def: PlayerDef): Record<string, number> {
     const a = def.attr;
-    const r = (x: number) => Math.max(0, Math.min(1, x / 100));
-    const def_ = r(a.defense), rea = r(a.reaction), agi = r(a.agility);
-    const jmp = r(a.jump), dnk = r(a.dunk), bal = r(a.balance);
-    const mnt = r(a.mental), tmw = r(a.teamwork);
-    const ht = Math.max(0, Math.min(1, (def.height - 1.85) / 0.3));   // 1.85m→0 .. 2.15m→1
-    const off = Math.max(r(a.threeAcc), r(a.midAcc)) * 0.55 + r(a.aggression) * 0.45; // 得点負荷
+    const def_ = rate(a.defense), rea = rate(a.reaction), agi = rate(a.agility);
+    const jmp = rate(a.jump), dnk = rate(a.dunk), bal = rate(a.balance);
+    const mnt = rate(a.mental), tmw = rate(a.teamwork);
+    const ht = clamp((def.height - 1.85) / 0.3, 0, 1);   // 1.85m→0 .. 2.15m→1
+    const off = Math.max(rate(a.threeAcc), rate(a.midAcc)) * 0.55 + rate(a.aggression) * 0.45; // 得点負荷
     const big = def.role === "PF" || def.role === "C";
     const guard = def.role === "PG" || def.role === "SG";
     const wing = def.role === "SF";
@@ -178,12 +157,11 @@ UI.prototype.defRoleFits = function(def: PlayerDef): Record<string, number> {
       守備司令塔:             mnt * 0.40 + tmw * 0.36 + def_ * 0.24 + (guard ? 0.06 : -0.08),
       ハッスルディフェンダー:  (def_ + agi + rea) / 3 * 0.48 + off * 0.28 + bal * 0.20,
       省エネ:                 (off - 0.5) * 1.2 + (0.5 - def_) * 0.9 + 0.28,   // 守備ができないスコアラー
-      バランス:               0.50,                                            // 安定したベースラインのフォールバック
+      バランス:               0.50,                                            // フォールバック
     };
 };
 
-  // 1選手にとって最も適合する守備ロール。任意で重複を散らす（彼のユニットで
-  // 既に使われているロールにはペナルティ）。単一選手が配置されたときに使う。
+  // 1選手にとって最も適合する守備ロール。任意で重複ロールにペナルティを付けて散らす。
 UI.prototype.pickDefRole = function(def: PlayerDef, taken?: Map<string, number>): string {
     const fit = this.defRoleFits(def);
     let best = "バランス", bestV = -Infinity;
@@ -194,12 +172,8 @@ UI.prototype.pickDefRole = function(def: PlayerDef, taken?: Map<string, number>)
     return best;
 };
 
-  // ユニット全体（先発5人、次にベンチ8人）に守備ロールをドラフトし、ライン
-  // ナップがバランスの取れた守備になるようにする: 各ロールはそれに最も適合する
-  // 選手に割り当てられ、確信度の高い割り当てから先に、重複を散らすペナルティ
-  // つきで — こうしてラインナップには、リムプロテクター、オンボールのロック、
-  // レーンの泥棒、フロアジェネラル、ヘルプ役などが、実際に各々に適した者に
-  // 合わせて揃う。
+  // ユニット全体（先発5人、次にベンチ8人）に守備ロールをドラフトする: 各ロールを
+  // 最も適合する選手に、確信度の高い割り当てから先に、重複ペナルティつきで割り当てる。
 UI.prototype.assignDefRoles = function(team: number): void {
     for (const unit of [ROSTER[team].slice(0, STARTERS), ROSTER[team].slice(STARTERS)]) {
       const taken = new Map<string, number>();
@@ -220,15 +194,13 @@ UI.prototype.assignDefRoles = function(team: number): void {
     }
 };
 
-  // 選手に実際に使われる重み: 彼の手動設定の評価ロール、または 自動 のままの
-  // 場合は彼のポジションのプロフィール。
+  // 選手に使われる重み: 手動設定の評価ロール、または自動時はポジションのプロフィール。
 UI.prototype.effWeights = function(def: PlayerDef): { ax: number[]; ht: number } {
     return (def.evalRole && UI.EVAL_ROLES[def.evalRole])
       || UI.ROLE_W[def.role] || UI.ROLE_W.SF;
 };
 
-  // 一列に並ぶ5つのポジションチップ — この選手がカバーできる全ポジション
-  // （自分自身を含む）が同じチームカラーのハイライトで点灯し、残りは暗くなる。
+  // 一列の5つのポジションチップ: カバーできるポジション（自分含む）が点灯し、残りは暗くなる。
 UI.prototype.positionChips = function(def: PlayerDef, color: string): HTMLDivElement {
     const covers = new Set(this.coverablePositions(def));
     const row = document.createElement("div");
@@ -240,7 +212,7 @@ UI.prototype.positionChips = function(def: PlayerDef, color: string): HTMLDivEle
         fontSize: "10px", fontWeight: "800", width: "36px", padding: "2px 0",
         textAlign: "center", borderRadius: "6px", boxSizing: "border-box",
         background: on ? color : "rgba(255,255,255,0.04)",
-        color: on ? "#0d1016" : "rgba(255,255,255,0.28)",
+        color: on ? INK : "rgba(255,255,255,0.28)",
         border: on ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.1)",
       } as Partial<CSSStyleDeclaration>);
       c.textContent = r;
@@ -249,9 +221,7 @@ UI.prototype.positionChips = function(def: PlayerDef, color: string): HTMLDivEle
     return row;
 };
 
-  // 守れるポジション: ゲームの交代隣接関係（game.ts の roleFit）を、選手ごとに
-  // ゲートする — 大きいスロットはそれ相応のサイズがあるときだけ、小さいスロット
-  // はそれ相応の脚力があるときだけ。表示用のヒューリスティック; 最初の要素 = 自分自身。
+  // 守れるポジション: 隣接ポジションを身長/脚力でゲートする。最初の要素 = 自分自身。
 UI.prototype.coverablePositions = function(def: PlayerDef): string[] {
     const ADJ: Record<string, string[]> = {
       PG: ["SG"], SG: ["PG", "SF"], SF: ["SG", "PF"], PF: ["SF", "C"], C: ["PF"],
@@ -272,23 +242,19 @@ UI.prototype.ovrOf = function(def: PlayerDef): number {
     const ax = this.axesOf(def);
     const w = this.effWeights(def);   // ポジションのプロフィール、または手動設定の評価ロール
     const htScore = UI.heightValue(def.height * 100);
-    let pos = w.ht * htScore, tot = w.ht;
-    for (let i = 0; i < ax.length; i++) { pos += w.ax[i] * ax[i]; tot += w.ax[i]; }
-    pos /= tot;
+    const pos = weightedScore(ax, w, htScore);
     const raw = UI.PEAK_KEYS.map((k) => def.attr[k]).sort((a, b) => b - a);
     const v = pos * 0.5 + ((raw[0] + raw[1]) / 2) * 0.5;
     return Math.round(Math.max(40, Math.min(99, 74 + (v - 74) * 1.4)));
 };
 
-  // 軸ごとのチーム戦力: 単純平均ではない — 各選手は、彼のポジション（または手動
-  // 設定の評価ロール）がその軸にどれだけ責任を持つかに比例して軸に寄与する:
-  // PG のパスはチームのパスそのものだが、C はその針をほとんど動かさない。
-  // 先発が 70%、ベンチのローテーションが 30% を担う。
+  // 軸ごとのチーム戦力: 各選手はポジション（または評価ロール）の軸責任に比例して寄与する。
+  // 先発 70%、ベンチ 30%。
 UI.prototype.teamAxes = function(team: number): number[] {
     return this.teamAxesOf(ROSTER[team]);
 };
 
-  // 任意のロスター配列に対する同じ計算（交代のプレビューに使う）。
+  // 任意のロスター配列に対する同じ計算。
 UI.prototype.teamAxesOf = function(r: PlayerDef[]): number[] {
     return UI.HEX_AXES.map((x, i) => {
       const grp = (from: number, to: number): number => {
@@ -304,9 +270,7 @@ UI.prototype.teamAxesOf = function(r: PlayerDef[]): number[] {
     });
 };
 
-  // 直接対決ボード: 2チームの6軸を左右に並べたトルネード型。強い側の数字が
-  // 点灯する。
-  // ヘッダー用のチームの数値: 選手の OVR、先発 70% ベンチ 30%。
+  // チームの OVR 数値: 選手の OVR を先発 70% ベンチ 30% で合成。
 UI.prototype.teamOvr = function(team: number): number {
     return this.teamOvrOf(ROSTER[team]);
 };
@@ -318,9 +282,7 @@ UI.prototype.teamOvrOf = function(r: PlayerDef[]): number {
     return Math.round((st / STARTERS) * 0.7 + (bn / (ROSTER_SIZE - STARTERS)) * 0.3);
 };
 
-  // ...そしてそのサイズ: cm 単位の身長を、各人のポジション/ロールにとって身長が
-  // どれだけ重要かで重み付け — C のリーチはチームのサイズだが、PG の身長は
-  // ほとんど影響しない。
+  // チームのサイズ: cm 単位の身長を、ポジション/ロールの身長重要度で重み付けする。
 UI.prototype.teamHeight = function(team: number): number {
     return this.teamHeightOf(ROSTER[team]);
 };

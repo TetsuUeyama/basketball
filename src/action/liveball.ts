@@ -1,9 +1,6 @@
 // ボール保持(ballMode "held")中のライブプレイ tick。ドリブルのケイデンス前進、
-// オフェンス/守備/はたきの毎フレーム進行、そしてキャリー/ギャザー/ピックアップの
-// ボール位置決め。方式A: game を第一引数に取る関数。game.ts の更新ループ switch の
-// "held" ケースから呼ぶ。game.ts から分離（workPlan.md Phase4 / [[game-split-optionb]]）。
-import { rate } from "../attributes";
-import { clamp, dist2D, chance } from "../util";
+// オフェンス/守備/はたきの毎フレーム進行、キャリー/ギャザー/ピックアップのボール位置決め。
+import { rate, clamp, dist2D, chance, dirTo2D } from "../util";
 import { runOffense } from "./offense";
 import { runDefense, catchStrips, swarmStrips } from "./defense";
 import { passToReceiver } from "./passing";
@@ -25,10 +22,8 @@ export function updateLive(game: Game, dt: number): void {
       game.pendingPassTo = null;
       game.pendingPassTurn = false;
       if (turn) {
-        // ピボット完了 → 通常のパス（強制でない）としてリリースするので、レーン／
-        // リスクの安全ゲートが依然として走る: 回転中に守備者がレーンに回り込んだ場合、
-        // 投げは拒否され（彼は保持する）、そこへ投げ込まれない。弧のチェックだけが
-        // スキップされる（彼はすでに正対済み）。
+        // ピボット完了 → 通常のパス（強制でない）としてリリース: レーン/リスクの安全ゲートは
+        // 走り、弧のチェックだけスキップ（すでに正対済み）。
         game.turnReleased = true;
         passToReceiver(game, h, target, false, "chest");
         game.turnReleased = false;
@@ -40,9 +35,7 @@ export function updateLive(game: Game, dt: number): void {
     return;
   }
   if (game.pushT > 0) game.pushT = Math.max(0, game.pushT - dt);
-  // 先にドリブルのケイデンスを進め、このフレームでボールが手にあるかの判定を最新に
-  // する: D精度 がつく回数（レート）を決める（下手なハンドラーはゆっくりドリブルし、
-  // ボールが手から離れている時間が長い）
+  // 先にドリブルのケイデンスを進め、このフレームでボールが手にあるかを最新化する。
   h.dribblePhase += dt * (1.6 + rate(h.attr.dribbleAcc) * 1.4);   // 1.6 .. 3.0 Hz
   // ボールが明確にハーフを越えた → このポゼッションのフロントコートが確立
   if (!game.frontT && game.attackSign(h.team) * h.pos.z > 0.6) game.frontT = true;
@@ -52,24 +45,17 @@ export function updateLive(game: Game, dt: number): void {
   if (game.ballMode !== "held") return;   // こぼれかけたキャッチからはたき出された
   swarmStrips(game, dt);
   if (game.ballMode !== "held") return;   // このフレームのはたきでドリブルが終わった
-  // --- ドリブルのキャリー位置: 生きたボールがハンドラーの周りのどこに収まるか。
-  // 前方（リム方向）ならボールを押して走れる — ただしガードする相手にさらされる。
-  // 守備者に正対するときは遠い側の腰へ収める。位置間の移動の速さは D精度。
-  // ベイト(baitT)中は、リーチインを誘うためにわざと前方に見せる。
+  // ドリブルのキャリー位置: 生きたボールがハンドラーのどこに収まるか。前方=リム方向へ押す、
+  // 守備者に正対時は遠い側の腰へ、ベイト(baitT)中はわざと前方に見せる。移動の速さは D精度。
   const rim = game.attackFloor(h.team);
-  const dx = rim.x - h.pos.x, dz = rim.z - h.pos.z;
-  const len = Math.hypot(dx, dz) || 1;
-  const fx = dx / len, fz = dz / len;
+  const { ux: fx, uz: fz } = dirTo2D(h.pos.x, h.pos.z, rim.x, rim.z);
   let tx = fx * 0.5, tz = fz * 0.5;                    // デフォルト: 前方キャリー
   const od = game.onBallDefender(h);
   const dOn = od ? dist2D(od.pos, h.pos) : 99;
   if (h.baitT > 0) {
     tx = fx * 0.6; tz = fz * 0.6;                      // 見せているボール
   } else if (od && dOn < 1.7) {
-    // 正対／シールド中: ボールを、彼自身の（ひねった）上体を基準にした遠い側の腰へ
-    // 収める — 実際に手が届く場所。旧コードは向きを無視してリム基準で置いていたので、
-    // 彼が隠そうとひねると、ボールが手のひらの届かない背中の真後ろに来てしまった。今は
-    // ひねった胸の前に位置し、守備者から遠い側の腰へずらす。
+    // 正対／シールド中: ひねった上体を基準に、守備者から遠い側の腰へボールを収める。
     const cf = h.chestFront(1);                                   // 胸の前方（ひねりを考慮）、単位ベクトル
     let cx = cf.x - h.pos.x, cz = cf.z - h.pos.z;
     const cl = Math.hypot(cx, cz) || 1; cx /= cl; cz /= cl;
@@ -78,22 +64,17 @@ export function updateLive(game: Game, dt: number): void {
     tx = cx * 0.12 + lx * side * 0.30;                            // 胸の前 ＋ 遠い側の腰へ
     tz = cz * 0.12 + lz * side * 0.30;
   }
-  // 持ち替え/クロスオーバーの速さは D精度 依存。下手ほどモッサリ、上手いほど素早い
-  // (~0.9 m の左右持ち替えで下手≈1.8s / 上手≈0.45s)。全体に遅めで、持ち替えに
-  // ちゃんと「時間がかかる」よう調整した。
+  // 持ち替え/クロスオーバーの速さは D精度 依存(~0.9m の左右持ち替えで下手≈1.8s / 上手≈0.45s)。
   const cs = (0.5 + rate(h.attr.dribbleAcc) * 1.5) * dt;   // 0.5 .. 2.0 m/s
   h.carryX += clamp(tx - h.carryX, -cs, cs);
   h.carryZ += clamp(tz - h.carryZ, -cs, cs);
-  // スティール誘い: 守備者にぴたりと壁を作られた状態で、巧いハンドラーは
-  // ボールをちらつかせ、引き抜く用意のある突きを誘う
+  // スティール誘い: 壁を作られた状態で、巧いハンドラーがボールをちらつかせ突きを誘う
   if (h.baitT <= 0 && od && dOn < 1.3 && h.beatenT <= 0 && h.powerT <= 0
       && h.jukeT <= 0 && chance(dt * (0.1 + rate(h.attr.handling) * 0.45))) {
     h.baitT = 0.5;
   }
-  // ピックアップのすくい上げ: ルーズボールを確保した直後、手を下へ伸ばして床から
-  // ボールを持ち上げてキャリーへ入れる（跳ねない）。ボールは足首の高さから pickupT
-  // かけてポケットへ上がる。手はそれを追う(holdBallHands)ので、きれいな手での拾い上げ
-  // として見える。短いすくい上げの間、ドリブルの弾みを上書きする。
+  // ピックアップのすくい上げ: ルーズボール確保直後、床からボールを持ち上げキャリーへ入れる。
+  // 足首の高さから pickupT かけてポケットへ上がる。短いすくい上げ中はドリブルの弾みを上書き。
   if (h.pickupT > 0) {
     const prog = h.pickupDur > 0 ? clamp(1 - h.pickupT / h.pickupDur, 0, 1) : 1;
     const scoop = h.chestFront(0.24);
@@ -109,13 +90,8 @@ export function updateLive(game: Game, dt: number): void {
     const y = 0.18 + (1.0 - 0.18) * bounce;
     game.ball.pos.set(h.pos.x + h.carryX, y, h.pos.z + h.carryZ);
   }
-  // まだ収まっていない: 的を外れたキャッチの直後、ボールは確保されていない —
-  // 両手のキャッチがボールを受けた場所、すなわち胸の前で、両手のひらの間に
-  // 保持されたままになる。揺れは滑らかな低周波の揺らぎ（減っていく gatherT に
-  // 位相を合わせ、毎フレームのノイズはない）: 手は同じ揺れる点を狙っている
-  // (poseHands の holdBallHands)ので、ボールと腕は一体として動く — 震えは上腕に
-  // 現れ、静止した手のひらの間でボールがガタつくようには見えない。硬直が減るに
-  // つれて減衰し、その後は通常の片手キャリーに引き継がれる。
+  // まだ収まっていない: キャッチ直後、ボールは胸の前・両手のひらの間に保持される。
+  // 揺れは gatherT に位相を合わせた低周波の揺らぎで、硬直が減るにつれ減衰する。
   if (h.gatherT > 0) {
     const amp = Math.min(0.03, h.gatherT * 0.06);   // 大きな揺れでなく、小さな震え
     const ph = h.gatherT * 16 + h.idx;              // gatherT が減るにつれて滑らかに動く
@@ -124,11 +100,7 @@ export function updateLive(game: Game, dt: number): void {
     let tx = c.x, tz = c.z, ty = 1.0;
     const rimF = game.attackFloor(h.team);
     if (h.catchIntent === "shield") {
-      // プレッシャー下: ボールを遠い側の腰へ収める — ただし手が実際に届く腰。胸は
-      // 守備者から背けてひねっている(updateFacing)ので、ボールをそのひねった胸のすぐ
-      // 前に置き、遠い側へずらす。結果として、背中の真後ろに来ることなく、回した上体の
-      // 陰に隠れる（旧来のワールド座標での「守備者から遠ざける」オフセットは、相手が
-      // 真正面にいるとき手のひらの届かない場所に置いていた）。
+      // プレッシャー下: ひねった胸のすぐ前に置き、守備者から遠い側の腰へずらして上体の陰に隠す。
       const front = h.chestFront(0.18);            // 背けてひねった胸の前
       let hx = front.x, hz = front.z;
       const nd = game.nearestDefender(h);
@@ -151,12 +123,10 @@ export function updateLive(game: Game, dt: number): void {
       tx = sp.x; tz = sp.z;
       ty = 1.0 + prog * 0.35;                       // ポケットへ上げる
     } else {
-      // オープン: 次の動きへ向けてボールを運び出す — 収めるのでなく、リム方向
-      // （ドライブの向き）へ一歩リードさせ、すぐ動ける構えにする。
-      const dx = rimF.x - h.pos.x, dz = rimF.z - h.pos.z;
-      const dl = Math.hypot(dx, dz) || 1;
-      tx = c.x + (dx / dl) * 0.14 * prog;
-      tz = c.z + (dz / dl) * 0.14 * prog;
+      // オープン: 収めず、リム方向（ドライブの向き）へ一歩リードさせすぐ動ける構えに。
+      const { ux, uz } = dirTo2D(h.pos.x, h.pos.z, rimF.x, rimF.z);
+      tx = c.x + ux * 0.14 * prog;
+      tz = c.z + uz * 0.14 * prog;
     }
     game.ball.pos.set(
       tx + Math.sin(ph) * amp,

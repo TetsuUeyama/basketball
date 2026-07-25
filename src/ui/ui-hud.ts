@@ -1,15 +1,10 @@
 // UI: 試合中HUD（選手バー・顔アイコン・drawFace・スタミナ・スタッツポップ・各種ボタン）。
-// プロトタイプ拡張で UI に紐づけ。本体は ui.ts から逐語移動（this は UI のまま）。
-// 呼び出し側は不変。main.ts が副作用 import する。
-import { Game } from "../game";
-import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS, TEAM_CLUB, teamAbbr, teamShort } from "../config";
-import { CLUB_ABBR } from "../clubabbr";
-import { CLUB_FLAGS } from "../clubflags";
-import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, clubTeam, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "../attributes";
-import { CLUBS } from "../clubdb";
-import { PLAYER_DB, type DbPlayer } from "../playerdb";
+import type { Game } from "../game";
+import { TEAM_COLORS, HUD_OPTS } from "../config";
+import { ROSTER } from "../roster";
 import { playerLook } from "../objects/player/player-look";
-import { UI, colorOf, POP_STATS, type Phase } from "./ui";
+import { clamp } from "../util";
+import { UI, colorOf, POP_STATS, BTN_BG, NEUTRAL_GRAY, ELLIPSIS } from "./ui";
 
 declare module "./ui" {
   interface UI {
@@ -34,13 +29,11 @@ declare module "./ui" {
 UI.prototype.refreshSpeed = function(): void {
     this.speedBtns.forEach((b, i) => {
       const active = [1, 2, 4][i] === this.speed;
-      b.style.background = active ? "rgba(70,120,220,0.95)" : "rgba(20,24,34,0.9)";
+      b.style.background = active ? "rgba(70,120,220,0.95)" : BTN_BG;
     });
 };
 
-  // 中央寄せのスコアボードが届かない限り ☰ を上端（スコアボードと揃える）に
-  // 保つ; その右端が衝突するようになったときだけボードの下に落とす。構築時と
-  // リサイズのたびに再計算する。
+  // スコアボードと衝突しない限り ☰ を上端に置き、衝突するときだけボードの下に落とす。
 UI.prototype.positionMenu = function(): void {
     if (!this.menuBtn || !this.board) return;
     const boardW = this.board.getBoundingClientRect().width || 320;
@@ -75,11 +68,9 @@ UI.prototype.refreshModelBtn = function(): void {
 };
 
 UI.prototype.buildPlayerBars = function(): void {
-    // 速度 / RESTART の行を挟む: team 0 のアイコンは中央のすぐ左から左へ伸び、
-    // team 1 のアイコンは中央のすぐ右から右へ伸び、コントロール用に固定の中央
-    // 間隔を残す — 中央にアンカーされているので、各側が何個のアイコンを表示
-    // しても（コート上5 対 ベンチ8）その間隔は保たれる。
-    const HALF_GAP = "130px";   // コントロール用に確保した中央間隔の半分
+    // team 0 のアイコンは中央のすぐ左から左へ、team 1 は中央のすぐ右から右へ伸ばし、
+    // 中央にコントロール用の固定間隔を残す。
+    const HALF_GAP = "130px";   // 中央間隔の半分
     for (let t = 0; t < 2; t++) {
       const panel = document.createElement("div");
       Object.assign(panel.style, {
@@ -109,8 +100,7 @@ UI.prototype.buildPlayerBars = function(): void {
       const row = document.createElement("div");
       Object.assign(row.style, { display: "flex", gap: "6px", touchAction: "pan-x" } as Partial<CSSStyleDeclaration>);
       row.classList.add("bball-hscroll");   // スクロールしてもバーは表示されず / 高さも増えない
-      // バーは隠れているので、マウスでベンチ行をスライドする手段を与える:
-      // ホイールで横スクロール、押しながらのドラッグでパン（タッチはネイティブにスワイプ）
+      // マウスでベンチ行をスライドする: ホイールで横スクロール、ドラッグでパン。
       row.onwheel = (e) => {
         if (row.scrollWidth <= row.clientWidth) return;
         row.scrollLeft += e.deltaY || e.deltaX;
@@ -135,9 +125,7 @@ UI.prototype.buildPlayerBars = function(): void {
     }
 };
 
-  // 小さな顔アバター: チームカラーの円盤、生成された簡単な頭部、そして背番号。
-  // その下に選手名。肖像画のアートは存在しないため、顔は手続き的に描かれ、
-  // 番号/名前が選手を識別する。
+  // 小さな顔アバター: チームカラーの円盤、手続き的に描いた頭部、背番号、その下に選手名。
 UI.prototype.makeFaceIcon = function(player: import("../objects/player/player").Player, posText: string): HTMLDivElement {
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {
@@ -163,9 +151,7 @@ UI.prototype.makeFaceIcon = function(player: import("../objects/player/player").
 
     wrap.appendChild(face);
 
-    // 背番号 — 右下。WRAP に配置（丸くクリップされた顔ではなく）することで、
-    // 2桁の番号が円の端で切れないようにする。顔は 46px の高さ（42 + 2px の枠線）
-    // なので、top:32px で顔の右下にぴったり収まる。
+    // 背番号 — 顔の右下（WRAP に配置し、円の端で切れないようにする）。
     const num = document.createElement("div");
     num.textContent = String(player.idx + 1);
     Object.assign(num.style, {
@@ -176,8 +162,7 @@ UI.prototype.makeFaceIcon = function(player: import("../objects/player/player").
     } as Partial<CSSStyleDeclaration>);
     wrap.appendChild(num);
 
-    // ポジションバッジ — 左上。WRAP に配置（丸くクリップされた顔ではなく）する
-    // ことで、円の overflow:hidden がテキストを切り取らないようにし、少しだけ内側に寄せる。
+    // ポジションバッジ — 顔の左上（WRAP に配置し、テキストが切れないようにする）。
     const pos = document.createElement("div");
     pos.textContent = posText;
     Object.assign(pos.style, {
@@ -190,8 +175,7 @@ UI.prototype.makeFaceIcon = function(player: import("../objects/player/player").
     } as Partial<CSSStyleDeclaration>);
     wrap.appendChild(pos);
 
-    // 顔のすぐ下の体力バー — 「icon」HUD モードのときだけ表示（「name」モードでは
-    // ゲージは代わりに浮遊する3Dの名前タグ上にある）。
+    // 顔のすぐ下の体力バー — 「icon」HUD モードのときだけ表示。
     const bar = document.createElement("div");
     Object.assign(bar.style, {
       width: "42px", height: "5px", borderRadius: "3px", overflow: "hidden",
@@ -208,14 +192,12 @@ UI.prototype.makeFaceIcon = function(player: import("../objects/player/player").
     name.textContent = player.name;
     Object.assign(name.style, {
       maxWidth: "50px", fontSize: "9px", fontWeight: "600", color: "#e8ecf4",
-      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      ...ELLIPSIS,
       textShadow: "0 1px 3px rgba(0,0,0,0.9)",
     } as Partial<CSSStyleDeclaration>);
     wrap.appendChild(name);
 
-    // 名前の下のロールピル — 彼のチームがボールを持っている間はオフェンスロール、
-    // 持っていない間は守備ロールを表示する。テキスト/色は updateIconRoles() が
-    // ポゼッションをキーに毎フレーム更新する。
+    // 名前の下のロールピル — 攻撃中はオフェンスロール、守備中は守備ロールを表示（updateIconRoles が更新）。
     const rolePill = document.createElement("div");
     Object.assign(rolePill.style, {
       width: "44px", fontSize: "8px", padding: "1px 0", textAlign: "center",
@@ -227,8 +209,7 @@ UI.prototype.makeFaceIcon = function(player: import("../objects/player/player").
     return wrap;
 };
 
-  // 毎フレーム: この選手のチームがボールを持っているときはオフェンスロール、
-  // それ以外は守備ロールを表示 — オフェンスはチームカラー、守備は DEF_ROLE_C の色。
+  // 毎フレーム: 攻撃中はオフェンスロール（チームカラー）、守備中は守備ロールを表示する。
 UI.prototype.updateIconRoles = function(game: Game): void {
     for (const [p, pill] of this.iconRole) {
       const def = ROSTER[p.team]?.[p.idx];
@@ -239,8 +220,8 @@ UI.prototype.updateIconRoles = function(game: Game): void {
         ? ((onDef ? UI.DEF_ROLES[code]?.short : UI.EVAL_ROLES[code]?.short) ?? "?")
         : "-";
       const col = code
-        ? ((onDef ? UI.DEF_GROUP_C[code] : UI.OFF_GROUP_C[code]) || "rgb(150,156,168)")
-        : "rgb(150,156,168)";   // グループ化された色: オフェンスは暖色（赤/黄/橙）、守備は寒色（青/緑/シアン）
+        ? ((onDef ? UI.DEF_GROUP_C[code] : UI.OFF_GROUP_C[code]) || NEUTRAL_GRAY)
+        : NEUTRAL_GRAY;   // グループ化された色: オフェンスは暖色（赤/黄/橙）、守備は寒色（青/緑/シアン）
       const key = (onDef ? "D" : "O") + short;
       if (pill.dataset.k === key) continue;        // 変化なし → DOM への書き込みをスキップ
       pill.dataset.k = key;
@@ -259,15 +240,12 @@ UI.prototype.drawFace = function(canvas: HTMLCanvasElement, player: import("../o
     // チームカラーの背景円盤
     ctx.fillStyle = `rgb(${Math.round(tc.r * 120 + 25)},${Math.round(tc.g * 120 + 25)},${Math.round(tc.b * 120 + 25)})`;
     ctx.fillRect(0, 0, W, H);
-    // 選手ごとに決定的な多様性を持たせ、顔が全て同一にならないようにする —
-    // playerLook 経由で3Dの頭部（entities.ts）と共有され、モデルがアイコンに一致する
+    // 選手ごとの見た目（3Dの頭部と playerLook 経由で共有）
     const look = player.look ?? playerLook(player.name);   // DB選手はdef.look、無ければ名前フォールバック
     const skin = look.skinHex;
     const hair = look.hairHex;
     const style = look.style;   // 0短髪 1丸刈り 2アフロ 3フラットトップ 4ヘッドバンド 5ボブ 6前髪上げ 7モヒカン 8マンバン
-    // 頭の後ろの髪 — 頭頂と側面が覆われるようにする完全な下地（禿げた天冠では
-    // ない）。モヒカン(7、クレストとして描く)を除く全てで描画; 丸刈り(1)は頭より
-    // ほんの少し大きいだけの下地を使う（薄い刈り上げ）。
+    // 頭の後ろの髪の下地 — モヒカン(7)を除く全てで描画; 丸刈り(1)は頭より少し大きいだけ。
     if (style !== 7) {
       ctx.fillStyle = hair;
       const hr = style === 2 ? 0.40 : (style === 5 || style === 10) ? 0.37 : style === 1 ? 0.315 : 0.335;   // アフロが最大、ボブ/ロングはふっくら、刈り上げはぴったり
@@ -280,8 +258,7 @@ UI.prototype.drawFace = function(canvas: HTMLCanvasElement, player: import("../o
     // 下地の上に頭部（肌）→ 髪が頭頂と側面を縁取る
     ctx.fillStyle = skin;
     ctx.beginPath(); ctx.arc(W / 2, H * 0.52, W * 0.30, 0, Math.PI * 2); ctx.fill();
-    // 額を横切る前髪の生え際 / 前髪（前面がふっくらした後面と区別して読める）。
-    // 前髪上げ(6、額が露出)とモヒカン(7)ではスキップ。
+    // 額を横切る前髪の生え際。前髪上げ(6)とモヒカン(7)ではスキップ。
     if (style !== 6 && style !== 7) {
       ctx.fillStyle = hair;
       ctx.beginPath(); ctx.arc(W / 2, H * 0.45, W * 0.305, Math.PI * 1.03, Math.PI * 1.97); ctx.fill();
@@ -329,21 +306,17 @@ UI.prototype.refreshPlayerBars = function(game: Game): void {
       const onCourt = game.players.filter((p) => p.team === t);
       const set = new Set(onCourt);
       const list = this.showBench[t] ? game.roster[t].filter((p) => !set.has(p)) : onCourt;
-      // モバイル: 1行、2チームを左右に。アイコンは常にフルサイズ — アイコンが
-      // 全て収まらないとき、行はチームの半分の中で横スクロール（スワイプ）する
-      // だけ。決して拡縮しない。
+      // モバイル: 1行、2チームを左右に。収まらないときはチームの半分の中で横スクロールする。
       const rw = this.iconRows[t];
       const pn = this.iconPanels[t];
       if (rw && pn) {
         if (this.layoutMode === "phone") {
-          // 両タブで1つのアイコンサイズ: コート上の5人がチームの半分を満たす
-          // 値（48px アイコン + 6px の gap → 自然幅 264px）
+          // コート上の5人がチームの半分を満たすアイコンサイズ（48px + gap 6px）
           const natural5 = 5 * 48 + 4 * 6;
           const s = Math.min(1, (window.innerWidth * 0.49) / natural5);
           pn.style.transform = `scale(${s})`;
           if (this.showBench[t]) {
-            // ベンチ: 同サイズのアイコンがスライドする — スクロールウィンドウは
-            // スケール前の単位でサイズ指定され、依然ちょうど半分の幅を表示する
+            // ベンチ: スクロールウィンドウはスケール前の単位でチームの半分の幅にする
             Object.assign(rw.style, {
               maxWidth: `${Math.round((window.innerWidth * 0.49) / s)}px`,
               overflowX: "auto", pointerEvents: "auto",
@@ -356,16 +329,11 @@ UI.prototype.refreshPlayerBars = function(game: Game): void {
           Object.assign(rw.style, { maxWidth: "", overflowX: "visible", pointerEvents: "" });
         }
       }
-      // バッジは、コート上の5人には守っているフィールドのポジション（どのスロット
-      // でプレーするか）を表示する; ベンチ（フィールドのスポットなし）は代わりに
-      // 各人の本来のロールを表示する。
+      // バッジ: コート上の5人は守っているフィールドのポジション、ベンチは本来のロールを表示する。
       const SLOT_POS = ["PG", "SG", "SF", "PF", "C"];
       const posOf = (p: import("../objects/player/player").Player) =>
         this.showBench[t] ? p.role : (SLOT_POS[p.slot] ?? p.role);
-      // 表示するセット（または 名前 / タブ / 評価ロール / スロット）が変わったときだけ
-      // 再構築する — 名前がキーに含まれるので、ティップオフの applyRoster による
-      // 改名で即座に再構築され、スロットも含まれるので、ポジションを守る者を変える
-      // 交代でバッジが更新される
+      // 表示セット（名前 / タブ / 評価ロール / スロット等）が変わったときだけ再構築する。
       const key = `${this.showBench[t] ? "B" : "C"}:`
         + list.map((p) => {
           const d = ROSTER[t]?.[p.idx];
@@ -374,19 +342,17 @@ UI.prototype.refreshPlayerBars = function(game: Game): void {
       if (key === this.iconKey[t]) continue;
       this.iconKey[t] = key;
       const row = this.iconRows[t];
-      this.hideTip();   // ホバー中のアイコンが差し替えられる可能性 — そのツールチップを取り下げる
+      this.hideTip();   // 差し替えられるアイコンのツールチップを取り下げる
       row.replaceChildren();
       for (const p of list) {
         const el = this.makeFaceIcon(p, posOf(p));
-        this.iconEl.set(p, el);   // スタッツのポップがその上にアンカーできるよう覚えておく
+        this.iconEl.set(p, el);   // スタッツポップのアンカー用に覚えておく
         row.appendChild(el);
       }
     }
 };
 
-  // 顔アイコンの体力バーをライブ更新する（「icon」HUD モードでのみ意味がある;
-  // それ以外ではバーは隠れている）。選手をキーにするので、彼のために現在画面上に
-  // あるどのアイコン要素でも追跡する。
+  // 顔アイコンの体力バーをライブ更新する（「icon」HUD モードでのみ表示）。
 UI.prototype.updateIconStamina = function(game: Game): void {
     const show = HUD_OPTS.staminaOn === "icon";
     for (const roster of game.roster) {
@@ -395,7 +361,7 @@ UI.prototype.updateIconStamina = function(game: Game): void {
         if (!s || !s.bar.isConnected) continue;
         s.bar.style.display = show ? "block" : "none";
         if (!show) continue;
-        const frac = Math.max(0, Math.min(1, 1 - p.fatigue));
+        const frac = clamp(1 - p.fatigue, 0, 1);
         s.fill.style.width = `${frac * 100}%`;
         s.fill.style.background = frac > 0.5 ? "rgb(80,220,110)"
           : frac > 0.25 ? "rgb(240,200,70)" : "rgb(235,80,60)";
@@ -403,8 +369,7 @@ UI.prototype.updateIconStamina = function(game: Game): void {
     }
 };
 
-  // 浮遊する「＋」バッジ: 各選手のボックススコアを前フレームと比較し、彼が今
-  // 記録したもの（得点/アシスト/リバウンド/等）についてアイコン上にバッジをポップする。
+  // 各選手のボックススコアを前フレームと比較し、増えたスタッツをアイコン上にバッジでポップする。
 UI.prototype.updateStatPops = function(game: Game): void {
     if (this.phase !== "playing") return;
     for (const roster of game.roster) {

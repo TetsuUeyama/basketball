@@ -4,7 +4,7 @@ import { Player } from "../objects/player/player";
 import { clamp, dist2D } from "../util";
 
 // シューティングファウルの発生確率。レイアップは接触が多く、密着コンテストほど増える。
-// 早跳びして空中にいる守備者はシューターに突っ込みやすい（ギャンブルの内在リスク）。
+// 早跳びして空中にいる守備者はシューターに突っ込みやすい。
 export function shootingFoulChance(
   h: Player, dDef: number, layup: boolean, onBallDef: Player | undefined,
 ): number {

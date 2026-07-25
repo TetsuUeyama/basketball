@@ -1,8 +1,7 @@
 // ルーズボール/リバウンドの「効果」= 確保成功率の算出（判定ルール）。抽選(chance)と
 // 確保時/はじき時の処理は game.ts 側に残す。純粋関数のみ。
 import { Player } from "../objects/player/player";
-import { rate } from "../attributes";
-import { clamp } from "../util";
+import { rate, clamp } from "../util";
 
 // ルーズボールに触れた選手がそのまま確保する確率。ジャンプ/反応/バランスのリバウンド
 // 技量＋身長で上がり、守備側はボックスアウト分の補正。何度も弾き続けないよう、既に

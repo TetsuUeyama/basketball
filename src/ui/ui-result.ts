@@ -1,15 +1,9 @@
 // UI: 結果画面・スタッツ表・チーム比較。
-// プロトタイプ拡張で UI に紐づけ。本体は ui.ts から逐語移動（this は UI のまま）。
-// 呼び出し側は不変。main.ts が副作用 import する。
-import { Game } from "../game";
-import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS, TEAM_CLUB, teamAbbr, teamShort } from "../config";
-import { CLUB_ABBR } from "../clubabbr";
-import { CLUB_FLAGS } from "../clubflags";
-import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, clubTeam, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "../attributes";
-import { CLUBS } from "../clubdb";
-import { PLAYER_DB, type DbPlayer } from "../playerdb";
-import { playerLook } from "../objects/player/player-look";
-import { UI, colorOf, POP_STATS, type Phase } from "./ui";
+// プロトタイプ拡張で UI に紐づけ（main.ts が副作用 import）。
+import type { Game } from "../game";
+import { teamAbbr, teamShort } from "../config";
+import { STARTERS } from "../roster";
+import { UI, colorOf, BTN_BG, ELLIPSIS } from "./ui";
 
 declare module "./ui" {
   interface UI {
@@ -36,8 +30,7 @@ UI.prototype.buildResult = function(): void {
     title.textContent = "FINAL";
 
     this.resultScore = document.createElement("div");
-    // フォントはビューポート幅に合わせて拡縮し、2つのクラブ略称 + スコアが
-    // モバイル幅では1行に収まり（≈17px）、デスクトップでは大きいまま（32px 上限）。
+    // フォントはビューポート幅に合わせて拡縮（モバイルで1行に収める）。
     Object.assign(this.resultScore.style, {
       fontSize: "clamp(15px, 5.4vw, 32px)", fontWeight: "800", whiteSpace: "nowrap",
     } as Partial<CSSStyleDeclaration>);
@@ -48,16 +41,13 @@ UI.prototype.buildResult = function(): void {
     } as Partial<CSSStyleDeclaration>);
 
     this.resultStats = document.createElement("div");
-    // 固定幅 = 完全なボックススコア表（名前 128 + 10 列 + gap ≈ 544）。小さい画面
-    // では頭打ち; こうしてモーダルは3つのタブすべてで1つのサイズを保ち、狭い
-    // チーム比較表示で縮まない。
+    // 固定幅 = 完全なボックススコア表（小さい画面では頭打ち）。3つのタブで同じ幅を保つ。
     Object.assign(this.resultStats.style, {
       display: "flex", flexDirection: "column", gap: "12px", width: "min(560px, 90vw)",
     } as Partial<CSSStyleDeclaration>);
 
     const btnRow = document.createElement("div");
-    // gap/フォント/padding はビューポートに合わせて縮み、3つのボタンすべてが
-    // モバイル幅（≈375px）で2行に折り返さず1行に収まる。
+    // gap/フォント/padding をビューポートに合わせて縮め、3ボタンを1行に収める。
     Object.assign(btnRow.style, {
       display: "flex", gap: "clamp(6px, 2vw, 10px)", flexWrap: "nowrap",
       justifyContent: "center", marginTop: "4px",
@@ -88,9 +78,7 @@ UI.prototype.buildResult = function(): void {
     this.resultPanel = p;
 };
 
-  // スコアボードは一度だけ構築される（どのクラブも選ばれる前に）ため、そのチーム
-  // ラベルは試合が実際に始まる / クラブが変わるたびに読み直す必要がある:
-  // 選択されたクラブは3文字コードを、ランダムロスターは BLAZE / WAVE を表示する。
+  // スコアボードのチームラベルを読み直す（クラブは3文字コード、ランダムは BLAZE / WAVE）。
 UI.prototype.refreshBoardNames = function(): void {
     if (this.nameA) this.nameA.textContent = teamAbbr(0);
     if (this.nameB) this.nameB.textContent = teamAbbr(1);
@@ -114,24 +102,21 @@ UI.prototype.showResult = function(game: Game): void {
     this.resultStats.replaceChildren();
     this.resultStats.appendChild(this.resultTabBar());
     this.resultContent = document.createElement("div");
-    // 13人のボックススコアが余裕で収まる min-height。こうして短いチーム比較タブに
-    // 切り替えてもモーダルの高さが動かない
+    // ボックススコアが収まる min-height（タブ切替でモーダルの高さを固定）
     Object.assign(this.resultContent.style, { width: "100%", minHeight: "clamp(230px, 44vh, 360px)" } as Partial<CSSStyleDeclaration>);
     this.resultStats.appendChild(this.resultContent);
     this.renderResultTab();
     this.setPhase("result");
 };
 
-  // 3つのリザルトタブ。青 = team 1（WAVE）、赤 = team 0（BLAZE）; 各タブはその
-  // チームカラーで色付けされ、青 / 赤チームとして読める。
+  // 3つのリザルトタブ。青 = team 1、赤 = team 0; 各タブはチームカラーで色付け。
 UI.prototype.resultTabBar = function(): HTMLDivElement {
     const bar = document.createElement("div");
     Object.assign(bar.style, {
       display: "flex", gap: "6px", justifyContent: "center", flexWrap: "wrap", marginBottom: "6px",
     } as Partial<CSSStyleDeclaration>);
-    // 3文字の英語ラベルにして、3つのタブが常に1行に収まるようにする（長いクラブ
-    // 名は2行に折り返していた）。TOT = チーム合計/比較; チームタブは各側の3文字
-    // コードを使う（ARS, BAL, … / BLAZE→ランダムは短い名前を保つ）。
+    // 3文字ラベルで3タブを1行に収める。TOT = チーム合計/比較; チームタブは各側の
+    // 3文字コード。
     const tabs: { key: "team" | "blue" | "red"; label: string }[] = [
       { key: "team", label: "TOT" },          // 両チーム比較(チームスタッツ)
       { key: "blue", label: teamAbbr(1) },    // 青チーム
@@ -153,7 +138,7 @@ UI.prototype.renderResultTab = function(): void {
     if (!this.resultGame || !this.resultContent) return;
     for (const { key, el } of this.resultTabBtns) {
       const active = key === this.resultTab;
-      el.style.background = active ? "rgba(255,255,255,0.16)" : "rgba(20,24,34,0.9)";
+      el.style.background = active ? "rgba(255,255,255,0.16)" : BTN_BG;
       el.style.borderColor = active ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.18)";
       el.style.opacity = active ? "1" : "0.65";
     }
@@ -198,8 +183,7 @@ UI.prototype.statsTable = function(game: Game, team: number): HTMLDivElement {
     return wrap;
 };
 
-  // チーム対チームの比較: 合計を左右に並べる（team0 が左、team1 が右、その間に
-  // スタッツ名）ので、2つのスカッドが互いに対比して読める。
+  // チーム対チームの比較: 合計を左右に並べる（team0 が左、team1 が右、間にスタッツ名）。
 UI.prototype.teamCompare = function(game: Game): HTMLDivElement {
     type S = import("../objects/player/stats").Stats;
     const total = (t: number): S => {
@@ -286,16 +270,14 @@ UI.prototype.cell = function(text: string, width: number, align: string = "left"
     const el = document.createElement("span");
     Object.assign(el.style, {
       width: `${width}px`, flexShrink: "0", textAlign: align, display: "inline-block",
-      // 各セルを1行に保つ; 長すぎる名前は省略記号でクリップされる
-      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      // 各セルを1行に保つ（長い名前は … でクリップ）
+      ...ELLIPSIS,
     } as Partial<CSSStyleDeclaration>);
     el.textContent = text;
     return el;
 };
 
-  // 左に固定されたセル: スタッツ列が横スクロールしても固定されたままなので、
-  // 常に誰の行か分かる。スクロールした数字が透けないよう不透明な背景に、
-  // 固定列と分かるよう髪の毛ほどの縁を付ける。
+  // 左に固定されたセル: スタッツ列が横スクロールしても固定される。不透明な背景と縁付き。
 UI.prototype.stickyCell = function(text: string, width: number): HTMLSpanElement {
     const el = this.cell(text, width);
     Object.assign(el.style, {
@@ -326,7 +308,7 @@ UI.prototype.button = function(label: string): HTMLButtonElement {
     const b = document.createElement("button");
     b.textContent = label;
     Object.assign(b.style, {
-      background: "rgba(20,24,34,0.9)", color: "#fff", border: "1px solid rgba(255,255,255,0.18)",
+      background: BTN_BG, color: "#fff", border: "1px solid rgba(255,255,255,0.18)",
       borderRadius: "8px", padding: "6px 14px", fontSize: "13px", fontWeight: "700", cursor: "pointer",
     } as Partial<CSSStyleDeclaration>);
     return b;

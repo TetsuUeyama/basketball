@@ -1,6 +1,5 @@
-// ティップオフ（開幕ジャンプボール）機能。方式A: Game 参照を受け取るサブシステム。
-// 固有状態(進行時間/勝者/タップ先ガード/跳んだか)はこのクラスが所有し、共有状態・
-// フローは game 経由で呼ぶ。winner/guard は外部(団子回避・ポゼッション矢印)も参照。
+// ティップオフ（開幕ジャンプボール）機能。固有状態(進行時間/勝者/タップ先ガード/跳んだか)は
+// このクラスが所有。winner/guard は外部(団子回避・ポゼッション矢印)も参照。
 import { Player } from "../objects/player/player";
 import { chance, rand } from "../util";
 import type { Game } from "../game";
@@ -29,8 +28,7 @@ export class TipoffSystem {
     t1[0].pos.set(-2.4, 0, os1 * 2.2);  t1[1].pos.set(2.4, 0, os1 * 2.2);
     t0[2].pos.set(-4.5, 0, os0 * 9.5);  t0[3].pos.set(4.5, 0, os0 * 9.5);
     t1[2].pos.set(-4.5, 0, os1 * 9.5);  t1[3].pos.set(4.5, 0, os1 * 9.5);
-    // フロアの全員を立たせる(前試合終了時にベンチで座っていた先発が座位のまま
-    // ティップしないよう)
+    // フロアの全員を立たせる
     for (const p of g.players) { p.stand(); p.cutting = false; p.offTimer = rand(0.4, 2); p.spotIdx = g.homeSpotIdx(p); }
 
     this.winner = chance(0.5) ? 0 : 1;

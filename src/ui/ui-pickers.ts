@@ -1,15 +1,10 @@
 // UI: 各種モーダル（ロール/詳細/選手/クラブピッカー・キャリー・選手カード・ヘックス図）。
-// プロトタイプ拡張で UI に紐づけ。本体は ui.ts から逐語移動（this は UI のまま）。
-// 呼び出し側は不変。main.ts が副作用 import する。
-import { Game } from "../game";
-import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS, TEAM_CLUB, teamAbbr, teamShort } from "../config";
-import { CLUB_ABBR } from "../clubabbr";
-import { CLUB_FLAGS } from "../clubflags";
-import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, clubTeam, applyDbPlayer, makeDefFromDb, ATTR_META, ABILITY_META, scoringPower, type Attributes, type PlayerDef } from "../attributes";
-import { CLUBS } from "../clubdb";
-import { PLAYER_DB, type DbPlayer } from "../playerdb";
-import { playerLook } from "../objects/player/player-look";
-import { UI, colorOf, POP_STATS, type Phase } from "./ui";
+// プロトタイプ拡張で UI に紐づけ（main.ts が副作用 import）。
+import { TEAM_NAMES } from "../config";
+import { ROSTER, STARTERS, applyDbPlayer, makeDefFromDb } from "../roster";
+import { ATTR_META, ABILITY_META, type PlayerDef } from "../attributes";
+import { PLAYER_DB, type DbPlayer } from "../player-data";
+import { UI, colorOf, BTN_BG, INK, NEUTRAL_GRAY, ELLIPSIS } from "./ui";
 
 declare module "./ui" {
   interface UI {
@@ -31,7 +26,7 @@ declare module "./ui" {
 }
 
   // 浮遊するロールピッカーのメニュー: ピルを押す → 一覧から評価ロールを選ぶ
-  // （現在のものはチームカラーで点灯）。選択時、または外側を押したときに閉じる。
+  // （現在のものは点灯）。選択時、または外側を押したときに閉じる。
 UI.prototype.openRolePicker = function(def: PlayerDef, team: number, anchor: HTMLElement,
                          onPick?: () => void, kind: "off" | "def" = "off"): void {
     this.closeRolePicker();
@@ -47,13 +42,12 @@ UI.prototype.openRolePicker = function(def: PlayerDef, team: number, anchor: HTM
     } as Partial<CSSStyleDeclaration>);
     const cur = (isDef ? def.defRole : def.evalRole) ?? "自動";
     const roleColour = (nm: string): string =>
-      nm === "自動" ? "rgb(150,156,168)"
-        : ((isDef ? UI.DEF_GROUP_C[nm] : UI.OFF_GROUP_C[nm]) ?? "rgb(150,156,168)");
+      nm === "自動" ? NEUTRAL_GRAY
+        : ((isDef ? UI.DEF_GROUP_C[nm] : UI.OFF_GROUP_C[nm]) ?? NEUTRAL_GRAY);
     const mkBtn = (nm: string): HTMLDivElement => {
       const cell = document.createElement("div");
       Object.assign(cell.style, { display: "flex", alignItems: "center", gap: "4px" } as Partial<CSSStyleDeclaration>);
-      // 各選択肢はロール自身の色で色付けされ、ピッカーが凡例も兼ねる;
-      // 選択されたものは塗りつぶしになる
+      // 各選択肢はロール自身の色で色付け（選択されたものは塗りつぶし）
       const acc = roleColour(nm);
       const dot = document.createElement("span");
       Object.assign(dot.style, { width: "9px", height: "9px", borderRadius: "50%", background: acc, flexShrink: "0" } as Partial<CSSStyleDeclaration>);
@@ -64,7 +58,7 @@ UI.prototype.openRolePicker = function(def: PlayerDef, team: number, anchor: HTM
         flex: "1", fontSize: "11px", fontWeight: on ? "800" : "600", padding: "4px 10px",
         borderRadius: "8px", cursor: "pointer", whiteSpace: "nowrap", textAlign: "left",
         background: on ? acc : "rgba(255,255,255,0.06)",
-        color: on ? "#0d1016" : "#dfe4ee",
+        color: on ? INK : "#dfe4ee",
         border: `1px solid ${on ? acc : "rgba(255,255,255,0.14)"}`,
       } as Partial<CSSStyleDeclaration>);
       b.onclick = () => {
@@ -74,14 +68,13 @@ UI.prototype.openRolePicker = function(def: PlayerDef, team: number, anchor: HTM
         if (onPick) onPick();
         else this.refreshEditors();   // OVR + チームバーを再評価
       };
-      // リアルタイム: オフェンスロールをホバーすると、それがチームのバーをどう
-      // 動かすかをプレビュー（試合前のロスターのみ; 守備ロールは OVR バーを変えない）
+      // オフェンスロールをホバーするとチームバーへの影響をプレビュー（試合前のみ）
       if (!this.detailModal && !isDef) {
         b.onmouseenter = () => this.previewRole(def, team, nm);
         b.onmouseleave = () => this.clearVsPreview();
       }
       cell.append(dot, b);
-      // ⓘ — 押す（またはホバー）と、そのロールの意味 / 何を評価するかが読める
+      // ⓘ — 押す/ホバーでそのロールの説明を表示
       const tip = nm === "自動"
         ? (isDef ? "能力から自動でディフェンスロールを選びます。" : "ポジション標準の重みで評価します（ロール未設定）。")
         : (isDef ? UI.DEF_ROLES[nm]?.tip : UI.EVAL_ROLES[nm]?.tip);
@@ -112,13 +105,13 @@ UI.prototype.openRolePicker = function(def: PlayerDef, team: number, anchor: HTM
     };
     menu.appendChild(mkBtn("自動"));
     if (isDef) {
-      // 守備ロールの一つのフラットなリスト（エフォートのギア + 専門家）
+      // 守備ロールのフラットなリスト
       const dg = grid();
       for (const nm of Object.keys(UI.DEF_ROLES)) dg.appendChild(mkBtn(nm));
       menu.appendChild(header("ディフェンスロール"));
       menu.appendChild(dg);
     } else {
-      // このポジションが取れるオフェンスロール（守備専用の名前は除外）...
+      // このポジションが取れるオフェンスロール（守備専用の名前は除外）
       const posGrid = grid();
       for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
         if (UI.DEF_ONLY.has(nm)) continue;
@@ -128,7 +121,7 @@ UI.prototype.openRolePicker = function(def: PlayerDef, team: number, anchor: HTM
         menu.appendChild(header(`${def.role} のロール`));
         menu.appendChild(posGrid);
       }
-      // ...そして現代のポジション横断的な仕事。全員に開かれている
+      // 全ポジション共通のロール
       const crossGrid = grid();
       for (const [nm, r] of Object.entries(UI.EVAL_ROLES)) {
         if (!r.pos && !UI.DEF_ONLY.has(nm)) crossGrid.appendChild(mkBtn(nm));
@@ -159,11 +152,10 @@ UI.prototype.closeRolePicker = function(): void {
       window.removeEventListener("pointerdown", this.rolePickerCloser, true);
       this.rolePickerCloser = null;
     }
-    this.clearVsPreview();   // ロールホバーのプレビューを取り下げる（有効なものがなければ何もしない）
+    this.clearVsPreview();   // ロールホバーのプレビューを取り下げる
 };
 
-  // 全能力値モーダル（詳 ボタン）: 25 の能力値それぞれを値バーつきで、ヘックス
-  // ダイジェスト、そして特殊能力 — 暗くした背景の上に。
+  // 全能力値モーダル（詳 ボタン）: 25 の能力値、ヘックスダイジェスト、特殊能力を表示。
 UI.prototype.openDetailModal = function(def: PlayerDef, team: number): void {
     this.closeDetailModal();
     this.hidePlayerCard();
@@ -191,14 +183,13 @@ UI.prototype.openDetailModal = function(def: PlayerDef, team: number): void {
       display: "flex", flexDirection: "column", gap: "10px", textAlign: "left",
     } as Partial<CSSStyleDeclaration>);
 
-    // ヘッダー: 名前は独立した行に（フルで表示 — パネルが収まるよう広がる。
-    // パネル/画面を超える場合のみ省略記号）、続いて身長/OVR/ロール
+    // ヘッダー: 名前を独立した行に、続いて身長/OVR/ロール
     const head = document.createElement("div");
     Object.assign(head.style, { display: "flex", flexDirection: "column", gap: "4px" } as Partial<CSSStyleDeclaration>);
     const nm = document.createElement("div");
     Object.assign(nm.style, {
       fontSize: "17px", fontWeight: "800", color,
-      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%",
+      ...ELLIPSIS, maxWidth: "100%",
     } as Partial<CSSStyleDeclaration>);
     nm.textContent = `${def.role}  ${def.name}`;
     const sub = document.createElement("div");
@@ -206,11 +197,10 @@ UI.prototype.openDetailModal = function(def: PlayerDef, team: number): void {
     const meta = document.createElement("div");
     Object.assign(meta.style, { fontSize: "12px", opacity: "0.8", whiteSpace: "nowrap" });
     meta.textContent = `${Math.round(def.height * 100)}cm ${def.hand === "L" ? "左" : "右"}利き  OVR ${this.ovrOf(def)}`;
-    // 役割 — ここで切り替える（アイコンピルは表示専用）: 試合前ロスターと同じ
-    // ピッカーを開き、その後モーダルが新しいロールで再構築される
+    // 役割の切り替え: ピッカーを開き、選択後にモーダルを再構築する
     const reopen = () => {
       this.refreshEditors();            // 試合前VSボード / ロスターを再評価
-      this.openDetailModal(def, team);  // ...そしてこのモーダルが最新の状態で開き直される
+      this.openDetailModal(def, team);
     };
     const pill = (label: string, set: boolean): HTMLButtonElement => {
       const b = document.createElement("button");
@@ -219,25 +209,24 @@ UI.prototype.openDetailModal = function(def: PlayerDef, team: number): void {
         fontSize: "11px", fontWeight: "700", padding: "3px 12px", borderRadius: "8px",
         cursor: "pointer", whiteSpace: "nowrap",
         background: set ? color : "rgba(255,255,255,0.07)",
-        color: set ? "#0d1016" : "#dfe4ee",
+        color: set ? INK : "#dfe4ee",
         border: set ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.2)",
       } as Partial<CSSStyleDeclaration>);
       return b;
     };
-    // オフェンスロール、守備ロール、選択順位 — 全てここで切り替える。
+    // オフェンスロール、守備ロール、選択順位の切り替え。
     const roleBtn = pill(`攻: ${def.evalRole ?? "自動"} ▾`, !!def.evalRole);
     roleBtn.onclick = () => this.openRolePicker(def, team, roleBtn, reopen, "off");
     const defBtn = pill(`守: ${def.defRole ?? "自動"} ▾`, !!def.defRole);
     defBtn.onclick = () => this.openRolePicker(def, team, defBtn, reopen, "def");
-    // 選択順位は 自動→1→2→…→5→自動 と循環（1 = 最初の選択肢 / 最も高い使用率）
+    // 選択順位は 自動→1→2→…→5→自動 と循環（1 = 最も高い使用率）
     const rankBtn = pill(`プライマリ: ${def.choiceRank ?? "自動"}`, !!def.choiceRank);
     rankBtn.onclick = () => {
       const next = def.choiceRank === undefined ? 1 : def.choiceRank >= 5 ? undefined : def.choiceRank + 1;
       def.choiceRank = next;
       reopen();
     };
-    // 身長・利き腕 の下のレイアウト: [オフェンスロール | プライマリ] を1行、そして
-    // その下の行にディフェンスロールを同じ総幅で。
+    // レイアウト: [オフェンスロール | プライマリ] を1行、その下にディフェンスロール。
     const roleBox = document.createElement("div");
     Object.assign(roleBox.style, {
       display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px",
@@ -265,7 +254,7 @@ UI.prototype.openDetailModal = function(def: PlayerDef, team: number): void {
     head.append(nm, sub, roleBox);
 
     // 上段: 左に 名前 / ロール / カバー可能ポジション、右にヘックスチャート
-    // （モバイルでは縦積み）。能力値グリッドはその下に全幅で。
+    // （モバイルでは縦積み）。
     const infoCol = document.createElement("div");
     Object.assign(infoCol.style, {
       display: "flex", flexDirection: "column", gap: "6px",
@@ -285,7 +274,7 @@ UI.prototype.openDetailModal = function(def: PlayerDef, team: number): void {
     topRow.append(infoCol, cv);
     panel.appendChild(topRow);
 
-    // ステータス: 下に全幅で 25 の能力値すべて
+    // ステータス: 下に全幅で 25 の能力値
     const grid = document.createElement("div");
     Object.assign(grid.style, {
       display: "grid", gap: "6px 12px", width: "100%",
@@ -329,7 +318,7 @@ UI.prototype.openDetailModal = function(def: PlayerDef, team: number): void {
       const chip = document.createElement("span");
       Object.assign(chip.style, {
         fontSize: "10px", fontWeight: "800", padding: "2px 8px", borderRadius: "9px",
-        background: color, color: "#0d1016", whiteSpace: "nowrap", cursor: "help",
+        background: color, color: INK, whiteSpace: "nowrap", cursor: "help",
       } as Partial<CSSStyleDeclaration>);
       chip.textContent = m.label;
       chip.onmouseenter = () => this.showTextTip(m.label, m.tip, chip);
@@ -353,8 +342,7 @@ UI.prototype.closeDetailModal = function(): void {
     this.hideTip();
 };
 
-  // 4000人超の選手データベース全体を OVR 順にソートしたビューを（一度）構築し、
-  // ピッカーのキーストローク絞り込みがキャッシュ済みフィールドの単純な配列走査で済むようにする。
+  // 選手データベース全体を OVR 順にソートしたビューを（一度）構築する。
 UI.prototype.ensureDbIndex = function(): { p: DbPlayer; ovr: number; lower: string }[] {
     if (!this.dbIndex) {
       this.dbIndex = PLAYER_DB
@@ -364,10 +352,9 @@ UI.prototype.ensureDbIndex = function(): { p: DbPlayer; ovr: number; lower: stri
     return this.dbIndex;
 };
 
-  // 選手を交代: チーム名ヘッダーから開く。4000人超のデータベース選手のいずれかを
-  // 選ぶ（検索 / ポジションフィルタ / OVR）; 選択するとモーダルが閉じ、選手が
-  // カーソルに「運ばれる」 — 彼のチームのロスター行にドロップして選手を入れ替える
-  // （startCarry 参照）。
+  // 選手を交代: チーム名ヘッダーから開く。データベース選手を選ぶ（検索 /
+  // ポジションフィルタ / OVR）。選択するとモーダルが閉じ、選手がカーソルに
+  // 「運ばれる」（startCarry 参照）。
 UI.prototype.openPlayerPicker = function(team: number): void {
     this.closeRolePicker();
     this.hidePlayerCard();
@@ -403,7 +390,7 @@ UI.prototype.openPlayerPicker = function(team: number): void {
       this.startCarry(team, dbp);
     };
 
-    // ---- 検索可能な 4000人超のデータベース一覧 ----
+    // ---- 検索可能なデータベース一覧 ----
     const CAP = 150;
     let posFilter = "ALL";
     {
@@ -441,7 +428,7 @@ UI.prototype.openPlayerPicker = function(team: number): void {
         Object.assign(pos.style, { fontSize: "10px", fontWeight: "800", color, textAlign: "center", border: `1px solid ${color}`, borderRadius: "5px", padding: "1px 0" });
         pos.textContent = e.p[1];
         const nm = document.createElement("span");
-        Object.assign(nm.style, { fontSize: "13px", fontWeight: "700", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+        Object.assign(nm.style, { fontSize: "13px", fontWeight: "700", ...ELLIPSIS });
         nm.textContent = e.p[0];
         const ht = document.createElement("span");
         Object.assign(ht.style, { fontSize: "11px", opacity: "0.6", textAlign: "right" });
@@ -450,7 +437,7 @@ UI.prototype.openPlayerPicker = function(team: number): void {
         Object.assign(ovr.style, { fontSize: "13px", fontWeight: "800", textAlign: "right" });
         ovr.textContent = `${e.ovr}`;
         const pick = this.button("選ぶ");
-        Object.assign(pick.style, { fontSize: "11px", fontWeight: "800", padding: "3px 0", background: color, color: "#0d1016", border: `1px solid ${color}` });
+        Object.assign(pick.style, { fontSize: "11px", fontWeight: "800", padding: "3px 0", background: color, color: INK, border: `1px solid ${color}` });
         pick.onclick = (ev) => { ev.stopPropagation(); onPick(e.p); };
         r.onclick = () => onPick(e.p);
         r.onmouseenter = () => { r.style.background = "rgba(90,140,255,0.18)"; };
@@ -481,8 +468,8 @@ UI.prototype.openPlayerPicker = function(team: number): void {
         posFilter = f;
         for (const [k, b] of Object.entries(posBtns)) {
           const on = k === f;
-          b.style.background = on ? color : "rgba(20,24,34,0.9)";
-          b.style.color = on ? "#0d1016" : "rgba(255,255,255,0.6)";
+          b.style.background = on ? color : BTN_BG;
+          b.style.color = on ? INK : "rgba(255,255,255,0.6)";
           b.style.border = on ? `1px solid ${color}` : "1px solid rgba(255,255,255,0.18)";
         }
         render();
@@ -515,17 +502,14 @@ UI.prototype.closeClubPicker = function(): void {
     if (this.clubPicker) { this.clubPicker.remove(); this.clubPicker = null; }
 };
 
-  // ピッカーが閉じた後、取り込む DB 選手をカーソルに運ぶ。彼のチームのロスター
-  // 行での単なる pointerdown で彼をそこにドロップ（その選手を置き換える）;
-  // それ以外の場所での pointerdown、または Esc でキャンセル。ボタンは押しっぱなし
-  // にしない — ピッカーのクリックは既に終わっているので、これはクリックで配置する操作。
+  // 取り込む DB 選手をカーソルに運ぶ。ロスター行での pointerdown でドロップして
+  // 選手を置き換える; それ以外の場所での pointerdown または Esc でキャンセル。
 UI.prototype.startCarry = function(team: number, dbp: DbPlayer): void {
     this.cancelCarry();
     this.carry = { team, dbp };
     const color = colorOf(team);
 
-    // 固定幅のピル（flex）: ポジションチップ + 省略記号でクリップする可変幅の
-    // 名前セル + 入れ替えの記号 — 名前が短くても長くてもラベルは同じ幅になる。
+    // 固定幅のピル: ポジションチップ + 名前セル（… でクリップ） + 入れ替えの記号。
     const g = document.createElement("div");
     Object.assign(g.style, {
       position: "fixed", zIndex: "92", pointerEvents: "none",
@@ -539,7 +523,7 @@ UI.prototype.startCarry = function(team: number, dbp: DbPlayer): void {
     Object.assign(gPos.style, { color, flexShrink: "0" } as Partial<CSSStyleDeclaration>);
     gPos.textContent = dbp[1];
     const gName = document.createElement("span");
-    Object.assign(gName.style, { flex: "1 1 auto", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
+    Object.assign(gName.style, { flex: "1 1 auto", minWidth: "0", ...ELLIPSIS } as Partial<CSSStyleDeclaration>);
     gName.textContent = dbp[0];
     const gArrow = document.createElement("span");
     Object.assign(gArrow.style, { opacity: "0.6", flexShrink: "0" } as Partial<CSSStyleDeclaration>);
@@ -551,15 +535,15 @@ UI.prototype.startCarry = function(team: number, dbp: DbPlayer): void {
     const hint = document.createElement("div");
     Object.assign(hint.style, {
       position: "fixed", zIndex: "92", left: "50%", top: "12px", transform: "translateX(-50%)",
-      background: "rgba(90,140,255,0.96)", color: "#0d1016", fontWeight: "800", fontSize: "12px",
+      background: "rgba(90,140,255,0.96)", color: INK, fontWeight: "800", fontSize: "12px",
       padding: "6px 14px", borderRadius: "8px", pointerEvents: "none", boxShadow: "0 6px 20px rgba(0,0,0,0.5)",
-      whiteSpace: "nowrap", maxWidth: "94vw", overflow: "hidden", textOverflow: "ellipsis",
+      ...ELLIPSIS, maxWidth: "94vw",
     } as Partial<CSSStyleDeclaration>);
     hint.textContent = `「${dbp[0]}」を交代させる選手の上でクリック（Escで取消）`;
     document.body.appendChild(hint);
     this.carryHint = hint;
 
-    let previewIdx = -1;   // 現在 VS ボード上でプレビュー中のロスタースロット（-1 = なし）
+    let previewIdx = -1;   // プレビュー中のロスタースロット（-1 = なし）
     const clearHl = () => {
       if (this.carryHl) {
         this.carryHl.style.border = "1px solid transparent";
@@ -592,17 +576,15 @@ UI.prototype.startCarry = function(team: number, dbp: DbPlayer): void {
     const commit = (idx: number): void => {
       const nd = ROSTER[team][idx];
       applyDbPlayer(nd, dbp);
-      // 交代で入ってくる選手は妥当なデフォルトロール付きで到着する（ユーザーが
-      // ぶつかった「ロールの設定を忘れる」隙間を防ぐ）— オフェンスは軸で、守備は
-      // 能力値で; 選択順位は自動に戻す。
+      // 交代で入る選手にデフォルトロールを付ける（オフェンスは軸、守備は能力値、
+      // 選択順位は自動）。
       nd.evalRole = this.bestOffRole(nd);
-      // 彼の守備ロールは、彼に合いつつ彼のユニットの隙間を埋めるように選ぶ
-      // （チームメイトのロールはそのまま — そこで既に取られているものに対して散らす）
+      // 守備ロールは、彼に合いつつユニットの隙間を埋めるように選ぶ
       const unit = idx < STARTERS ? ROSTER[team].slice(0, STARTERS) : ROSTER[team].slice(STARTERS);
       const takenDef = new Map<string, number>();
       for (const d of unit) if (d !== nd && d.defRole) takenDef.set(d.defRole, (takenDef.get(d.defRole) ?? 0) + 1);
       nd.defRole = this.pickDefRole(nd, takenDef);
-      this.assignRankFor(nd, team, idx);   // 能力によるプライマリ（チームメイトは手を付けない）
+      this.assignRankFor(nd, team, idx);   // 能力によるプライマリ
       this.cancelCarry();
       this.refreshEditors();
     };
@@ -611,11 +593,8 @@ UI.prototype.startCarry = function(team: number, dbp: DbPlayer): void {
       if (t && t.team === team) {
         e.preventDefault();
         e.stopPropagation();   // 行自身の長押しドラッグに先んじる
-        // タッチにはホバーがないため、戦力プレビューが表示される機会がなかった。
-        // スロットへの最初のタップは変化をプレビューする（ハイライト + VS ボード上
-        // の ±N）; 同じスロットへの2度目のタップで確定する。別のスロットへの
-        // タップはプレビューを移動するだけ。マウスは依然として最初のクリックで
-        // 確定する（ホバーで既に変化をプレビュー済み）。
+        // タッチ: 最初のタップで変化をプレビュー、同じスロットへの2度目のタップで
+        // 確定。マウスは最初のクリックで確定（ホバーでプレビュー済み）。
         if (e.pointerType !== "mouse" && previewIdx !== t.idx) {
           setHl(t.el);
           preview(t.idx);
@@ -624,7 +603,7 @@ UI.prototype.startCarry = function(team: number, dbp: DbPlayer): void {
         }
         commit(t.idx);
       } else {
-        this.cancelCarry();    // 彼のロスター行のいずれからも外れてドロップ → キャンセル
+        this.cancelCarry();    // ロスター行の外にドロップ → キャンセル
       }
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") this.cancelCarry(); };
@@ -636,7 +615,7 @@ UI.prototype.startCarry = function(team: number, dbp: DbPlayer): void {
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
       clearHl();
-      if (previewIdx >= 0) { previewIdx = -1; this.clearVsPreview(); }   // 戦力プレビューを取り下げる
+      if (previewIdx >= 0) { previewIdx = -1; this.clearVsPreview(); }   // プレビューを取り下げる
     };
 };
 
@@ -653,21 +632,20 @@ UI.prototype.showPlayerCard = function(def: PlayerDef, team: number, anchor: HTM
     const card = this.playerCard;
     card.replaceChildren();
 
-    // 名前は独立した行に（フルネーム; カードを超える場合のみ省略記号）、その下に
-    // メタ情報 — 長い名前が数文字に押し潰されないようにする
+    // 名前を独立した行に、その下にメタ情報
     const head = document.createElement("div");
     Object.assign(head.style, { display: "flex", flexDirection: "column", gap: "1px", marginBottom: "2px" } as Partial<CSSStyleDeclaration>);
     const nm = document.createElement("div");
-    Object.assign(nm.style, { fontSize: "14px", fontWeight: "800", color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" });
+    Object.assign(nm.style, { fontSize: "14px", fontWeight: "800", color, ...ELLIPSIS, maxWidth: "100%" });
     nm.textContent = `${def.role}  ${def.name}`;
     const meta = document.createElement("div");
-    Object.assign(meta.style, { fontSize: "11px", opacity: "0.75", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+    Object.assign(meta.style, { fontSize: "11px", opacity: "0.75", ...ELLIPSIS });
     meta.textContent = `${Math.round(def.height * 100)}cm ${def.hand === "L" ? "左" : "右"}利き  OVR ${this.ovrOf(def)}`
       + (def.evalRole ? `  [${def.evalRole}]` : "");
     head.append(nm, meta);
     card.appendChild(head);
 
-    // カバー可能ポジション: 5つのチップのうち彼の分が点灯
+    // カバー可能ポジション: 5つのチップのうち該当分が点灯
     const chipsRow = this.positionChips(def, color);
     chipsRow.style.margin = "1px 0 3px";
     card.appendChild(chipsRow);
@@ -691,24 +669,21 @@ UI.prototype.showPlayerCard = function(def: PlayerDef, team: number, anchor: HTM
       const chip = document.createElement("span");
       Object.assign(chip.style, {
         fontSize: "10px", fontWeight: "800", padding: "2px 8px", borderRadius: "9px",
-        background: color, color: "#0d1016", whiteSpace: "nowrap",
+        background: color, color: INK, whiteSpace: "nowrap",
       } as Partial<CSSStyleDeclaration>);
       chip.textContent = m.label;
       chips.appendChild(chip);
     }
     card.appendChild(chips);
 
-    // ホバーした行の上に浮かせる（その下端が名前のすぐ上）ので、行自体 — 名前、
-    // ロールピル、詳 — は決して覆われずクリック可能なまま。上に余地がなければ
-    // 代わりに行の下に反転する。
+    // ホバーした行の上に浮かせる（行自体を覆わない）。上に余地がなければ下に反転。
     card.style.display = "block";
     const r = anchor.getBoundingClientRect();
     const cw = 260;
     const ch = card.offsetHeight || 320;
     let left = r.left + r.width / 2 - cw / 2;
     left = Math.max(8, Math.min(left, window.innerWidth - cw - 8));
-    // デフォルト: 行の上に浮かせる。画面の上端からはみ出す場合、またはロスターの
-    // 上の VS（チーム戦力）ボードと重なる場合は下に反転する。
+    // デフォルトは行の上。画面上端をはみ出す、または VS ボードと重なる場合は下へ反転。
     let top = r.top - ch - 8;
     const vbBottom = this.vsBoard ? this.vsBoard.getBoundingClientRect().bottom : 0;
     if (top < 8 || top < vbBottom) top = Math.min(window.innerHeight - ch - 8, r.bottom + 8);
@@ -720,8 +695,8 @@ UI.prototype.hidePlayerCard = function(): void {
     this.playerCard.style.display = "none";
 };
 
-  // ヘックス（レーダー）チャート: 控えめなグリッドのリング + スポーク、チーム
-  // カラーの1つのデータ多角形、軸ラベルと正確な値をプレーンなインクで。
+  // ヘックス（レーダー）チャート: グリッドのリング + スポーク、チームカラーの
+  // データ多角形、軸ラベルと値。
 UI.prototype.drawHexChart = function(cv: HTMLCanvasElement, axes: number[], color: string): void {
     const ctx = cv.getContext("2d")!;
     const cx = cv.width / 2, cy = cv.height / 2 + 2, R = 60;
@@ -730,7 +705,7 @@ UI.prototype.drawHexChart = function(cv: HTMLCanvasElement, axes: number[], colo
       return [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
     };
     ctx.clearRect(0, 0, cv.width, cv.height);
-    // グリッド: 3つのリング + スポーク。データが先に読めるよう薄めに保つ
+    // グリッド: 3つのリング + スポーク
     ctx.strokeStyle = "rgba(255,255,255,0.13)";
     ctx.lineWidth = 1;
     for (const f of [1 / 3, 2 / 3, 1]) {
@@ -745,8 +720,7 @@ UI.prototype.drawHexChart = function(cv: HTMLCanvasElement, axes: number[], colo
       const [x, y] = pt(i, R);
       ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y); ctx.stroke();
     }
-    // データ多角形 — DB の能力値は圧縮された約 40..99 の帯域にあるため、その
-    // 帯域を半径いっぱいに広げる（正確な値は下に表示される）
+    // データ多角形（DB の能力値の帯域を半径いっぱいに広げる）
     const rOf = (v: number) => R * Math.max(0.06, Math.min(1, (v - 30) / 69));
     ctx.beginPath();
     for (let i = 0; i <= 6; i++) {
@@ -759,7 +733,7 @@ UI.prototype.drawHexChart = function(cv: HTMLCanvasElement, axes: number[], colo
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.stroke();
-    // ラベル + 値はインクで。決してシリーズの色にはしない
+    // ラベル + 値
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     for (let i = 0; i < 6; i++) {
