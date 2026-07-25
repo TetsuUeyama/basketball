@@ -79,17 +79,27 @@ Babylon.js 製フルコート 5対5 の**観戦バスケットボールシミュ
 公開API（`update`/`reset`/`applyRoster`/`syncVisuals` と `score`/`state`/`players`/`ball`/`lastEvent` 等、
 ui.ts / main.ts が参照）は維持する。
 
-### 目標アーキテクチャ（層）
+### 目標アーキテクチャ（層 / 2026-07-25 ユーザー合意で改訂・実装済み）
 ```
 src/
-  objects/     オブジェクト＋アニメ（既存: entities.ts の Player/Ball, court.ts）
-  moves/       具体ムーブ = アニメ＋発動関数（歩/走/ダッシュ/ジャンプ/シュート各種/パス各種/守備/ドリブル）
-  cognition/   個人の状況判断（handler/offball/defender の decide, pass-read）
-  tactics/     チーム戦術（offense/defense scheme, subs）
-  resolution/  アクションの効果 = 判定ルール（shot-outcome, contest-block, steal-intercept, foul, rebound）
-  core/        共有状態(GameState) と 公開API＋updateループ＋状態機械（薄い game.ts）
+  ai/          試合中の判断を集約。offense(ハンドラー判断)/defense(マン守備)/
+               defense-schemes(ゾーン・プレス)/offball(オフボール)/reads(状況の読み)/
+               lineups(先発・適格のコーチング判断)
+  animation/   アニメ。basic=部位の定義と基本ルール(joints/rotate/arms/torso/legs)、
+               action=アクション毎(locomotion/dribble/hold/reach/guard/sit)、
+               reaction=リアクション毎(foul-react/defwin/dejected/bench-idle)
+  move/        ムーブ実行。basic=移動物理(run/jump/turn)+ボール挙動ベース(ball)、
+               action=シュート/パス/liveball(held統合tick)、
+               reaction=判定ルール(shot-outcome/contest-block/pass-risk/foul/rebound)
+  data/        生成データ（club/ 実クラブ、player-data/ 選手DB4015人）
+  objects/     実体（Player/Ball/court/materials）
+  core/        共有状態を操作する手続き（collision/looseball/deadball/gameflow/poses/visuals/bench）
+  systems/     状態を持つ機能クラス（FT/tipoff/inbound/screen/subs）
   eval.ts      層をまたぐ純粋な評価プリミティブ
 ```
+- ai/ 未集約の判断（今後の移設候補）: passing.chooseReceiver（受け手選択）、subs の
+  subDesire/planSubs（交代判断、実行と同居）、game.ts の steerAround/pickSide/
+  setDriveSide/crashBoards/formationSpots（Phase 3〜4 の状態集約と同時に）。
 設計の肝: (1) アニメは選手オブジェクトに残し、発動と効果を分離。(2) 114フィールドは `core/game-state.ts`
 に集約し各層へ渡す（層分けと直交する土台）。
 

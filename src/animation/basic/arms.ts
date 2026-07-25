@@ -1,14 +1,15 @@
-// 腕（肩・肘・手）の部位定義と基本ムーバ。肩の向け直しは armRateCap(rad/s) の
-// レート制限、肘の曲げは JOINT.elbow の可動域に従う。各アクションのアニメは
-// 必ずこのムーバを通して腕を動かす。
+// 腕（肩・肘・手）の部位定義と基本ムーバ。肩・肘とも瞬間切替は禁止で、速度は
+// armRateCap（能力値由来の上書き、1/s）か MOVE_RATE.arm（既定）のイーズに従い、
+// 肘の可動域は JOINT.elbow。各アクションのアニメは必ずこのムーバを通して腕を動かす。
 import { TransformNode, Vector3, Quaternion } from "@babylonjs/core";
-import { expEase } from "../../../util";
-import { JOINT } from "./joints";
+import { expEase } from "../../util";
+import { JOINT, MOVE_RATE } from "./joints";
 import { clampAngle } from "./rotate";
-import { Player, aimDownTo } from "../../../objects/player/player";
+import { Player, aimDownTo } from "../../objects/player/player";
 
-declare module "../../../objects/player/player" {
+declare module "../../objects/player/player" {
   interface Player {
+    easeArm(pivot: TransformNode, target: Quaternion): void;
     bendElbow(node: TransformNode, amount: number): void;
     handsRest(): void;
     aimArm(pivot: TransformNode, world: Vector3): void;
@@ -16,19 +17,34 @@ declare module "../../../objects/player/player" {
   }
 }
 
+  // 腕クォータニオンの共通書き込み。常にレート制限付きで目標へイーズする
+  // （armRateCap > 0 ならその速度、未指定は MOVE_RATE.arm）。初期化時
+  // （現在の向きが無い）だけ直接セットする。
+Player.prototype.easeArm = function(pivot: TransformNode, target: Quaternion): void {
+    const cur = pivot.rotationQuaternion;
+    if (!cur) { pivot.rotationQuaternion = target; return; }
+    const cap = this.armRateCap > 0 ? this.armRateCap : MOVE_RATE.arm;
+    // 指数イーズ——毎フレーム目標へ一定の割合だけ動かすので、大きな切り替え
+    // だけでなく小さな目標のジッター（跳ねるボール、ポーズ間でちらつく読み）も
+    // ダンプされる。
+    const k = 1 - Math.exp(-cap * this.lastDt);
+    pivot.rotationQuaternion = Quaternion.Slerp(cur, target, k);
+};
+
   // 肘の曲げ: 前方（胸に向かって、-numberSide·Z）へ、腕/脚の規約に合わせる。
-  // 手がボールに届く必要があるときは常に真っ直ぐ(0)。スルー(slew)が有効なとき、
-  // 前腕(肘)は上腕と同じレートで曲げ目標へイーズする。
+  // 前腕(肘)は上腕と同じレート（armRateCap、未指定は MOVE_RATE.arm）で曲げ目標へ
+  // イーズする。
 Player.prototype.bendElbow = function(node: TransformNode, amount: number): void {
     node.rotation.y = 0; node.rotation.z = 0;   // 前のポーズから残った抱え込み方向のヨーをクリア
     const target = clampAngle(JOINT.elbow, amount * this.numberSide);   // 肘の可動域に収める
-    node.rotation.x = expEase(node.rotation.x, target, this.armRateCap, this.lastDt);
+    const cap = this.armRateCap > 0 ? this.armRateCap : MOVE_RATE.arm;
+    node.rotation.x = expEase(node.rotation.x, target, cap, this.lastDt);
 };
 
 /** 両腕を脇に垂らし、肘を少し曲げる（既定ポーズ）。 */
 Player.prototype.handsRest = function(): void {
-    this.armPivotL.rotationQuaternion = Quaternion.Identity();
-    this.armPivotR.rotationQuaternion = Quaternion.Identity();
+    this.easeArm(this.armPivotL, Quaternion.Identity());
+    this.easeArm(this.armPivotR, Quaternion.Identity());
     this.armPivotL.scaling.set(1, 1, 1);
     this.armPivotR.scaling.set(1, 1, 1);
     this.bendElbow(this.elbowL, 0.28);
@@ -54,21 +70,10 @@ Player.prototype.aimArm = function(pivot: TransformNode, world: Vector3): void {
     this.setArmDir(pivot, c * wx - s * wz, wy, s * wx + c * wz);
 };
 
+  // 腕を指定方向（rootローカル）へ向ける。速度は easeArm の規約に従う——
+  // 守備の低い選手の手は切り替えで遅れ（armRateCap 小）、上書きが無ければ
+  // MOVE_RATE.arm で機敏に動く。
 Player.prototype.setArmDir = function(pivot: TransformNode, dx: number, dy: number, dz: number): void {
     const len = Math.hypot(dx, dy, dz) || 1;
-    const target = aimDownTo(dx / len, dy / len, dz / len);
-    const cur = pivot.rotationQuaternion;
-    // レート制限（守備）付きの向き直し: armRateCap rad/s を超えない速度で腕を目標へ
-    // イーズさせるので、守備の低い選手の手は切り替えで遅れる。スナップ書き込み
-    // （armRateCap 0、または現在の向きなし）はボールを扱う腕をキビキビ保つ。
-    if (this.armRateCap > 0 && cur) {
-      // 指数イーズ——毎フレーム目標へ一定の割合だけ動かすので、大きな切り替え
-      // だけでなく小さな目標のジッター（跳ねるボール、ポーズ間でちらつく読み）も
-      // ダンプされる。割合（収束速度）は守備でスケールする: 弱い守備者の手は
-      // 漂い、エリートの手はキビッと収まる。
-      const k = 1 - Math.exp(-this.armRateCap * this.lastDt);
-      pivot.rotationQuaternion = Quaternion.Slerp(cur, target, k);
-    } else {
-      pivot.rotationQuaternion = target;
-    }
+    this.easeArm(pivot, aimDownTo(dx / len, dy / len, dz / len));
 };

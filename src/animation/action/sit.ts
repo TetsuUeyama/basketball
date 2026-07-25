@@ -2,8 +2,8 @@
 // 腕は basic/arms のムーバ経由で動く。
 import { HUD_OPTS } from "../../config";
 import { Player } from "../../objects/player/player";
-import { JOINT } from "./basic/joints";
-import { setJoint } from "./basic/rotate";
+import { JOINT } from "../basic/joints";
+import { setJoint } from "../basic/rotate";
 
 declare module "../../objects/player/player" {
   interface Player {

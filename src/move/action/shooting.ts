@@ -2,18 +2,18 @@
 // リムフィニッシュ、コンテスト/ブロック、シューティングファウル、アシスト評価までを
 // 関数として集約。状態は Game に集約し各関数は第一引数 game を受け取る。
 // contestLeap は defense からも使うため Game 残置（game.contestLeap 経由）。
-import { Player } from "../objects/player/player";
-import { RIM, THREE_DIST, PALM_HITBOX, SHOT_SET_Y, SHOT_GATHER_Y, BUZZER_WINDOW } from "../config";
-import { rate, clamp, dist2D, moveToward2D, chance, rand } from "../util";
-import { shotWindupFor, defHands, leapHeight } from "../eval";
+import { Player } from "../../objects/player/player";
+import { RIM, THREE_DIST, PALM_HITBOX, SHOT_SET_Y, SHOT_GATHER_Y, BUZZER_WINDOW } from "../../config";
+import { rate, clamp, dist2D, moveToward2D, chance, rand } from "../../util";
+import { shotWindupFor, defHands, leapHeight } from "../../eval";
 import { jumpShotMakeProbability, rimFinishOutcome } from "../reaction/shot-outcome";
 import { bestBlocker, evadeBlockProbability } from "../reaction/contest-block";
 import { shootingFoulChance } from "../reaction/foul";
-import { endQuarter } from "../core/gameflow";
-import { swishNet } from "../core/visuals";
-import { benchCheer } from "../core/bench";
-import { withSubs } from "../systems/subs";
-import type { Game } from "../game";
+import { endQuarter } from "../../core/gameflow";
+import { swishNet } from "../../core/visuals";
+import { benchCheer } from "../../core/bench";
+import { withSubs } from "../../systems/subs";
+import type { Game } from "../../game";
 
 // ---- シュート種別（距離ベース） -------------------------------------------
 // 距離でリム下(ダンク/レイアップ)・ミドル・3Pを使い分ける。ダンク/レイアップの

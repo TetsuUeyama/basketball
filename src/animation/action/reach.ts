@@ -2,7 +2,7 @@
 // basic/arms・basic/torso のムーバ経由で動く。
 import { Vector3, Quaternion } from "@babylonjs/core";
 import { clamp, normAngle } from "../../util";
-import { JOINT } from "./basic/joints";
+import { JOINT } from "../basic/joints";
 import { Player } from "../../objects/player/player";
 
 declare module "../../objects/player/player" {
@@ -16,9 +16,9 @@ declare module "../../objects/player/player" {
  *  肘が伸びて手のひらが狙った点に実際に届く。 */
 Player.prototype.reach = function(world: Vector3, both = false): void {
     this.aimArm(this.armPivotR, world);
-    this.elbowR.rotation.set(0, 0, 0);
-    if (both) { this.aimArm(this.armPivotL, world); this.elbowL.rotation.set(0, 0, 0); }
-    else { this.armPivotL.rotationQuaternion = Quaternion.Identity(); this.bendElbow(this.elbowL, 0.28); }
+    this.bendElbow(this.elbowR, 0);
+    if (both) { this.aimArm(this.armPivotL, world); this.bendElbow(this.elbowL, 0); }
+    else { this.easeArm(this.armPivotL, Quaternion.Identity()); this.bendElbow(this.elbowL, 0.28); }
 };
 
 /** ディグ(掻き出し): 片手で伸ばし、上半身をボールへ回転させて先行する肩が横切り、
@@ -43,8 +43,8 @@ Player.prototype.digReach = function(world: Vector3): void {
     const back = right ? this.armPivotL : this.armPivotR;
     const backElbow = right ? this.elbowL : this.elbowR;
     this.aimArm(lead, world);
-    leadElbow.rotation.set(0, 0, 0);
+    this.bendElbow(leadElbow, 0);
     // 後ろ側の腕は腰の後ろへ引く（踏み込みへのカウンターウェイト）
-    back.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), 0.6);
+    this.easeArm(back, Quaternion.RotationAxis(new Vector3(1, 0, 0), 0.6));
     this.bendElbow(backElbow, 0.5);
 };

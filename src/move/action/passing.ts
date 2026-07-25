@@ -1,15 +1,15 @@
 // パス処理（受け手選択・投球・飛行/受球）。Option B: 状態は Game(=GameState)が持ち、
 // ここは game を受け取る関数群。パスのリスク/インターセプト計算は resolution/pass-risk。
-import { Player } from "../objects/player/player";
-import { COURT, PASS_SPEED, MAX_PASS, SHOT_CLOCK } from "../config";
-import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";
-import { twWeight, effShootRange, reactionLag, shotThreat } from "../eval";
+import { Player } from "../../objects/player/player";
+import { COURT, PASS_SPEED, MAX_PASS, SHOT_CLOCK } from "../../config";
+import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../../util";
+import { twWeight, effShootRange, reactionLag, shotThreat } from "../../eval";
 import { laneVetoed, passRisk, evalInterception, longBallRead } from "../reaction/pass-risk";
-import { runDefenseDuringDeadish } from "./defense";
-import { updateOffBallMotion, bestOpenSpot } from "./offball";
-import { turnover } from "../core/deadball";
-import { doubleTeamed } from "../core/reads";
-import type { Game } from "../game";
+import { runDefenseDuringDeadish } from "../../ai/defense";
+import { updateOffBallMotion, bestOpenSpot } from "../../ai/offball";
+import { turnover } from "../../core/deadball";
+import { doubleTeamed } from "../../ai/reads";
+import type { Game } from "../../game";
 
 // 投げるべき味方を選び、投げてよいか判定する。カバーされた受け手には投げない。
 export function chooseReceiver(game: Game, h: Player): Player | null {

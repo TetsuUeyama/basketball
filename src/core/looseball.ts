@@ -2,31 +2,15 @@
 import { Player } from "../objects/player/player";
 import { COURT, SHOT_CLOCK } from "../config";
 import { rate, dist2DTo, moveToward2D, chance, rand, nearestOf } from "../util";
-import { looseSecureChance } from "../reaction/rebound";
+import { looseSecureChance } from "../move/reaction/rebound";
+import { stepBallFlight } from "../move/basic/ball";
 import type { Game } from "../game";
 
-  // ボール自由飛翔の1フレーム: 重力、床バウンド（減衰）、コート境界での反射。
-  // ルーズボールと得点後の落下演出で共有する。
+  // ボール自由飛翔の1フレーム（物理は move/basic/ball.ts のベースに委譲）。
+  // ルーズボールと得点後の落下演出で共有する。生きたルーズボール(reflect = false)は
+  // ラインを越えてアウトオブバウンズになれる（updateLoose が越えを検出）。
 export function stepBallFreeFlight(game: Game, dt: number, reflect = true): void {
-    const b = game.ball;
-    b.vel.y -= 9.0 * dt;
-    b.pos.x += b.vel.x * dt;
-    b.pos.y += b.vel.y * dt;
-    b.pos.z += b.vel.z * dt;
-    // 床で弾んでエネルギーを失う
-    if (b.pos.y < 0.12) { b.pos.y = 0.12; b.vel.y = Math.abs(b.vel.y) * 0.62; b.vel.x *= 0.72; b.vel.z *= 0.72; }
-    // コート境界で反射させてインプレーに保つ。生きたルーズボール(reflect = false)は
-    // ラインを越えてアウトオブバウンズになれる（updateLoose が越えを検出）。
-    if (reflect) {
-      const mw = COURT.halfW - 0.1, ml = COURT.halfL - 0.1;
-      if (b.pos.x < -mw) { b.pos.x = -mw; b.vel.x = Math.abs(b.vel.x) * 0.6; }
-      if (b.pos.x > mw) { b.pos.x = mw; b.vel.x = -Math.abs(b.vel.x) * 0.6; }
-      if (b.pos.z < -ml) { b.pos.z = -ml; b.vel.z = Math.abs(b.vel.z) * 0.6; }
-      if (b.pos.z > ml) { b.pos.z = ml; b.vel.z = -Math.abs(b.vel.z) * 0.6; }
-    }
-    // 速度をクランプして飛んでいかないようにする
-    const sp = Math.hypot(b.vel.x, b.vel.y, b.vel.z);
-    if (sp > 10) { const k = 10 / sp; b.vel.x *= k; b.vel.y *= k; b.vel.z *= k; }
+    stepBallFlight(game.ball, dt, reflect);
   }
 
 export function updateLoose(game: Game, dt: number): void {

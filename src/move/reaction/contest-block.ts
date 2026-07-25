@@ -1,8 +1,8 @@
 // ブロックの「効果」= 誰がどれだけ止められるか、をかわせるか、の確率算出（判定ルール）。
 // 状態は変更しない純粋関数。抽選(chance)と状態変更(evade/jump/shotMade)は game.ts 側に残す。
-import { Player } from "../objects/player/player";
-import { rate, clamp, dist2D } from "../util";
-import { palmRadius } from "../eval";
+import { Player } from "../../objects/player/player";
+import { rate, clamp, dist2D } from "../../util";
+import { palmRadius } from "../../eval";
 
 // このショットを最も止められる守備者とそのブロック確率を返す（抽選はしない）。
 // isFinish=リム下フィニッシュか / shotWindup=溜め時間 / palmHitbox=手のひら判定モデルの有効フラグ。

@@ -3,7 +3,7 @@
 // top（上半身）/ bottom（下半身/ショーツ）/ sleeve（そで+上腕）/ shoes（シューズ）。
 // clubdb の正確なクラブ名をキーとする。uniformOf() は、クラブ外のランダムな
 // ロスターに対してはチームスロットの既定値（BLAZE/WAVE）にフォールバックする。
-import type { Uniform, RGB } from "../config";
+import type { Uniform, RGB } from "../../config";
 
 const x = (h: string): RGB => ({
   r: parseInt(h.slice(0, 2), 16) / 255,

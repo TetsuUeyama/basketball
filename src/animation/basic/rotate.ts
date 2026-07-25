@@ -1,7 +1,7 @@
 // 関節ルール（JOINT）に従って回転を適用する共通ヘルパ。可動域クランプと速度の
 // レート制限をここに集約し、各アニメはこれを通して関節を動かす。
 import { TransformNode } from "@babylonjs/core";
-import { clamp } from "../../../util";
+import { clamp } from "../../util";
 import { Joint } from "./joints";
 
 /** 角度を関節の可動域にクランプして返す。 */

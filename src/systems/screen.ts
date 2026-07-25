@@ -4,8 +4,8 @@ import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
 import { TACTICS } from "../attributes";
 import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../util";
-import { defEffort, defendOnBall } from "../action/defense";
-import { bestOpenSpot } from "../action/offball";
+import { defEffort, defendOnBall } from "../ai/defense";
+import { bestOpenSpot } from "../ai/offball";
 import type { Game } from "../game";
 
 export class ScreenSystem {

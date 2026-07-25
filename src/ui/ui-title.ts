@@ -1,9 +1,9 @@
 // UI: タイトル画面・クラブ対戦ウィザード。
 import { TEAM_NAMES, TEAM_CLUB, teamAbbr } from "../config";
-import { CLUB_ABBR } from "../club/clubabbr";
-import { CLUB_FLAGS } from "../club/clubflags";
+import { CLUB_ABBR } from "../data/club/clubabbr";
+import { CLUB_FLAGS } from "../data/club/clubflags";
 import { clubTeam } from "../roster";
-import { CLUBS } from "../club/clubdb";
+import { CLUBS } from "../data/club/clubdb";
 import { UI, colorOf, BTN_BG, INK, ELLIPSIS } from "./ui";
 
 declare module "./ui" {

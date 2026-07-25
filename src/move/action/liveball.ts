@@ -1,10 +1,10 @@
 // ボール保持(ballMode "held")中のライブプレイ tick。ドリブルのケイデンス前進、
 // オフェンス/守備/はたきの毎フレーム進行、キャリー/ギャザー/ピックアップのボール位置決め。
-import { rate, clamp, dist2D, chance, dirTo2D } from "../util";
-import { runOffense } from "./offense";
-import { runDefense, catchStrips, swarmStrips } from "./defense";
+import { rate, clamp, dist2D, chance, dirTo2D } from "../../util";
+import { runOffense } from "../../ai/offense";
+import { runDefense, catchStrips, swarmStrips } from "../../ai/defense";
 import { passToReceiver } from "./passing";
-import type { Game } from "../game";
+import type { Game } from "../../game";
 
 export function updateLive(game: Game, dt: number): void {
   const h = game.handler!;

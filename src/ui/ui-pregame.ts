@@ -2,7 +2,7 @@
 import { TEAM_NAMES, TEAM_CLUB } from "../config";
 import { ROSTER, ROSTER_SIZE, STARTERS, randomizeRosters, randomizeTeam, makeDefFromDb } from "../roster";
 import type { PlayerDef } from "../attributes";
-import type { DbPlayer } from "../player-data";
+import type { DbPlayer } from "../data/player-data";
 import { clamp } from "../util";
 import { UI, colorOf, BTN_BG, INK, NEUTRAL_GRAY, ELLIPSIS } from "./ui";
 

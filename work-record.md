@@ -4316,3 +4316,47 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - リバート用スナップショット: scratchpad/src-before-anim。
 - ⚠️ アニメは視覚要素のため最終はブラウザ目視推奨（逐語移動なので見た目不変の想定）。
 - ⚠️ 未コミット(9251269 の上に 321〜333)。
+
+## 2026-07-25 (334) 腕の瞬間切替（スナップ）全廃 — 部位を動かす必要時間を basic に規定
+
+- ユーザー指摘「一瞬で手を上下させるなどアニメとしてNGな動きができてしまう。全部位に必要時間を設定して」。
+- basic/joints.ts に `MOVE_RATE = { arm: 10 }` を新設（指数イーズの収束速度 1/s、10 ≈ 大振りでも約0.3秒）。armRateCap 未指定（従来スナップ）の呼び出しはこの既定レートで動く規約に。
+- basic/arms.ts に共通ムーバ `easeArm(pivot, target)` を新設: 腕クォータニオンの全書き込みを常時レート制限（armRateCap > 0 ならその速度、無ければ MOVE_RATE.arm。初期化のみ直接セット）。setArmDir / handsRest はこれ経由に。bendElbow も同じ既定レートでイーズ（従来は armRateCap=0 で即時）。
+- 残っていた瞬間書き込み8箇所を差し替え: reach（肘伸ばし×3・逆腕Identity・digReachの後ろ腕）/ locomotion（runArmsの振り子2本）/ foul-react（肘ゼロ2本）/ dribble（逆腕Identity）。
+- 例外（意図的に即時のまま、joints.ts に明記）: resetTwist / resetFacing / sit / stand（場面転換の一括ポーズ）、faceChestToward（パスリリース時の1回呼びで、レート制限には毎フレーム再ターゲットの仕組みが必要）。
+- 検証: tsc✓ / vite build✓(16.04s) / headless 40試合: BLUE 38.7・99側全勝・NaN無し（腕ポーズは視覚のみ＝ロジック不変を確認）。
+- ⚠️ **見た目の改善効果はブラウザ目視でしか確認できない**（headless非対象）。イーズ速度 MOVE_RATE.arm=10 は初期値であり、実機で速すぎ/遅すぎなら調整要。
+- ⚠️ 未コミット(6485887 の上に 334)。
+
+## 2026-07-25 (335) src直下に animation/ と move/ を新設する大規模再編＋ball.ts新設
+
+- ユーザー要望「src直下に animation と move を作り、両方とも直下は basic/action/reaction。animation には各moveで使うアニメ設定を置く。ball.ts は basic に」。確認の結果 run/jump/turn は move/basic へ。
+- 新構成:
+  - animation/basic（部位定義と基本ルール: joints/rotate/arms/torso/legs）/ animation/action（locomotion/dribble/hold/reach/guard/sit）/ animation/reaction（foul-react/defwin/dejected/bench-idle）
+  - move/basic（run/jump/turn=移動物理 + **ball.ts新設**）/ move/action（旧src/action: offense/defense/defense-schemes/shooting/passing/offball/liveball）/ move/reaction（旧src/reaction: shot-outcome/contest-block/pass-risk/foul/rebound）
+  - 旧 src/action/・src/reaction/ は消滅（名前衝突も解消）。
+- **move/basic/ball.ts**: ボール挙動・軌道のベースを一元化。BALL 定数（gravity 9.0 / restY 0.12 / bounce 0.62 / friction 0.72 / wallBounce 0.6 / maxSpeed 10、全て looseball のべた書きと同値）+ `stepBallFlight`（積分・床バウンド・境界反射・速度クランプ）。core/looseball の stepBallFreeFlight は委譲ラッパ化。シュート/パス弾道のベース化は次段候補（現状 shooting/passing に残置）。
+- 変更は移動+import書き換えのみ（sed。alternation付きは -E + カンマ区切りで再実行）。コメント内の旧パス2箇所も追随。workPlan の目標アーキテクチャ節を新構成に改訂。
+- 検証: tsc✓ / vite build✓(15.92s) / **全69プロトタイプ関数の本体が再編前後で完全一致**（verify-anim-move.cjs）/ headless 40試合×3: BLUE 41.6/40.1/41.7・99側全勝・NaN無し・完走（本体一致が保証済みのため差は抽選揺らぎ）。
+- リバート用スナップショット: scratchpad/src-before-restructure。
+- ⚠️ 未コミット(6485887 の上に 334〜335)。
+
+## 2026-07-25 (336) src/data/ 新設 — クラブ・選手DBの生成データを集約
+
+- ユーザー提案「src直下に data フォルダを作りクラブと選手データベースを配置」。生成データ（手編集不可）をロジック層から分離する趣旨で妥当と判断し実施。
+- club/ → data/club/（clubabbr/clubdb/clubflags/clubkits）、player-data/ → data/player-data/（identity/ratings/abilities/index）。フォルダ名は維持（import書き換え最小化）。
+- import修正: clubkits の ../config → ../../config、消費側6ファイル（config/roster/ui-pickers/ui-pregame/ui-title/ui.ts）のパス前置。
+- 検証: tsc✓ / vite build✓(15.13s) / headless 40試合: BLUE 40.3・99側全勝・NaN無し・完走。
+- ⚠️ 選手DB再生成スクリプト（split-players.cjs / bake-look 等、旧セッションscratchpad）は旧パス src/player-data を書き先にしているため、**再生成時は出力先を src/data/player-data に直す必要あり**。
+- リバート用スナップショット: scratchpad/src-before-data。
+- ⚠️ 未コミット(6485887 の上に 334〜336)。
+
+## 2026-07-25 (337) src/ai/ 新設 — 試合中の判断を集約
+
+- ユーザー指示「AIフォルダを作成し判断を集約」。判断が主責務のファイルを丸ごと移設（ファイル内の判断/実行分離は未実施＝関数レベルの切り出しはリスクが高いため今回対象外）。
+- 移設: move/action/{offense,defense,defense-schemes,offball}.ts → ai/、core/reads.ts → ai/reads.ts、systems/lineups.ts → ai/lineups.ts。
+- move/action に残るのは実行系（shooting/passing/liveball）。import書き換えのみで、**移設6ファイルの非import行の差分ゼロを機械確認**。
+- ai/ 未集約（移設候補として workPlan に明記）: passing.chooseReceiver、subs の判断関数（実行と同居）、game.ts のAIヘルパ（steerAround/pickSide/setDriveSide/crashBoards/formationSpots — Phase 3〜4で）。
+- 検証: tsc✓（一発通過）/ vite build✓(15.58s) / headless 40試合: BLUE 39.9・99側全勝・NaN無し・完走。
+- リバート用スナップショット: scratchpad/src-before-ai。workPlan の構成図を更新（data/ 追記含む）。
+- ⚠️ 未コミット(6485887 の上に 334〜337)。

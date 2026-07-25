@@ -1,9 +1,9 @@
 // 脚・足の部位定義。可動域・速度の規約は JOINT.hip / knee / acornFoot（適用は
 // rotate.ts の setJoint）。ストライドのアクションは ../locomotion.ts、着席姿勢は
 // ../sit.ts が、いずれもこの規約の中で動く。
-import { Player } from "../../../objects/player/player";
+import { Player } from "../../objects/player/player";
 
-declare module "../../../objects/player/player" {
+declare module "../../objects/player/player" {
   interface Player {
     syncAcornLegs(): void;
   }

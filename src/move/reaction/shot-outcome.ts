@@ -1,9 +1,9 @@
 // シュートの「効果」= 成功率の算出（判定ルール）。状態を変更しない純粋関数。
 // 呼び出し側が最寄り守備者・ヘルプ人数・クラッチ値・ブザー有無などの文脈を渡し、確率のみ返す。
-import { Player } from "../objects/player/player";
-import { THREE_DIST } from "../config";
-import { rate, clamp, chance } from "../util";
-import { perimContest, palmRadius, rimProtect } from "../eval";
+import { Player } from "../../objects/player/player";
+import { THREE_DIST } from "../../config";
+import { rate, clamp, chance } from "../../util";
+import { perimContest, palmRadius, rimProtect } from "../../eval";
 
 // ジャンプシュート（ミドル/3P）の成功確率。距離・射程・コンテストから算出し、
 // 0.02〜0.93 にクランプして返す（レイアップ/ダンクは finishAtRim 側で別途）。

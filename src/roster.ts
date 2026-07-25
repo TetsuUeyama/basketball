@@ -3,8 +3,8 @@
 // 初期ダミーの ROSTER（テスト用 MIN/MAX チーム）を集約。
 import { clamp } from "./util";
 import { ATTR_META, ABILITY_META, type Attributes, type PlayerDef } from "./attributes";
-import { PLAYER_DB, type DbPlayer } from "./player-data";
-import { CLUBS } from "./club/clubdb";
+import { PLAYER_DB, type DbPlayer } from "./data/player-data";
+import { CLUBS } from "./data/club/clubdb";
 import { resolveLook, playerLook } from "./objects/player/player-look";
 // ロスターテーブルを読みやすく保つための短縮関数 — 引数は ATTR_META の順に従う。
 const A = (

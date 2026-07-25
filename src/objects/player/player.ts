@@ -719,7 +719,7 @@ export class Player {
 
   readonly meshes: Mesh[];
 
-  // 胸ツイスト/頭ヨーの可動域・速度は action/animation/basic/joints.ts の JOINT が定義。
+  // 胸ツイスト/頭ヨーの可動域・速度は animation/basic/joints.ts の JOINT が定義。
 
   // --- ベンチのアイドル: 各自の個性で試合を眺める ---
   benchGazeOff = 0;                       // 個人的な視線のオフセット(rad)

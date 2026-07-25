@@ -93,9 +93,9 @@ export const TEAM_CLUB: [string, string] = ["", ""];
 
 // (型/データの後でインポート。実行時のエッジは config → clubkits のみで循環はない。)
 // eslint-disable-next-line @typescript-eslint/no-use-before-define
-import { CLUB_KITS } from "./club/clubkits";
+import { CLUB_KITS } from "./data/club/clubkits";
 // eslint-disable-next-line @typescript-eslint/no-use-before-define
-import { CLUB_ABBR } from "./club/clubabbr";
+import { CLUB_ABBR } from "./data/club/clubabbr";
 
 export function uniformOf(team: number): Uniform {
   // 実在のクラブは自分のキットを着る(CLUB_KITS のホーム/アウェイ)。ランダムロスターは

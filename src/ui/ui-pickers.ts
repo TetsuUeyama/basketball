@@ -3,7 +3,7 @@
 import { TEAM_NAMES } from "../config";
 import { ROSTER, STARTERS, applyDbPlayer, makeDefFromDb } from "../roster";
 import { ATTR_META, ABILITY_META, type PlayerDef } from "../attributes";
-import { PLAYER_DB, type DbPlayer } from "../player-data";
+import { PLAYER_DB, type DbPlayer } from "../data/player-data";
 import { UI, colorOf, BTN_BG, INK, NEUTRAL_GRAY, ELLIPSIS } from "./ui";
 
 declare module "./ui" {

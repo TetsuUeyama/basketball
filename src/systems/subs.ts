@@ -5,7 +5,7 @@ import { QUARTERS } from "../config";
 import { STARTERS } from "../roster";
 import { scoringPower } from "../roles";
 import { rate, clamp, dist2DTo, moveToward2D } from "../util";
-import { roleFit, overallOf, refreshChoiceRanks } from "./lineups";
+import { roleFit, overallOf, refreshChoiceRanks } from "../ai/lineups";
 import { benchSeat } from "../core/bench";
 import { pushApart } from "../core/collision";
 import type { Game } from "../game";

@@ -1,26 +1,26 @@
 import { Scene, Vector3, Mesh } from "@babylonjs/core";
 import { Player } from "./objects/player/player";
 import { Ball } from "./objects/ball";
-import "./action/move/run";   // Player.prototype に走る/ジャンプ/方向転換を注入
-import "./action/move/jump";
-import "./action/move/turn";
+import "./move/basic/run";   // Player.prototype に走る/ジャンプ/方向転換を注入
+import "./move/basic/jump";
+import "./move/basic/turn";
 import "./objects/player/player-query";
 import "./objects/player/player-state";
 import "./objects/player/player-visual";
 import "./objects/player/player-roster";
-import "./action/animation/basic/arms";    // 部位の基本ムーバを注入（腕/胴・頭/脚）
-import "./action/animation/basic/torso";
-import "./action/animation/basic/legs";
-import "./action/animation/locomotion";    // アクション毎のアニメを注入
-import "./action/animation/dribble";
-import "./action/animation/hold";
-import "./action/animation/reach";
-import "./action/animation/guard";
-import "./action/animation/sit";
-import "./action/animation/bench-idle";
-import "./action/animation/foul-react";
-import "./action/animation/defwin";
-import "./action/animation/dejected";
+import "./animation/basic/arms";    // 部位の基本ムーバを注入（腕/胴・頭/脚）
+import "./animation/basic/torso";
+import "./animation/basic/legs";
+import "./animation/action/locomotion";    // アクション毎のアニメを注入
+import "./animation/action/dribble";
+import "./animation/action/hold";
+import "./animation/action/reach";
+import "./animation/action/guard";
+import "./animation/action/sit";
+import "./animation/reaction/bench-idle";
+import "./animation/reaction/foul-react";
+import "./animation/reaction/defwin";
+import "./animation/reaction/dejected";
 import { makeHandlerRing, type Hoops } from "./objects/court";
 import {
   COURT, RIM, PASS_SPEED, SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS, OOB_OUTSET, teamShort, } from "./config";
@@ -31,11 +31,11 @@ import { TipoffSystem } from "./systems/tipoff";
 import { InboundSystem } from "./systems/inbound";
 import { ScreenSystem } from "./systems/screen";
 import { updateSubs } from "./systems/subs";
-import { refreshChoiceRanks } from "./systems/lineups";
-import { updatePass } from "./action/passing";
-import { updateCharge, updateShot } from "./action/shooting";
+import { refreshChoiceRanks } from "./ai/lineups";
+import { updatePass } from "./move/action/passing";
+import { updateCharge, updateShot } from "./move/action/shooting";
 import { updateLoose, stepBallFreeFlight } from "./core/looseball";
-import { updateLive } from "./action/liveball";
+import { updateLive } from "./move/action/liveball";
 import { endQuarter, updateFinale } from "./core/gameflow";
 import { syncAll, updateFacing, tickSwish } from "./core/visuals";
 import { shotClockViolation } from "./core/deadball";

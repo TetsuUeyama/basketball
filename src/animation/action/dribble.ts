@@ -19,6 +19,6 @@ Player.prototype.reachDribble = function(world: Vector3, useRight: boolean, rate
     this.aimArm(near, world);
     this.bendElbow(nearElbow, 0);   // 前腕がボールへ向かって伸びる、イーズ
     this.armRateCap = 0;
-    far.rotationQuaternion = Quaternion.Identity();
+    this.easeArm(far, Quaternion.Identity());
     this.bendElbow(farElbow, 0.28);
 };

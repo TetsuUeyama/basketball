@@ -1,10 +1,10 @@
 // 胸・頭の部位定義と基本ムーバ（向き/ツイスト）。可動域・速度は
 // JOINT.chestTwist / JOINT.headTurn に従う。各アクションのアニメはこれを通す。
-import { clamp, normAngle } from "../../../util";
-import { Player } from "../../../objects/player/player";
+import { clamp, normAngle } from "../../util";
+import { Player } from "../../objects/player/player";
 import { JOINT } from "./joints";
 
-declare module "../../../objects/player/player" {
+declare module "../../objects/player/player" {
   interface Player {
     worldYawTo(x: number, z: number): number;
     twistToward(x: number, z: number, dt: number, maxTwist?: number, rate?: number): void;

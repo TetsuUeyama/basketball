@@ -4,8 +4,8 @@ import { Player } from "../objects/player/player";
 import { RIM, THREE_DIST, LANE_W } from "../config";
 import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D, dirTo2D, segPerp } from "../util";
 import { deepThreeOK } from "../eval";
-import { laneBlock } from "../reaction/pass-risk";
-import { tightlyTrapped, trapReliever, trapReliefSpot } from "../core/reads";
+import { laneBlock } from "../move/reaction/pass-risk";
+import { tightlyTrapped, trapReliever, trapReliefSpot } from "./reads";
 import type { Game } from "../game";
 
 // オフボール全員の駆動: スポット確保、リムへのカット、ギブ&ゴー、オープンスポットへの

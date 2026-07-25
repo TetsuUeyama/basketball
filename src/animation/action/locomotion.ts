@@ -4,8 +4,8 @@ import { Vector3, Quaternion } from "@babylonjs/core";
 import { HUD_OPTS } from "../../config";
 import { rate } from "../../util";
 import { Player } from "../../objects/player/player";
-import { JOINT } from "./basic/joints";
-import { setJoint } from "./basic/rotate";
+import { JOINT } from "../basic/joints";
+import { setJoint } from "../basic/rotate";
 
 declare module "../../objects/player/player" {
   interface Player {
@@ -45,8 +45,8 @@ Player.prototype.runArms = function(): void {
     const amp = (0.3 + frac * 0.55) * (human ? 1 : 0.5);
     const aL = Math.sin(this.stridePhase + Math.PI) * amp * ns;   // 左腕 ↔ 右脚
     const aR = Math.sin(this.stridePhase) * amp * ns;
-    this.armPivotL.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), aL);
-    this.armPivotR.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), aR);
+    this.easeArm(this.armPivotL, Quaternion.RotationAxis(new Vector3(1, 0, 0), aL));
+    this.easeArm(this.armPivotR, Quaternion.RotationAxis(new Vector3(1, 0, 0), aR));
     const carry = (0.6 + frac * 0.5) * (human ? 1 : 0.6);   // ランナーのように肘を曲げて保つ
     this.bendElbow(this.elbowL, carry);
     this.bendElbow(this.elbowR, carry);

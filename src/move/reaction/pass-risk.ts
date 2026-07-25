@@ -1,8 +1,8 @@
 // パスの「効果」= レーン妨害・インターセプト確率の算出（判定ルール）。状態は変更
 // しない純粋関数。`defenders` には from(パサー)の相手チームを渡す。
-import { Player } from "../objects/player/player";
-import { LANE_W, PASS_SPEED } from "../config";
-import { rate, clamp, dist2D, chance, segPerp } from "../util";
+import { Player } from "../../objects/player/player";
+import { LANE_W, PASS_SPEED } from "../../config";
+import { rate, clamp, dist2D, chance, segPerp } from "../../util";
 
 // パスレーンに最も入り込んでいる守備者（レーン中央付近、両端に寄っていない者）を返す。
 export function laneBlock(

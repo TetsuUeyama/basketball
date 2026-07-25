@@ -8,11 +8,11 @@ import { COURT, THREE_DIST, SHOT_CLOCK, PALM_HITBOX, MAX_PASS, BUZZER_WINDOW } f
 import { rate, clamp, dist2D, dist2DTo, moveToward2D, chance, rand, dirTo2D, segPerp } from "../util";
 import { twWeight, gatherFor, effShootRange, wontLoadUp, reactionLag, palmRadius, jukeDeception, jukeDiscipline, shotThreat, burstTime } from "../eval";
 import { denySmother } from "./defense";
-import { pass, passToReceiver } from "./passing";
+import { pass, passToReceiver } from "../move/action/passing";
 import { updateOffBallMotion } from "./offball";
-import { shoot, finishAtRim } from "./shooting";
-import { laneVetoed, passRisk } from "../reaction/pass-risk";
-import { doubleTeamed } from "../core/reads";
+import { shoot, finishAtRim } from "../move/action/shooting";
+import { laneVetoed, passRisk } from "../move/reaction/pass-risk";
+import { doubleTeamed } from "./reads";
 import type { Game } from "../game";
 
 // ダブルチーム記憶: 直近でトラップに遭った選手を no-feed 対象に保つ秒数

@@ -8,7 +8,7 @@ import { makeMat } from "./objects/materials";
 import { addLights, addShadows } from "./scene-setup";
 import { BroadcastCamera } from "./camera";
 import { Game } from "./game";
-import { optimizeLineups } from "./systems/lineups";
+import { optimizeLineups } from "./ai/lineups";
 import { Player } from "./objects/player/player";
 import { ROSTER } from "./roster";
 import { UI } from "./ui/ui";

@@ -2,7 +2,7 @@ import type { Game } from "../game";
 import { TEAM_NAMES, TEAM_COLORS, HUD_OPTS, teamAbbr } from "../config";
 import { ROSTER } from "../roster";
 import type { Attributes } from "../attributes";
-import type { DbPlayer } from "../player-data";
+import type { DbPlayer } from "../data/player-data";
 import { clamp } from "../util";
 
 export const colorOf = (team: number): string => {

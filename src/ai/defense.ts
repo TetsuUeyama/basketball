@@ -4,7 +4,7 @@ import { Player } from "../objects/player/player";
 import { RIM, PALM_HITBOX } from "../config";
 import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D, dirTo2D, towardPoint } from "../util";
 import { twWeight, palmRadius, effShootRange, stripEdge, shotThreat, defHands, ballSecurity, leapHeight } from "../eval";
-import { reachInFoulRate } from "../reaction/foul";
+import { reachInFoulRate } from "../move/reaction/foul";
 import { pickDefScheme, runZoneDefense, runPress } from "./defense-schemes";
 import { defensiveFoul } from "../core/deadball";
 import type { Game } from "../game";

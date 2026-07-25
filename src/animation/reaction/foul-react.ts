@@ -59,7 +59,7 @@ Player.prototype.poseFoulReaction = function(): void {
       // 接触を演出: 腕が低く外へ飛び出しバランスを取る
       this.setArmDir(this.armPivotL, -1, -0.5, 0.25);
       this.setArmDir(this.armPivotR, 1, -0.5, 0.25);
-      this.elbowL.rotation.set(0, 0, 0); this.elbowR.rotation.set(0, 0, 0);
+      this.bendElbow(this.elbowL, 0); this.bendElbow(this.elbowR, 0);
       if (this.foulPushX !== 0 || this.foulPushZ !== 0) {
         // 方向性のある揺れ: ヒットが送った方向へ体を傾け、強い接触ほど大きく。
         // ワールドの押し → ヨーローカルのピッチ/ロール（前傾の傾きと同じ規約）で
