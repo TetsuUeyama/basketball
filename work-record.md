@@ -4644,3 +4644,91 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
   - defense.ts リムヘルパー: ハンドラーが遠い(dRim≥8)時もローマンをペイント内(リムから約2.6m)に常駐させ壁を作る。
 - 検証: tsc✓/vite build✓。ランダム25試合: 常に1人のビッグがアンカー(C54%+PF52%≒1)、守備最寄り選手のリム距離2.95m、ゴール下ビッグ在室55%。回帰 BLUE35.1・全勝・NaN無し・完走。
 - ⚠️実クラブ(ロール割当)でのCアンカー化はheadless再現不可(harnessにロール割当なし)。ブラウザ(実クラブ)で「下手3PのCがゴール下に入るか」要確認。守備のリム常駐の見た目も要目視。
+
+## 367 審判(レフェリー)2人の実装: 巡回・得点/ファウルシグナル・トス・スローイン手渡し
+- ユーザー要望: コート上に審判2人。両サイドライン近くでボール位置に合わせ移動し試合を見守る。得点/反則(ファウル)で専用モーション。スローインは一度審判にボールが渡り、審判がスローワーに手渡すモーションで再開。TipoffもFボールを審判が持ち投げ上げて開始。
+- 新規 objects/referee.ts: 審判エンティティ(明るいグレーの縞シャツ+黒パンツ+頭+2腕+2脚の簡易リグ)。place/faceToward/signal(score/foul/toss/hold)/ballHold()/歩行&シグナルの update。
+- 新規 systems/referees.ts: RefereeSystem。2人を両サイドライン外(x=±(halfW+0.8))に置きボールのzを±2.5スタッガーで追従・ボールを向く。signalScore/signalFoul(ボールに近い側が実施)。tipoffSetup/tipoffToss/tipoffDone、inboundSetup/inboundDone。
+- game.ts: referees フィールド+コンストラクタ生成、update毎フレーム呼び出し。setEvent("FOUL")で signalFoul。core/visuals.ts swishNet(得点=FG/FT両方が通る)で signalScore。
+- tipoff.ts: 開始時に審判がボール保持(tipoffSetup)、HOLD=0.8秒見せてから投げ上げ(tipoffToss)、タップでtipoffDone。
+- inbound.ts: start/finishOOB で審判をスローワー脇に立たせ保持(inboundSetup)。update で待ち時間前半は審判が保持、後半で審判→スローワーへ手渡し(lerp)。throwIn直前に inboundDone。
+- 検証: tsc✓/vite build✓。審判位置 平均|x|=8.27(サイドライン外)、ボールzギャップ2.51、得点/ファウルシグナル発火。回帰 BLUE34.6・全勝・NaN無し・完走(tipoff/inbound変更で破綻なし)。
+- ⚠️メッシュの見た目・シグナルのポーズ・トス/手渡しのアニメはヘッドレス検証不可(Quaternionモック・非描画)。ブラウザ目視で要調整(審判の見た目/縞、腕の上げ方、手渡しの自然さ)。位置ロジック・発火・非破綻のみ検証済み。
+
+## 368 審判を選手リグ化(体形/部位速度一致)＋投げ渡し＋集球フロー
+- ユーザー要望: 審判の体形を選手と揃える。部位の動作速度も選手同様。スローインは投げ渡し。プレー停止時コート内なら選手が審判へ投げ、スローワー到着で審判が投げる。OOBは審判が拾いに行く。
+- referee.ts 全面書換: 独自メッシュを廃し、選手(Player)リグをラップ(実在defを流用し名前/身長のみ差替、90+idxで名前衝突回避)。ユニフォームをグレーシャツ/黒に再着色。faceSmooth/updateLegs/runArms/setArmDir/bendElbow/holdBallHands/chestFront/sync を使い、体形・各部位速度(MOVE_RATE)を選手と完全一致。歩行速度は位置差から自算出。シグナル(score/foul/toss/throw/hold)は選手の腕ムーバ経由。
+- referees.ts: RefereeSystem を新Referee APIに適応。acquireBall(bx,bz,sx,sz,oob)/updateAcq 追加 — OOBは審判が自位置→ボール→スローイン地点と歩いて拾い運ぶ、コート内は最寄り選手がボールを放物線で審判へ投げる。inboundSetup で acq を引き継ぎクリア。applyModel(モデル切替を審判にも反映し再着色)。
+- inbound.ts: 手渡し(lerp)を投げ渡し(放物線+throwモーション)に変更。startAt で oob 判定し acquireBall 呼出、pause を OOB2.6/コート内2.0秒に延長。
+- game.ts applyModelAll: 審判にも applyModel。
+- 検証: tsc✓/vite build✓/回帰 BLUE35.4・全勝・NaN無し・完走。審判位置|x|=8.27(サイド外)/zギャップ2.5(追従)、得点/ファウルシグナル発火。
+- ⚠️見た目(体形一致・審判色・投げ渡し/集球/トスのアニメ・タイミング)はヘッドレス検証不可。ブラウザ目視で要確認・調整。位置ロジック・発火・非破綻のみ検証済み。
+
+## 369 審判の微修正: 紹介中退避・投げ渡し距離・クオーター間の集球と開始投げ渡し
+- ユーザー指摘: (1)選手紹介中に審判がセンターサークルの2選手の間にいる (2)投げ渡し距離が近すぎ (3)クオーター間にボールが移動するので審判が拾いに行ってほしい (4)次クオーター開始前に近づく選手へ投げ渡してほしい。
+- (1) referees.parkForTipoff() 追加(審判を両サイドラインへ、ballRef/acqクリア)。tipoff.start は中央に置かずボールをセンターの床に。tipoff.update 初回(プレー開始)で tipoffSetup を呼び審判が中央へ来てトス。紹介中(ポーズ中)は referees.update が走らないので審判はサイドラインのまま。
+- (2) inboundSetup: スローワー脇0.8m → コート内側へ約2.8m離して配置。投げ渡しが遠くなる。
+- (3) gameflow.quarterWalkOff: ボールをサイドライン地点へ置いた後 referees.acquireBall(qx,0,qx,0,true) で審判が拾いに行き保持(subs中も referees.update で updateAcq 進行)。
+- (4) inbound.beginRefThrow(taker) 追加(t0/threwセット+inboundSetup)。game.startQuarterInbound で receiver 設定後に呼び、審判が拾ったボールを、地点に歩いてきた投げ手へ放物線で投げ渡す。
+- 検証: tsc✓/vite build✓/回帰 BLUE34.3・全勝・NaN無し・完走(4クオーター遷移+tipoff全試合正常)。
+- ⚠️見た目・タイミング(退避位置、投げの距離感2.8m、集球/投げ渡しのアニメ)はヘッドレス検証不可。ブラウザ目視で要確認。
+
+## 370 審判の投げ渡し微修正: サイドはライン沿い/得点後は選手→審判→スローワー
+- ユーザー指摘: (1)サイドラインのスローインは審判がコート内からでなく、ライン沿いのスローワー横から渡す (2)得点後などコート上にボールがある再開は、近くの選手が審判へ投げ、審判がスローワーへ投げ渡す演出。
+- (1) referees.inboundSetup: 審判の立ち位置を「スローワーから約2.8mコート内側」→「ライン沿い(コート外)にスローワーの横へ約2.2m」に変更。サイドラインではx維持でzずらし、ベースラインではz維持でxずらし。コート内に入らない。
+- (2) inbound.ts: acqMode/acqFromX/Z 追加。start()(得点後/FT後)で最寄り選手を投げ元に記録し acqMode=true。update の演出を3段階に: frac>0.6=選手→審判へ放物線、0.45〜0.6=審判保持、<0.45=審判→スローワー投げ(既存)。startAt/finishOOB/beginRefThrow は acqMode=false(集球は別経路)。
+- 検証: tsc✓/vite build✓/回帰 BLUE35.3・全勝・NaN無し・完走。
+- ⚠️見た目・間合い(ライン沿い2.2m、選手→審判の弧)はヘッドレス検証不可。ブラウザ目視で要確認。
+
+## 371 審判のワープ廃止(歩いて所定位置へ)＋紹介中センター残留の根本修正
+- ユーザー指摘: (1)審判がワープする→近い審判に渡し、審判が所定位置へ歩いて移動してから投げ渡す順に (2)紹介中に審判がセンターの選手間に残る件が未修正。
+- (2)原因: Referee.place() は body.pos を変えるだけで sync していなかった→紹介中(ゲーム更新なし)はメッシュが前回同期位置(初期は原点=センター)に残留。place() で body.sync() を呼び即メッシュ反映するよう修正。parkForTipoff の退避が紹介前に反映される。
+- (1)修正: RefereeSystem に walkToward(等速で歩いて寄る) と所定位置 btX/btZ・向き bfX/bfZ を追加。update のボール当番は place(瞬間移動)でなく walkToward で btX/btZ へ歩き bfX/bfZ を向く。inboundSetup は place を廃し btX/btZ(ライン沿いスローワー横2.2m)/bfX/bfZ(スローワー)をセット→最寄り審判が現在位置から歩いて向かう。tipoffSetup は中央即配置のまま bt=中央。updateAcq のコート内も place→walkToward に。
+- 検証: tsc✓/vite build✓/回帰 BLUE33.9・全勝・NaN無し・完走。
+- ⚠️歩き/向き/紹介中の退避の見た目はヘッドレス検証不可。ブラウザ目視で要確認(特に紹介中に審判がセンターから外れているか、投げ渡し前に歩いて寄るか)。
+
+## 372 コート内ボールは選手→審判の投げ渡し・審判は投げ渡し位置に最初から待機・クオーター末のワープ廃止
+- ユーザー指摘: (1)コート内ボールの選手→審判の投げ渡しがされていない (2)クオーター末のボールワープも選手→審判の投げ渡しに (3)受けた審判の待機位置はスローワーへの投げ渡し位置に最初からいるように。
+- referees.ts: besideSpot(スローワー横ライン沿い2.2m)をヘルパー化。acquireBall のコート内(oob=false)は審判を besideSpot に最初から place し、ボール地点から放物線で受け取る(選手が投げる)。updateAcq コート内は歩かず静止(request 3)。inboundSetup に prePlace 引数を追加(true でその位置に最初から立つ)。
+- inbound.ts start()(得点後): acqFrom をボール地点にし inboundSetup(prePlace=true)。審判は投げ渡し位置に最初から立ち、ボール地点から受け取り→スローワーへ投げる。
+- gameflow.ts quarterWalkOff: ボールのワープ(サイドラインへ set)を廃止。ボールのその場位置から acquireBall(oob=false)で近くの選手が審判へ投げ渡し、審判は次ピリオドの投げ渡し位置に立って受け、開始まで保持。次クオーターは beginRefThrow で投げ渡し(既存)。
+- 検証: tsc✓/vite build✓/回帰 BLUE34.0・全勝・NaN無し・完走(クオーター遷移正常)。
+- ⚠️見た目(選手→審判の投げの弧、審判の待機位置、クオーター末の受け渡し)はヘッドレス検証不可。ブラウザ目視で要確認。
+
+## 373 審判: 同サイド選定でワープ/横切り解消・ファウル再開も審判の投げ渡し経由
+- ユーザー指摘: (1)逆サイドの審判がこちらへ回って選手の前を横切りワープしている (2)ファウル時は審判に投げ渡さずスローインで再開されている。
+- (1) referees.ts: 担当審判の選定を「最寄り」→ pickSideRef(sx)=スローイン地点のxサイドの審判(sx>=0でrefs[0]/+x側, 未満でrefs[1]/-x側)に。逆サイドの審判が横切ってこない。acquireBall コート内・inboundSetup とも place()(ワープ)を廃し walkToward で所定位置へ歩く(同サイドなので短距離)。updateAcq コート内も walkToward に。inboundSetup の prePlace 引数を廃止。
+- (2) deadball.ts sideInbound(ファウル再開): inbound.t を1.0→1.8にし game.inbound.refRelay(victim) を追加(コート上のボールを 選手→審判→スローワー で投げ渡す)。inbound.ts に refRelay(taker) を新設(acqMode+acqFrom+t0+inboundSetup)。start()(得点後)も refRelay を使うよう共通化。
+- 検証: tsc✓/vite build✓/回帰 BLUE35.5・全勝・NaN無し・完走。
+- ⚠️見た目(同サイド審判が横切らない/ワープしない・ファウル再開の投げ渡し)はヘッドレス検証不可。ブラウザ目視で要確認。
+
+## 374 選手が審判へ投げ渡す「投げモーション」を実装(実装漏れの修正)
+- ユーザー指摘: 「選手が投げ渡す演出をつけろ」と言っているのに付いていない(ボールの放物線だけで選手の腕モーションが無かった)。実装漏れ。
+- referees.ts: thrower(投げ手の選手)/throwAt(投げ先=審判の手) を追加。acquireBall コート内で最寄り選手を thrower に登録(nearestPlayer)。updateAcq コート内で throwAt を審判の手に更新、完了で thrower=null。tipoffDone/inboundDone/parkForTipoff で thrower クリア。
+- inbound.ts refRelay: 最寄り選手を thrower に登録。update の acqMode 序盤で throwAt を審判の手に更新、中盤(hold)で thrower=null。
+- poses.ts poseHands: game.referees.thrower がいれば、その選手を reach(throwAt, 両手) で腕を審判の手へ振らせ posed に追加(runArms 上書き回避)。得点後/ファウル/クオーター末/コート内違反 すべて共通で選手の投げモーションが付く。
+- 検証: tsc✓/vite build✓/回帰 BLUE34.4・全勝・NaN無し・完走。
+- ⚠️投げモーションの見た目はヘッドレス検証不可。ブラウザ目視で要確認。
+
+## 375 集球を一本化: 近くに選手がいれば投げ渡し・いなければ審判が拾いに行く(自動判定)
+- ユーザー指摘: 近くに選手がいない時、何もない空間からボールが投げられていた。近くに選手がいない場合は審判が拾いに行くべき。
+- referees.ts: acquireBall を一本化。Acquire.mode を "retrieve"|"throw" に。ボール地点の近く(インバウンダー=game.handler を除く最寄り選手)が3.5m以内なら "throw"(選手が投げる+腕モーション)、いなければ/OOB(forceRetrieve)なら "retrieve"(審判が自位置→ボール→投げ渡し位置と歩いて拾い運ぶ)。updateAcq を両モードで書換、完了で acqDone()。安全上限4秒。acqActive getter 追加。
+- inbound.ts: acqMode/acqFrom/t0 を廃止し throwT 追加。refRelay/startAt/quarterWalkOff とも acquireBall に集約。update は「acqActive中は待つ→完了後 審判がスローワーへ throwT で投げ渡す→throwIn」に一本化。
+- 検証: tsc✓/vite build✓/回帰 BLUE36.4・全勝・NaN無し・完走(得点後/ファウル/OOB/違反/クオーター末 全経路が完走)。
+- ⚠️見た目(選手がいる時は投げ渡し/いない時は拾いに行く の切替)はヘッドレス検証不可。ブラウザ目視で要確認。
+
+## 376 得点後/ファウルは必ず選手が投げる・保持中ボールが落ちるバグ修正
+- ユーザー指摘: (1)ゴール後も選手が拾って審判へ投げるべきなのに審判が拾いに行っていた (2)クオーター末に渡されたボールを審判が落として歩く。
+- (1) referees.ts acquireBall のモードを auto/throw/retrieve に。refRelay(得点後/ファウル)="throw"固定、startAt=oob?"retrieve":"auto"、quarterWalkOff="auto"。投げ手 nearestPlayer は game.teamPlayers(game.possession) の最寄り(handler除く)に(相手でなく取るチームの選手が拾う)。
+- (2) referees.ts update: ボール当番(保持中・非acq)のとき g.ballMode!=="inbound" ならボールを ref.ballHold() に追従(subs/pause中に置き去りにならない)。原因は集球完了後の運搬中にボール追従が無かったこと。
+- 検証: tsc✓/vite build✓/回帰 BLUE37.3・全勝・NaN無し・完走。
+- ⚠️見た目はブラウザ目視要確認。
+
+## 377 tipoffトス破綻の修正＋審判をオール50の選手として動作(両手キャッチ/パス/足速/硬直/P精度)
+- ユーザー指摘: (A)tipoffのボールが投げられない (B)投げ渡しは両手キャッチ・パスモーションに、戻る足が速すぎ、審判はオール50として足速・キャッチ硬直・パス精度をアニメに。
+- (A) 376のボール追従(保持中は審判の手へ)が "tipoff" にも適用され、トスで上げたボールを毎フレーム手に戻していた(回帰は完走/NaNしか見ず見落とし)。referees.update の追従条件を !=="inbound" && !=="tipoff" に。実測 tipoffボール最高Y=5(ピーク)に回復。
+- (B) referee.ts: 属性オール50(base.attr全キーを50上書き)。catchT(キャッチ硬直=recoveryMult*0.4)/frozen/runSpeed/catch() 追加。throwポーズを廃し pass(両手を前へ押し出すチェストパス=reach両手)に。update で catchT 減算。
+- referees.ts: walkToward を runSpeed×mult(歩き0.45/ジョグ0.7)+frozen中は停止に。巡回も walkToward(0.7)へ(ease廃止=戻り足の速すぎ解消)。選手が投げたボール到達時 a.ref.catch()(両手キャッチ+硬直)。
+- inbound.ts: 投げ渡し前に ref.frozen(キャッチ硬直)を待つ。signal("pass")。P速度で throwDur(50→0.6s)、P精度で着弾ぶれ passOff(50→±0.3m)。
+- 検証: tsc✓/vite build✓/tipoff Y=5/回帰 BLUE35.5・全勝・NaN無し・完走。
+- ⚠️見た目(両手キャッチ/パスモーション/足速/硬直)はブラウザ目視要確認。

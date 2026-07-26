@@ -11,6 +11,7 @@ export function swishNet(game: Game, team: number): void {
     const i = hoopIndex(game.attackSign(team));
     game.netSwish[i] = 1.1;         // 演出の表示時間(秒)
     game.swishTeam[i] = team;
+    game.referees?.signalScore();   // 審判が得点シグナル
   }
 
   // 得点時のネットスウィッシュ＋リム／バックボードのフラッシュの1フレーム（描画のみ、

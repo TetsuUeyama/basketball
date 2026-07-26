@@ -32,6 +32,7 @@ import { reactionLag } from "./eval";
 import { FreeThrowSystem } from "./systems/freethrow";
 import { TipoffSystem } from "./systems/tipoff";
 import { InboundSystem } from "./systems/inbound";
+import { RefereeSystem } from "./systems/referees";
 import { ScreenState } from "./move/reaction/screen";
 import { updateSubs } from "./systems/subs";
 import { refreshChoiceRanks } from "./ai/lineups";
@@ -68,6 +69,7 @@ export class Game {
   cheerT: [number, number] = [0, 0];
   cheerAmp: [number, number] = [0.5, 0.5];   // 歓声の強さ(ダンク/スリーで大きく)
   readonly ball: Ball;
+  referees!: RefereeSystem;   // コート上の審判2人(演出専用)
   readonly ring: Mesh;
   readonly tactics = TACTICS; // チーム別の作戦
 
@@ -197,6 +199,7 @@ export class Game {
     }
     this.ball = new Ball(scene);
     this.ring = makeHandlerRing(scene);
+    this.referees = new RefereeSystem(scene, this);
     this.reset();
   }
 
@@ -211,6 +214,7 @@ export class Game {
   /** モデル切替（人型 ⇄ どんぐり, HUD_OPTS.model）を全26人へ即時適用する。 */
   applyModelAll(): void {
     for (let t = 0; t < 2; t++) for (const p of this.roster[t]) p.applyModel();
+    this.referees?.applyModel();   // 審判も同じモデルへ切替(審判色は維持)
   }
 
   /** ユニフォーム（ホーム/アウェイ, TEAM_UNIFORM）を全26人へ即時適用する。 */
@@ -344,6 +348,8 @@ export class Game {
 
   setEvent(text: string, team: number, dur = 1.8,
                    info?: { scorer?: string; assist?: string }): void {
+    // ファウルは審判がシグナル(腕を突き上げる)。バナー可否に関わらず出す。
+    if (this.referees && text === "FOUL") this.referees.signalFoul();
     // 目立つプレーだけが画面バナーになる（得点/AND-1/ファウル/ピリオド区切り）。
     // 得点バナーには誰が決めた/アシストしたかを載せる。
     if (!this.bannerWorthy(text)) return;
@@ -472,6 +478,7 @@ export class Game {
     this.shotClock = SHOT_CLOCK;
     this.resetMotion();
     this.inbound.receiver = offense[0];           // ポイントガード
+    this.inbound.beginRefThrow(taker);            // 審判が拾ったボールを近づく投げ手へ投げ渡す
     // 新ピリオド開始バナー — どちらのボールか
     this.setEvent(this.quarter === 3
       ? `2ND HALF — ${teamShort(team)} BALL`
@@ -597,6 +604,7 @@ export class Game {
     updateFacing(this, dt);
     if (this.longShotHoldT > 0) this.longShotHoldT = Math.max(0, this.longShotHoldT - dt);
     tickSwish(this, dt);   // 成功時のネットスウィッシュ/リムフラッシュ
+    this.referees.update(dt);   // 審判2人: ボールを追って移動・シグナル
     syncAll(this);
   }
 

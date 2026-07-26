@@ -46,6 +46,9 @@ export function poseHands(game: Game, ): void {
     for (const p of game.players) {
       if (p.screening) { p.foldArms(); posed.add(p); }
     }
+    // 審判へボールを投げ渡す選手: 両腕を審判の手の方へ振る（投げ渡しの演出）
+    const thr = game.referees.thrower;
+    if (thr && thr !== game.handler) { thr.reach(game.referees.throwAt, true); posed.add(thr); }
     for (const p of game.players) if (!posed.has(p)) p.runArms();   // 腕振り／休め
     switch (game.ballMode) {
       case "held": {
