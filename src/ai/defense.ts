@@ -267,6 +267,15 @@ export function runDefense(game: Game, dt: number): void {
         game.clampCourt(d.pos);
         continue;
       }
+      // ハンドラーが遠い(ハーフコート)時も、ローマンはペイント内に常駐して壁を作る:
+      // リムと自分のマークの間の、リム寄りの点(≈2.6m)。ゴール下がスカスカにならない。
+      {
+        const hp = towardPoint(protect.x, protect.z, man.pos.x, man.pos.z, 2.6);
+        moveToward2D(d.pos, hp.x, hp.z,
+          d.accelToward(dt, hp.x, hp.z, 0.95 * Math.max(defEffort(game, d, protect), 0.8)) * dt);
+        game.clampCourt(d.pos);
+        continue;
+      }
     }
 
     // 通路ブロック: 相手が横に回り込んだら、新しいレーンの入口へスライドして応じる

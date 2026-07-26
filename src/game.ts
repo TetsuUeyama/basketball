@@ -787,22 +787,21 @@ export class Game {
 
   // この選手がローブロックに属するか。ビッグはゴールに住み、ストレッチ脅威のみペリメーターへ広がる。
   prefersPost(p: Player): boolean {
-    // 指定された ストレッチ は能力値がどうあれポストせずフロアを広げる。
-    // プレイメイキングビッグ はブロックでなくトップから働く。
-    // スクリーナー/リムランナー は明示的に内側に住む
-    if (p.evalRole === "ストレッチ" || p.evalRole === "プレイメイキングビッグ") return false;
-    if (p.evalRole === "スクリーナー" || p.evalRole === "リムランナー") return this.isBig(p);
     if (p.has("post") || p.has("centerSpot")) return true;
     if (!this.isBig(p)) return false;
-    const acc = rate(p.attr.threeAcc);
-    const stretch = acc >= 0.75 || (p.has("range") && acc >= 0.7);
-    if (stretch) return false;
-    // ローポストのアンカーは一度に1人: C がポスト型なら PF はフロアを広げる
-    if (p.role === "PF") {
-      const c = this.teamPlayers(p.team).find((q) => q.role === "C");
-      if (c && c !== p && this.prefersPost(c)) return false;
+    // ゴール下のアンカーは、チームのビッグのうち最も3Pが低い"内寄り"の1人に固定する。
+    // これは役割ラベル(ストレッチ/プレイメイキングビッグ)より優先。3Pの下手なビッグ(C等)が
+    // 誤ってストレッチ役を割り当てられても、必ずゴール下に入る。
+    let anchor: Player | null = null;
+    for (const b of this.teamPlayers(p.team)) {
+      if (!this.isBig(b)) continue;
+      if (!anchor || rate(b.attr.threeAcc) < rate(anchor.attr.threeAcc)) anchor = b;
     }
-    return true;
+    if (p === anchor) return true;                   // 最内ビッグは必ずポスト
+    // アンカーは1人。もう1人のビッグは広げてスペーシングを確保する（リムランナー/
+    // スクリーナーだけは内側に住む）。役割ラベルより属性優先の設計を保つ。
+    if (p.evalRole === "スクリーナー" || p.evalRole === "リムランナー") return true;
+    return false;
   }
 
   // フォーメーションスポット: ポストのビッグはブロックへ(PF=左, C=右)、他は自分の枠のスポット。
