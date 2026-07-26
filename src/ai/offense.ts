@@ -483,12 +483,32 @@ export function openSide(game: Game, h: Player): number {
 
   // ボールをウイングのレーンでフロントコートへ運び上げる。中央から外れていれば
   // その側を保ち、ど真ん中からは空いた側を選ぶ。
+  // 運び上げを支える最良のハンドラー候補: 自分以外の非ビッグの最良プレイメイカー(=ガード)。
+export function supportHandler(game: Game, h: Player): Player | null {
+    let best: Player | null = null, bs = -Infinity;
+    for (const p of game.teamPlayers(h.team)) {
+      if (p === h || game.isBig(p)) continue;
+      if (p.playmaking > bs) { bs = p.playmaking; best = p; }
+    }
+    return best;
+  }
+
 export function bringUpLane(game: Game, h: Player): void {
     const s = game.attackSign(h.team);
     const side = Math.abs(h.pos.x) > 1.5 ? Math.sign(h.pos.x) : openSide(game, h);
     // 中央にいる間はサイドラインへ break し、その後その側に寄せて運び上げる。
     const ahead = Math.abs(h.pos.x) < 4 ? 1.8 : 5.0;
-    h.driveTarget.set(side * 5.5, 0, h.pos.z + s * ahead);
+    let tz = h.pos.z + s * ahead;
+    // 支援ハンドラー候補(ガード)が近くに上がるまで前へ行き過ぎない — 全速で孤立して
+    // 苦し紛れにビッグへ渡すのを避ける。クロックに余裕がある時のみ待つ。
+    if (game.shotClock > 8) {
+      const sup = supportHandler(game, h);
+      if (sup && (sup.pos.z - tz) * s < 0) {
+        tz = sup.pos.z + s * 2.5;                          // 支援より最大2.5m前まで
+        if ((tz - h.pos.z) * s < 0) tz = h.pos.z;          // 後退はしない — その場で待つ
+      }
+    }
+    h.driveTarget.set(side * 5.5, 0, tz);
   }
 
   // まだ形成中のダブルチーム — 2人目がローテート中でまだ発動していない。

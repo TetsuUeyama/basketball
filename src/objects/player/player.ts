@@ -88,6 +88,9 @@ export class Player {
   // 設定、それ以外は0へ戻り「一気に伸び上がる」。sync が applyShootLoad で姿勢に反映。
   shootLoad = 0;
   shootLoadTarget = 0;
+  // スローイン後の前進: 非PMビッグの投げ手はバックコートに残らず、フロントコートへ
+  // 抜けてガードに組み立てを任せる。フロントコート確立(frontT)かこの秒数で解除。
+  frontRunT = 0;
   // ルーズボールを手で床からすくい上げる: ボールが保持位置へ上がり、手が下→上に追う
   pickupT = 0;
   pickupDur = 0;

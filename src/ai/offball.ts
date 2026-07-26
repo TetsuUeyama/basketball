@@ -18,6 +18,22 @@ export function updateOffBallMotion(game: Game, dt: number, team: number, exclud
     if (p === exclude) continue;
     if (p.rooted) continue;   // パス/シュートのフォロースルー中 — 保持
 
+    // スローイン後の前進(トラップ救済より優先): 非PMビッグの投げ手はバックコートに
+    // 残らず、自分側のフロントコート(ローブロック)へ全力で抜ける。ガードが降りて組み立てる。
+    if (p.frontRunT > 0) {
+      if (game.frontT) { p.frontRunT = 0; }   // フロントコート確立で解除→通常のポスト play
+      else {
+        p.frontRunT = Math.max(0, p.frontRunT - dt);
+        const s = game.attackSign(team);
+        const side = p.pos.x >= 0 ? 1 : -1;
+        const tx = side * 2.8, tz = s * RIM.z - s * 1.4;   // フォーメーションのローブロック相当
+        moveToward2D(p.pos, tx, tz, p.accelToward(dt, tx, tz, 1.2) * dt);
+        game.clampCourt(p.pos);
+        p.cutting = false;
+        continue;
+      }
+    }
+
     // トラップ救済(最優先): ハンドラーがダブルチーム時、味方1人がボールへフラッシュしアウトレットを作る。
     if (game.handler && game.handler !== p && tightlyTrapped(game, game.handler)
         && p === trapReliever(game, team)) {
@@ -29,23 +45,25 @@ export function updateOffBallMotion(game: Game, dt: number, team: number, exclud
       continue;
     }
 
-    // ポゼッション交代後の持ち運び: プライマリがボールへ戻ってアウトレットを受ける。
-    if (!game.frontT && game.handler && dist2D(game.handler.pos, rim) > 10) {
+    // 運び上げの支援: 最良の非ビッグ・ハンドラー候補(ガード)が常にハンドラーの近くへ
+    // 降りて逃がし所を作る。プレス時はより近く。これで苦し紛れのパスもビッグでなくガードへ。
+    if (!game.frontT && game.handler && game.handler !== p && dist2D(game.handler.pos, rim) > 9) {
       const outlet = game.teamPlayers(team)
-        .filter((q) => q !== game.handler)
+        .filter((q) => q !== game.handler && !game.isBig(q) && q.frontRunT <= 0)
         .sort((a, b) => b.playmaking - a.playmaking)[0];
       if (p === outlet) {
-        const wanted = game.isBig(game.handler)
-          || game.nearestDefenderDist(p) < 1.4
+        const s = game.attackSign(team);
+        const bx = game.handler.pos.x, bz = game.handler.pos.z;
+        const pressed = game.isBig(game.handler)
+          || game.nearestDefenderDist(game.handler) < 1.7
           || laneBlock(game.oppTeam(game.handler), game.handler, p) !== null;
-        if (wanted) {
-          const s = game.attackSign(team);
-          const bx = game.handler.pos.x, bz = game.handler.pos.z;
-          const otx = bx * 0.5, otz = bz + s * 2.0;
-          moveToward2D(p.pos, otx, otz, p.accelToward(dt, otx, otz, 1.1) * dt);
-          game.clampCourt(p.pos);
-          continue;
-        }
+        // ハンドラーの逆サイド・ほぼ同じ高さに付いて安全な逃がし所を作る(スペーシング確保)。
+        const sideX = bx >= 0 ? -1 : 1;
+        const otx = sideX * (pressed ? 3.0 : 4.2);
+        const otz = bz - s * (pressed ? 0.4 : 1.4);   // やや後方
+        moveToward2D(p.pos, otx, otz, p.accelToward(dt, otx, otz, pressed ? 1.25 : 1.0) * dt);
+        game.clampCourt(p.pos);
+        continue;
       }
     }
 

@@ -42,6 +42,7 @@ Player.prototype.resetPose = function(): void {
   this.cutting = false; this.screening = false; this.benchClapT = 0;
   this.shakeOpenT = 0; this.shakeT = 0;
   this.shootLoad = 0; this.shootLoadTarget = 0;   // シュート溜めの前傾/沈み込み
+  this.frontRunT = 0;                              // スローイン後の前進
   // アクション3段階
   this.actKind = ""; this.actPhase = ""; this.actT = 0; this.actFired = false;
   // 腕を即座に休めへ（イーズを介さず直接セット）

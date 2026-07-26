@@ -33,6 +33,9 @@ export class InboundSystem {
     g.shotClock = SHOT_CLOCK;
     g.resetMotion();
     this.receiver = this.pickReceiver(taker);
+    // ハンドリングの高くないビッグが投げ手なら、投げたらフロントコートへ抜けさせる
+    // （ガードが降りて組み立て、ビッグがバックコートでトラップされるのを避ける）。
+    if (g.isBig(taker) && taker.evalRole !== "プレイメイキングビッグ") taker.frontRunT = 8;
     // メイド/FT後は失点側が入れる — 誰のボールか表示
     g.setEvent(`THROW-IN\n${teamShort(team)} BALL`, team, 1.8);
   }
@@ -87,6 +90,7 @@ export class InboundSystem {
     g.shotClock = this.oobShotClock;   // フル/partial/継続
     g.resetMotion();
     this.receiver = this.pickReceiver(taker);
+    if (g.isBig(taker) && taker.evalRole !== "プレイメイキングビッグ") taker.frontRunT = 8;
     this.oobWalker = null;
   }
 
