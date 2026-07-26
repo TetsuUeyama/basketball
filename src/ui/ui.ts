@@ -705,6 +705,9 @@ export class UI {
     // 交代フィード: 交代1つにつきチップ1枚、最大5枚。ホームのチップが先に表示
     // され、生きている間はアウェイのチップを隠す。
     this.subFeed.replaceChildren();
+    // 名前があふれるスロットを溜め、後で右→左マーキーを適用する（収まるものは静止）。
+    const marquees: { outer: HTMLSpanElement; inner: HTMLSpanElement; copyA: HTMLSpanElement; copyB: HTMLSpanElement }[] = [];
+    const NAME_GAP = 30;   // マーキー1周の区切り(px)
     const showTeam = game.subEvents.some((e) => e.team === 0) ? 0 : 1;
     const shownSubs = game.subEvents.filter((e) => e.team === showTeam).slice(-5);
     for (let si = 0; si < shownSubs.length; si++) {
@@ -728,15 +731,23 @@ export class UI {
         textShadow: "0 3px 12px rgba(0,0,0,0.5)", whiteSpace: "nowrap",
         display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
       });
-      // 各選手の名前は固定幅のスロットに収まる（あふれた分は … でクリップ）。
+      // 各選手の名前は固定幅スロット。あふれる場合は全幅を右→左に流す（後段で適用）。
       const nameSlot = (name: string): HTMLSpanElement => {
-        const s = document.createElement("span");
-        Object.assign(s.style, {
+        const outer = document.createElement("span");
+        Object.assign(outer.style, {
           flex: "0 0 auto", width: "clamp(84px,20vw,150px)", textAlign: "left",
-          ...ELLIPSIS,
+          overflow: "hidden", position: "relative", whiteSpace: "nowrap",
+          display: "inline-block", verticalAlign: "middle",
         } as Partial<CSSStyleDeclaration>);
-        s.textContent = name;
-        return s;
+        const inner = document.createElement("span");
+        Object.assign(inner.style, { display: "inline-block", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
+        const copyA = document.createElement("span"); copyA.textContent = name;
+        const copyB = document.createElement("span"); copyB.textContent = name;   // 継ぎ目を消す2枚目
+        Object.assign(copyB.style, { marginLeft: `${NAME_GAP}px`, display: "none" } as Partial<CSSStyleDeclaration>);
+        inner.append(copyA, copyB);
+        outer.appendChild(inner);
+        marquees.push({ outer, inner, copyA, copyB });
+        return outer;
       };
       const tag = (t: string, op = "0.85"): HTMLSpanElement => {
         const s = document.createElement("span");
@@ -744,13 +755,39 @@ export class UI {
         s.textContent = t;
         return s;
       };
+      // 背番号は #＋2桁ぶんの固定幅＋等幅数字。1桁/2桁でも幅が変わらない。
+      const numTag = (t: string): HTMLSpanElement => {
+        const s = document.createElement("span");
+        Object.assign(s.style, {
+          flex: "0 0 auto", width: "2.6em", textAlign: "right", opacity: "0.95",
+          fontWeight: "800", fontVariantNumeric: "tabular-nums",
+        } as Partial<CSSStyleDeclaration>);
+        s.textContent = t;
+        return s;
+      };
       line.append(
-        tag(`#${e.inNum}`, "0.95"), nameSlot(e.inName), tag("IN"),
+        numTag(`#${e.inNum}`), nameSlot(e.inName), tag("IN"),
         tag("/", "0.45"),
-        tag(`#${e.outNum}`, "0.95"), nameSlot(e.outName), tag("OUT"),
+        numTag(`#${e.outNum}`), nameSlot(e.outName), tag("OUT"),
       );
       chip.append(title, line);
       this.subFeed.appendChild(chip);
+    }
+    // マーキー適用: 名前1つ分がスロット幅を超えるものだけ右→左へ流す（等速ループ）。
+    // 毎フレーム再構築されるため、位置は performance.now から算出して連続させる。
+    const nowSec = performance.now() / 1000;
+    for (const m of marquees) {
+      const cw = m.outer.clientWidth;      // スロット幅
+      const nw = m.copyA.offsetWidth;      // 名前1つ分の幅
+      if (nw <= cw) {
+        m.copyB.style.display = "none";
+        m.inner.style.transform = "none";
+      } else {
+        m.copyB.style.display = "inline-block";
+        const period = nw + NAME_GAP;
+        const phase = (nowSec * 42) % period;   // 42px/秒で左へ、periodで1周
+        m.inner.style.transform = `translateX(${-phase}px)`;
+      }
     }
   }
 }

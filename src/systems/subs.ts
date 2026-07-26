@@ -183,7 +183,7 @@ export function substitute(game: Game, out: Player, sub: Player): void {
   game.subEvents.push({
     inNum: sub.idx + 1, inName: sub.name,
     outNum: out.idx + 1, outName: out.name,
-    team: out.team, ttl: 1.8,
+    team: out.team, ttl: 3.0,   // 表示時間(約2.2秒表示→0.8秒フェード)。上限 subT>=9秒に収まる
   });
   // コート上のユニットが変わった → 選択順(自動ユーセージ)を再導出し、入る選手が
   // 能力順の序列に収まるようにする
