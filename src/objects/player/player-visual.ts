@@ -275,6 +275,11 @@ Player.prototype.sync = function(): void {
     // 平滑化、静止/空中や人型モードでは0）。ファウルひるみのロールは角度から来た
     // 一撃で彼を横へ傾ける
     this.root.rotation.z = this.tiltZ + this.flinchRoll + (HUD_OPTS.model === "acorn" ? this.acornWaddle : 0);
+    // シュートの溜め姿勢（前傾＋沈み込み）を反映。target は updateCharge が毎フレーム
+    // 設定し、リリース後は0へ戻るので自動で伸び上がる。アコーンモデルのみ。
+    this.shootLoad += (this.shootLoadTarget - this.shootLoad) * 0.25;
+    this.shootLoadTarget = 0;
+    if (this.shootLoad > 0.003 && HUD_OPTS.model === "acorn") this.applyShootLoad();
 };
 
   // 浮遊ネームタグとその下のスタミナゲージを描画する。背番号は名前の横ではなく

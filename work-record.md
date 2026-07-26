@@ -4588,3 +4588,34 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - shooting.ts: shoot()ブザーは windup 算出し releaseShot(...,prepDone=0)。updateCharge() のリリース判断を刷新: 溜め未完(chargeT>0)でも panic(shotClock<0.5 or ブザー窓) か blockImminent(守備者が跳んで<1.6m) なら早めリリース(prepDone=windup-chargeT)。溜め完了後どフリー(2.5m超)&余裕ありは chargeHeld を最大0.4秒加算しホールド、その後 prepDone=windup+chargeHeld でリリース。releaseShot に prepDone 引数追加し prepShort/prepExtra を算出。game.ts に chargeHeld フィールド追加。
 - 検証: tsc✓/vite build✓。準備時間テーブル実測=設計通り(L速度95:+0m=0/+2m=0.36/+4m=0.88/+8m=2.4秒、55:+0m=0.48…、深いほど二次延長)。距離別3P成功率(実25試合): ライン〜+0.5=63%/+0.5〜1.5=52%/+3以上(深/強制ヒーブ)=8%。回帰 BLUE36.4・全勝・NaN無し・完走。
 - ⚠️通常路線(溜め切ったシュート)の精度は不変(prepShort=0)。⚠️見た目(溜めの長短・オーバーヘッド保持)はブラウザ目視。⚠️「延長して打てる」の解釈は「強制/急ぎ撃ちでも発射はするが精度急落」で実装。⚠️未コミット(bc4c783 の上に 357,358)。
+
+## 359 選手交代フィード: 長い名前を右→左マーキー表示・背番号を固定幅
+- ユーザー要望: 交代表示の長い名前は「…」省略でなく全幅を右→左に流す。背番号が1桁/2桁で幅が変わるのを固定に。
+- ui.ts subFeed(毎フレーム replaceChildren で再構築): nameSlot を「固定幅スロット(clamp84-150px)+overflow hidden」内に inner(名前2コピー)を置く構造に変更。名前1つ分(copyA.offsetWidth)がスロット幅を超える時だけ copyB を表示し右→左マーキー。位置は毎フレーム再構築に耐えるよう performance.now から算出(42px/秒、period=名前幅+30pxで等速ループ)。収まる名前は静止・左寄せ。旧 ELLIPSIS クリップ廃止。
+- 背番号: 新設 numTag(#+番号)で width:2.6em / textAlign:right / fontVariantNumeric:tabular-nums 固定。1桁/2桁でも幅・後続の名前開始位置が不変。
+- 検証: tsc✓/vite build✓。⚠️マーキーの流れ・番号幅固定の見た目はブラウザ目視(DOMアニメはヘッドレス検証不能)。UI専用変更のためゲーム回帰は不要。
+
+## 360 交代フィードの表示時間を延長(1.8→3.0秒)
+- ユーザー要望: 交代表示が消えるのが速く確認しきれない → もう少し長く。
+- subs.ts: subEvents の ttl を 1.8→3.0秒。フェードは最後0.8秒なので約2.2秒しっかり表示→0.8秒フェード。フィード総時間は最大 2×ttl(HOME群→AWAY群)=6秒で、再開ハード上限 subT>=9秒に収まり途中で切られない。マーキー(359)の長い名前も読み切れる余裕。
+- 検証: tsc✓。⚠️見た目・体感の表示時間はブラウザ目視。
+
+## 361 3P準備アニメ: 前傾＋沈み込みで前に構え→リリースで伸び上がる
+- ユーザー要望: 現状「頭上にボールを上げて静止」を、準備中は少し前傾＋足を縮め姿勢を低くしボールは前で構え、打つ時に一気に頭上やや前へボールを上げ体を伸ばしシュートフォームへ。
+- shooting.ts: chargeBallY(胸→頭上へ上げる)を廃し setChargeBall() に。溜め中はボールを胸前・低め(SHOT_GATHER_Y1.2から進捗pで最大0.15m沈む)＋リム方向へ前方0.34〜0.44mに構える。進捗p(0→1)を shootLoadTarget に設定。releaseShot の shotFrom を頭上(2.05)やや前(リム方向0.18m)へ。
+- shoot.ts: applyShootLoad() 新設。前傾=胸を腰の切れ目でヒンジ(torsoNode.rotation.x=-numberSide*0.30*L, 位置オフセットで腰は不動, acornWaistPivot で腰を垂直) ※dejected と同規約。沈み込み=root.position.y を L*0.15 下げ、両足を同量上げて接地維持→syncAcornLegs で脚が縮む。
+- player.ts: shootLoad/shootLoadTarget フィールド追加。player-visual.ts sync(): shootLoad を target へイーズ(0.25)＋target を毎フレーム0にリセット→リリース後は自動で0へ戻り伸び上がる。applyShootLoad はアコーンモデルのみ。player-state.ts resetPose でクリア。
+- 検証: tsc✓/vite build✓/回帰 BLUE36・全勝・NaN無し・完走(ロジック影響なし)。⚠️見た目(前傾角0.30・沈み込み0.15m・前方0.34m・伸び上がりのイーズ0.25・リリース位置)はヘッドレス検証不能(Quaternionモック)。ブラウザ目視で要調整。定数は全て調整可能。
+
+## 362 3P準備アニメ調整: 顔はゴール方向・前腕内曲げ・利き手フォーム
+- ユーザー要望: 前傾しても顔はゴール方向へ。前で構える手は前腕を少し内側に曲げる。シュートは両手投げでなく利き手フォーム。
+- shoot.ts applyShootLoad: 前傾で headNode(torsoNodeの子)も下を向くため headNode.rotation.x=-Pt で逆ピッチ→顔を水平(ゴール方向)に保つ。torso.ts resetTwist に headNode.rotation.x=0 を追加(硬直復帰時の保険)。
+- shoot.ts gatherHold() 新設: charge 中の構え。利き手をボールへ+前腕内曲げ(elbow0.65)、添え手は脇でさらに深く曲げ(0.9)、利き手主体でボールを前で抱える。poses.ts charge を shootArms(b,true)→gatherHold(b) に差し替え(両手投げの見えを解消)。
+- shoot.ts shootArms guide: 添え手の肘 0.7→0.9 に(押し手にせずガイド化=利き手フォームを明確に)。リリース自体は従来の利き手フォーム。
+- 検証: tsc✓/vite build✓/回帰 BLUE36.4・全勝・NaN無し・完走。⚠️見た目(顔の向き・前腕内曲げ量0.65/0.9・利き手フォーム)はヘッドレス検証不能。ブラウザ目視で要調整。定数調整可。
+
+## 363 利き手バグ修正: numberSideで左右反転していたシュート手の選択
+- ユーザー報告: 右利きの選手が左手でシュート、攻撃方向/ホームアウェイで変わる。
+- 原因: shootArms/gatherHold が dom/off 腕を `hand==="R"?armR:armL` で固定選択。しかし setNumberSide は腕/目のZ(前後)のみ反転しX(左右)は不変(armPivotR.x=+sx固定, eyeR=+X固定でzのみ反転)。numberSide=+1(前方-Z)では+X=体の右=armRで正しいが、numberSide=-1(前方+Z=+Zを攻めるチーム)では+Xが体の左になり、armRで打つと左手に見える。ハーフタイムの攻守交代で反転。グラウンドトゥルース: eyeR=mkEye(0.062)=右目が+X。座標系handednessに依存しないメッシュ規約からの確定。
+- 修正: shoot.ts の2箇所 `const R = this.hand==="R"` → `const R = (this.hand==="R")===(this.numberSide>0)`。numberSide=+1は不変(正)、numberSide=-1のみ反転して修正。全シュート種別(ミドル/3P/レイアップ/ダンク/FT、gatherHold含む)に適用。
+- 検証: tsc✓/vite build✓。node選択ロジックはメッシュ規約から導出。⚠️実際の見た目(右利き=右手で打つ)はブラウザ目視で両攻撃方向とも確認推奨。もし逆(numberSide=+1側が誤)なら条件を反転。

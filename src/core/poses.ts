@@ -65,7 +65,7 @@ export function poseHands(game: Game, ): void {
         break;
       }
       case "charge":
-        game.shooter?.shootArms(b, true);            // 利き手で構え、逆手を添える
+        game.shooter?.gatherHold(b);                 // ボールを前で抱える（前腕を内側に、利き手主体）
         raiseAirborne(game, b, game.shooter);         // 早く跳んだ守備者は上がっている
         break;
       case "inbound":

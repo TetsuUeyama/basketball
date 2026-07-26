@@ -84,6 +84,10 @@ export class Player {
   // 完全硬直: 着地/切り返し/ダッシュ急停止の直後、一瞬まったく動けない（accelSpeed=0）。
   // 硬直(landT/plantT)の頭側の一部。敏捷でスケール。
   rootT = 0;
+  // シュートの溜め: 前傾＋沈み込みの深さ(0..1)。target を updateCharge が毎フレーム
+  // 設定、それ以外は0へ戻り「一気に伸び上がる」。sync が applyShootLoad で姿勢に反映。
+  shootLoad = 0;
+  shootLoadTarget = 0;
   // ルーズボールを手で床からすくい上げる: ボールが保持位置へ上がり、手が下→上に追う
   pickupT = 0;
   pickupDur = 0;

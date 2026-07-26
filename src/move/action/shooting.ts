@@ -58,18 +58,22 @@ export function shoot(game: Game, h: Player, dHoop: number, dDef: number): void 
     game.shooter = h;              // ギャザー中のポーズの所有者
     game.handler = null;
     game.ballMode = "charge";
-    // ボールはギャザーのポケット(胸)で開始し、ワインドアップの間に頭上へ上がる
-    game.ball.pos.set(h.pos.x, chargeBallY(game), h.pos.z);
+    // ボールは胸前・低めのポケットで構える（溜め中は前・低いまま、リリースで頭上へ）
+    setChargeBall(game, h);
   }
 
-  // ボールはワインドアップの間にポケットから頭上へ上がる: ギャザーの約80%で頭上へ、
-  // その後リリースの窓の間そこで保持。イージング(smoothstep)。
-export function chargeBallY(game: Game, ): number {
+  // 溜め中のボール位置＋負荷。頭上に上げず、胸前・低めで前に構える。進捗とともに
+  // 少し沈み、前傾／沈み込みの深さ(shootLoadTarget)も進捗で設定する（sync が姿勢に反映）。
+  // リリースで一気に頭上やや前へ上がる（releaseShot / shot アーク側）。
+export function setChargeBall(game: Game, h: Player): void {
     const w = game.shotWindup || 0.001;
-    const p = clamp(1 - game.chargeT / w, 0, 1);   // ギャザー開始で0 → リリースで1
-    const rise = clamp(p / 0.8, 0, 1);
-    const e = rise * rise * (3 - 2 * rise);
-    return SHOT_GATHER_Y + (SHOT_SET_Y - SHOT_GATHER_Y) * e;
+    const p = clamp(1 - game.chargeT / w, 0, 1);   // ギャザー開始0 → リリース1
+    h.shootLoadTarget = p;
+    const rim = game.attackFloor(h.team);
+    const fx = rim.x - h.pos.x, fz = rim.z - h.pos.z, fl = Math.hypot(fx, fz) || 1;
+    const front = 0.34 + p * 0.10;                 // 前で構える（進捗で少し前へ）
+    const y = SHOT_GATHER_Y - p * 0.15;            // 胸元からやや沈む
+    game.ball.pos.set(h.pos.x + (fx / fl) * front, y, h.pos.z + (fz / fl) * front);
   }
 
   // ギャザーの1フレーム: ボールを溜めたまま保持し、守備者にシュートを読ませて
@@ -78,7 +82,7 @@ export function updateCharge(game: Game, dt: number): void {
     const h = game.chargeShooter;
     if (!h) { game.ballMode = "held"; return; }
     game.chargeT -= dt;
-    game.ball.pos.set(h.pos.x, chargeBallY(game), h.pos.z);   // ポケットから頭上へ持ち上げる
+    setChargeBall(game, h);   // 胸前・低めで構え、進捗で前傾＋沈み込みを深める
     const d = game.teamPlayers(1 - h.team)[h.slot];   // シューターの担当守備者
     const beaten = h.beatenT > 0 || h.powerT > 0;     // 抜き去った → クローズアウトが遅れる
     if (d && !beaten) {
@@ -176,7 +180,10 @@ export function releaseShot(game: Game, h: Player, dHoop: number, dDef: number, 
     if (blocker) { swatShot(game, h, blocker); return; }
     if (tryShootingFoul(game, h, dDef, false)) return;
 
-    game.shotFrom.set(h.pos.x, 2.05, h.pos.z);
+    // リリースは頭上やや前（利き手を前へ伸ばして放つ）
+    const frim = game.attackFloor(h.team);
+    const rfx = frim.x - h.pos.x, rfz = frim.z - h.pos.z, rfl = Math.hypot(rfx, rfz) || 1;
+    game.shotFrom.set(h.pos.x + (rfx / rfl) * 0.18, 2.05, h.pos.z + (rfz / rfl) * 0.18);
     aimShotTarget(game, dHoop);   // 決まればリム、ロングミスはリムから大きく外れた点へ
     game.shotT = 0;
     // アークの外ではボールは弾くのでなく放り投げる: 遠いほど高く遅い放物線。
