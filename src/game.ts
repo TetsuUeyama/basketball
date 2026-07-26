@@ -688,7 +688,8 @@ export class Game {
   chargeShooter: Player | null = null;
   chargeDHoop = 0;
   chargeDDef = 0;
-  shotWindup = 0;   // 放たれるシュートのギャザー長(tryBlock 用)
+  shotWindup = 0;   // 放たれるシュートのギャザー長(tryBlock 用) = 必要準備時間
+  chargeHeld = 0;   // 溜め完了後の追加ホールド秒(どフリー時の精度微増用)
 
   // target へのシュートに跳んで挑む。正対なら垂直ジャンプで最大の高さ、
   // 横にずれていれば斜めにランジ(高さを射程と引き換え)。

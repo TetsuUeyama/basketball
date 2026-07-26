@@ -76,9 +76,24 @@ export function effShootRange(p: Player): number {
   return THREE_DIST + 0.5;
 }
 
+// 3Pの準備時間(秒)。L速度95で即発射(0)、下がるほど少しずつ延長。
+// さらにディープ3は3Pラインからの超過距離が伸びるほど(二次で)延長する。
+export function threePrepFor(h: Player, dHoop: number): number {
+  // 素の準備時間(ライン上): L速度10で2.5秒 → 95で0.36秒 を線形に(能力差を均等に)。
+  const base = clamp(2.5 + (h.attr.threeRange - 10) * (0.36 - 2.5) / 85, 0.36, 2.5);
+  const over = Math.max(0, dHoop - THREE_DIST);            // 3Pラインからの超過距離
+  const deep = over * 0.14 + over * over * 0.02;           // 深いほど二次で延長
+  let w = base + deep;
+  if (h.has("range")) w *= 0.7;                            // レンジ特能は準備が速い
+  return w;
+}
+
 // この選手がこのシュートで要する溜め時間(リリース前のオーバーヘッドの構え)。
+// 3PはL速度+距離ベース(threePrepFor)、ミドルは従来のS技術ベース。
 export function shotWindupFor(h: Player, dHoop: number): number {
-  let w = 0.16 + gatherFor(h, dHoop) + (1 - rate(h.attr.shotTech)) * 0.12;
+  let w = dHoop > THREE_DIST
+    ? threePrepFor(h, dHoop)
+    : 0.16 + gatherFor(h, dHoop) + (1 - rate(h.attr.shotTech)) * 0.12;
   if (h.quickT > 0 && h.has("oneTouch")) w *= 0.55;   // ダイレクト: クイックリリース
   return w;
 }

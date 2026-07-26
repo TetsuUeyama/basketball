@@ -13,7 +13,8 @@ export function jumpShotMakeProbability(
     nearestDef: Player | null;   // 最寄り守備者（クローズアウトの質とリーチに使用）
     helpCount: number;           // 2.4m以内の守備人数（isoShooter 判定用）
     clutch: number;              // clutchFactor(h)：精神×プレッシャー
-    buzzer: boolean;             // 終了間際(残り1秒未満)の駆け込みか
+    prepShort: number;           // 準備不足の秒数（急ぎ撃ち/ブザー — 大きいほど精度低下）
+    prepExtra: number;           // 準備延長の秒数（どフリーでじっくり — 精度微増、上限あり）
     palmHitbox: boolean;         // 手のひら当たり判定モデルの有効/無効
   },
 ): number {
@@ -48,10 +49,10 @@ export function jumpShotMakeProbability(
   }
   // 精神: 疲労・劣勢・終盤の重圧が弱い心を乱す
   p -= ctx.clutch * 0.12;
-  // 終了間際の駆け込み: 精度が落ちる。S技術が高いほど落ち込みは小さい（×0.5〜×0.7）。
-  if (ctx.buzzer) {
-    p *= 0.5 + rate(h.attr.shotTech) * 0.2;
-  }
+  // 準備不足(急ぎ撃ち/ブザー): 溜め切れなかった秒数だけ精度が落ちる。S技術が落ち込みを緩和。
+  if (ctx.prepShort > 0) p -= ctx.prepShort * 0.5 * (1 - rate(h.attr.shotTech) * 0.4);
+  // 準備延長(どフリーでじっくり): 溜めを延ばした秒数だけ精度が少し上がる(上限0.4秒相当)。
+  if (ctx.prepExtra > 0) p += Math.min(ctx.prepExtra, 0.4) * 0.12;
   return clamp(p, 0.02, 0.93);   // 低い下限で遠投も数%は残す
 }
 

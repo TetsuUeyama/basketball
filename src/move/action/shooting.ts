@@ -41,15 +41,16 @@ const SHOT_PARAMS: Record<ShotType, {
 };
 
 export function shoot(game: Game, h: Player, dHoop: number, dDef: number): void {
-    // ブザービーター: ギャザーの時間が無い — ホーンと同時に投げ上げる。
-    // チャージ相もワインドアップも無い(ボールは今すぐ飛ぶ)。
+    const windup = shotWindupFor(h, dHoop);
+    // ブザービーター: ギャザーの時間が無い — ホーンと同時に投げ上げる。準備は全く
+    // 出来ていない(prepDone=0)ので、必要準備が長いほど(深いほど)精度は急落する。
     if (game.gameClock > 0 && game.gameClock < BUZZER_WINDOW) {
-      game.shotWindup = 0;
-      releaseShot(game, h, dHoop, dDef);
+      game.shotWindup = windup;
+      releaseShot(game, h, dHoop, dDef, 0);
       return;
     }
-    const windup = shotWindupFor(h, dHoop);
     game.shotWindup = windup;
+    game.chargeHeld = 0;
     game.chargeShooter = h;
     game.chargeDHoop = dHoop;
     game.chargeDDef = dDef;
@@ -105,7 +106,24 @@ export function updateCharge(game: Game, dt: number): void {
         if (chance(Math.max(0, poke - secure) * reach * dt * 5)) { stripGather(game, h, d); return; }
       }
     }
-    if (game.chargeT <= 0) releaseShot(game, h, game.chargeDHoop, game.chargeDDef);
+    // リリース判断: 溜め完了(chargeT≤0)で通常リリース。状況で早め(急ぎ撃ち)/遅め(ホールド)。
+    const nd = game.nearestDefender(h);
+    const gap = nd ? dist2D(nd.pos, h.pos) : 99;
+    const panic = game.shotClock < 0.5 || (game.gameClock > 0 && game.gameClock < BUZZER_WINDOW);
+    const blockImminent = !!nd && nd.airborne && gap < 1.6;   // 守備者が跳んでブロックに来た
+    if (game.chargeT > 0) {
+      // 溜め未完。クロック逼迫かブロック差し込みなら早めリリース(不足分だけ精度低下)。
+      if (panic || blockImminent) {
+        releaseShot(game, h, game.chargeDHoop, game.chargeDDef, game.shotWindup - game.chargeT);
+      }
+      return;   // それ以外は溜め継続(次フレームで chargeT が減る)
+    }
+    // 溜め完了。どフリー(2.5m以上)かつ余裕があればさらにホールドして精度微増(上限0.4秒)。
+    if (gap > 2.5 && !panic && !blockImminent && game.chargeHeld < 0.4) {
+      game.chargeHeld += dt;
+      return;
+    }
+    releaseShot(game, h, game.chargeDHoop, game.chargeDDef, game.shotWindup + game.chargeHeld);
   }
 
   // 溜めた(頭上の)ボールがリリース前にシューターの手から叩き出される —
@@ -126,8 +144,13 @@ export function stripGather(game: Game, h: Player, d: Player): void {
     game.goLoose(h.team, 1.6, { stealBy: d, victim: h, grabAfter: 0.35 });
   }
 
-export function releaseShot(game: Game, h: Player, dHoop: number, dDef: number): void {
+export function releaseShot(game: Game, h: Player, dHoop: number, dDef: number, prepDone?: number): void {
     game.chargeShooter = null;
+    // 準備の充足度: 溜め切れば req=done で不足0。急ぎ撃ちは不足、どフリー延長は余剰。
+    const req = game.shotWindup || 0;
+    const done = prepDone ?? req;
+    const prepShort = Math.max(0, req - done);
+    const prepExtra = Math.max(0, done - req);
     game.pendingAssist = assistCreditFor(game, h);
     const shotType = jumperType(dHoop);   // "midrange" | "three"（距離で使い分け）
     const isThree = shotType === "three";
@@ -140,7 +163,7 @@ export function releaseShot(game: Game, h: Player, dHoop: number, dDef: number):
       nearestDef: game.nearestDefender(h),
       helpCount: game.defendersWithin(h, 2.4),
       clutch: game.clutchFactor(h),
-      buzzer: game.gameClock > 0 && game.gameClock < BUZZER_WINDOW,
+      prepShort, prepExtra,
       palmHitbox: PALM_HITBOX,
     });
     game.shotMade = chance(p);

@@ -4572,3 +4572,19 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - 正直な限界: 遅れの主因は laneStep でなく「ボール(ドリブラー)が動きレーンが回転し続ける＋相手が常に微動/振り切りバースト」する動的性質。瞬間移動禁止(rootT/MOVE_RATE)のイーズ移動では構造的にレーン上へピタリ留まれない。守備はボール側に付き腕(denyLane)をレーンに出すが、体は~1.3m横に遅れる。係数調整では詰め切れず。
 - 検証: tsc✓/vite build✓/回帰 BLUE38.4・99側全勝・NaN無し・完走。
 - ⚠️見た目はブラウザ目視。より厳密なレーン封鎖には「相手の未来位置の先読み」や「固定オフセットのフロント」等の別設計が必要（要相談）。⚠️未コミット(e8398a6 の上に 356)。
+
+## 2026-07-26 (357) バックコート違反を公式ルール通りスローイン再開に
+
+- ユーザー要望「BACKCOURT(オーバー&バック違反)の再開をスローインに」。従来は turnover()＝最寄りの相手にライブで渡していた（公式は違反=デッドボール→相手ボールのスローイン）。
+- core/deadball.ts に `backcourtViolation(game, loser)` を新設（shotClockViolation と同型）: 違反者に tov、違反地点(キャッチ地点=ハーフライン付近)を記憶し、pauseThen→withSubs→inbound.startAt(相手, sx, sz, {clock: SHOT_CLOCK}) で違反地点近くのサイドラインから相手ボールのスローイン。イベント "BACKCOURT"。
+- move/action/passing.ts: 違反判定の呼び出しを turnover(…, "BACKCOURT") → backcourtViolation(game, receiver) に。turnover import は passing では他に使っていないため置換。
+- 検証: tsc✓/vite build✓/BACKCOURT 引き続き検出(0.7回/試合)しスローイン再開に/回帰 BLUE37.7・99側全勝・NaN無し・完走(スローイン再開でスタック無し)。
+- ⚠️見た目(スローインの投げ手位置・演出)はブラウザ目視。⚠️未コミット(bc4c783 の上に 357)。
+
+## 358 3Pの溜め・精度モデル刷新（L速度＝準備時間、準備充足で精度）
+- ユーザー要望: 現行の「L速度が低い＝ためモーション」を廃止。代わりに(1)通常精度で打つ準備時間をL速度で決める(95で即発射、下がるほど延長) (2)ディープ3は距離が伸びるほど準備延長 (3)ブザー/ブロック差し込み時は準備を切り上げて打てる=精度急落 (4)どフリーで準備を延ばすと精度微増。
+- eval.ts: `threePrepFor(h,dHoop)` 新設。base=max(0,95-L速度)*0.012(95→0,75→0.24,55→0.48秒)＋deep=over*0.14+over²*0.02(ラインからの超過距離で二次延長)、range特能×0.7。`shotWindupFor` は3Pで threePrepFor、ミドルは従来のS技術ベース。旧3Pの `0.16+(1-S技術)*0.12` を廃止。
+- shot-outcome.ts: ctx の `buzzer` を廃し `prepShort`(準備不足秒)/`prepExtra`(延長秒)に。prepShort>0で `-prepShort*0.5*(1-S技術*0.4)`(急ぎ撃ちで精度急落、S技術で緩和)、prepExtra>0で `+min(prepExtra,0.4)*0.12`(どフリー延長で微増)。旧ブザー一律×0.5〜0.7を廃止しprepShortに統合。
+- shooting.ts: shoot()ブザーは windup 算出し releaseShot(...,prepDone=0)。updateCharge() のリリース判断を刷新: 溜め未完(chargeT>0)でも panic(shotClock<0.5 or ブザー窓) か blockImminent(守備者が跳んで<1.6m) なら早めリリース(prepDone=windup-chargeT)。溜め完了後どフリー(2.5m超)&余裕ありは chargeHeld を最大0.4秒加算しホールド、その後 prepDone=windup+chargeHeld でリリース。releaseShot に prepDone 引数追加し prepShort/prepExtra を算出。game.ts に chargeHeld フィールド追加。
+- 検証: tsc✓/vite build✓。準備時間テーブル実測=設計通り(L速度95:+0m=0/+2m=0.36/+4m=0.88/+8m=2.4秒、55:+0m=0.48…、深いほど二次延長)。距離別3P成功率(実25試合): ライン〜+0.5=63%/+0.5〜1.5=52%/+3以上(深/強制ヒーブ)=8%。回帰 BLUE36.4・全勝・NaN無し・完走。
+- ⚠️通常路線(溜め切ったシュート)の精度は不変(prepShort=0)。⚠️見た目(溜めの長短・オーバーヘッド保持)はブラウザ目視。⚠️「延長して打てる」の解釈は「強制/急ぎ撃ちでも発射はするが精度急落」で実装。⚠️未コミット(bc4c783 の上に 357,358)。
