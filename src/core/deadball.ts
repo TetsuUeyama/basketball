@@ -56,6 +56,17 @@ export function shotClockViolation(game: Game): void {
       { clock: front ? SHOT_CLOCK_PARTIAL : SHOT_CLOCK })));
   }
 
+  // オーバー&バック(バックコート)違反はオフェンスのバイオレーション。公式ルール通り
+  // 相手ボールのスローインで、違反が起きた地点(ハーフライン付近)に最も近いサイドから再開する。
+export function backcourtViolation(game: Game, loser: Player): void {
+    loser.stats.tov++;
+    const def = 1 - loser.team;
+    const sx = loser.pos.x, sz = loser.pos.z;   // 違反地点(キャッチ地点)を今記憶
+    game.handler = null;
+    game.setEvent("BACKCOURT", loser.team, 2.6);
+    game.pauseThen(1.2, () => withSubs(game, () => game.inbound.startAt(def, sx, sz, { clock: SHOT_CLOCK })));
+  }
+
 export function turnover(game: Game, loser: Player, reason: string): void {
     loser.stats.tov++;
     // 最も近い相手にボールを渡す

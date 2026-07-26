@@ -7,7 +7,7 @@ import { twWeight, effShootRange, reactionLag, shotThreat } from "../../eval";
 import { laneVetoed, passRisk, evalInterception, longBallRead } from "../reaction/pass-risk";
 import { runDefenseDuringDeadish } from "../../ai/defense";
 import { updateOffBallMotion, bestOpenSpot } from "../../ai/offball";
-import { turnover } from "../../core/deadball";
+import { backcourtViolation } from "../../core/deadball";
 import { doubleTeamed } from "../../ai/reads";
 import type { Game } from "../../game";
 
@@ -288,10 +288,10 @@ export function updatePass(game: Game, dt: number): void {
     // 綺麗に迎える: 最後の数cmを詰めて手元へ(back-snap無し)
     const gap = dist2DTo(receiver.pos, game.passCatch.x, game.passCatch.z);
     if (gap > 0.02) moveToward2D(receiver.pos, game.passCatch.x, game.passCatch.z, Math.min(gap, 0.4));
-    // オーバー&バック違反のバックストップ
+    // オーバー&バック違反のバックストップ: 公式通り相手ボールのスローインで再開
     if (game.frontT && game.attackSign(receiver.team) * receiver.pos.z < 0) {
       game.passTo = null;
-      turnover(game, receiver, "BACKCOURT");
+      backcourtViolation(game, receiver);
       return;
     }
     game.handler = receiver;
