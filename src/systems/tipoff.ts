@@ -9,6 +9,8 @@ export class TipoffSystem {
   guard!: Player;      // タップ先ガード（chaseLoose の団子回避が参照）
   private t = 0;
   private jumped = false;
+  private tossed = false;
+  private setup = false;
 
   constructor(private game: Game) {}
 
@@ -35,9 +37,14 @@ export class TipoffSystem {
     this.guard = g.teamPlayers(this.winner)[0];
     this.t = 0;
     this.jumped = false;
+    this.tossed = false;
+    this.setup = false;
     g.handler = null;
     g.ballMode = "tipoff";
-    g.ball.pos.set(0, 2, 0);
+    // 紹介中は審判を中央に立たせない(サイドラインへ)。ボールはセンターの床に置く。
+    // 実際にプレーが始まったら(update 初回)審判が中央へ来てボールを持つ。
+    g.referees.parkForTipoff();
+    g.ball.pos.set(0, 0.15, 0);
     g.ball.vel.set(0, 0, 0);
     // センターはまだ接地: トスに合わせてジャンプのタイミングを取る
   }
@@ -45,7 +52,16 @@ export class TipoffSystem {
   update(dt: number): void {
     const g = this.game;
     this.t += dt;
-    const t = this.t;
+
+    if (!this.setup) { this.setup = true; g.referees.tipoffSetup(); }   // プレー開始 → 審判が中央へ
+    const HOLD = 0.8;      // トス前、審判がボールを保持して見せる時間
+    if (this.t < HOLD) {
+      const ref = g.referees.onBallRef;
+      if (ref) g.ball.pos.copyFrom(ref.ballHold());
+      return;
+    }
+    if (!this.tossed) { this.tossed = true; g.referees.tipoffToss(); }   // 投げ上げモーション
+    const t = this.t - HOLD;   // トス開始からの経過
 
     const TOSS_UP = 0.7;   // ボールがピークまで上がる
     const TIP_AT = 1.15;   // ジャンパーの手の届く高さまで落ちてきてタップ
@@ -80,6 +96,7 @@ export class TipoffSystem {
     const len = Math.hypot(dx, dz) || 1;
     g.ball.pos.set(0, TIP_Y, 0);
     g.ball.vel.set((dx / len) * 3.6, 1.0, (dz / len) * 3.6);
+    g.referees.tipoffDone();     // 審判は通常巡回へ戻る
     g.goLoose(this.winner, 2.6, { tip: true });
     g.setEvent("TIP-OFF", this.winner);
   }

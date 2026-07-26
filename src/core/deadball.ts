@@ -30,13 +30,14 @@ export function sideInbound(game: Game, victim: Player): void {
     game.possession = victim.team;
     game.handler = victim;
     game.ballMode = "inbound";
-    game.inbound.t = 1.0;
+    game.inbound.t = 1.8;   // 選手→審判→スローワーの投げ渡しに要する時間
     // 再開がどちらのボールか表示する
     game.setEvent(`THROW-IN\n${teamShort(victim.team)} BALL`, victim.team, 2.0);
     const sideX = victim.pos.x >= 0 ? COURT.halfW + OOB_OUTSET : -(COURT.halfW + OOB_OUTSET);
     victim.pos.set(sideX, 0, clamp(victim.pos.z, -COURT.halfL + INBOUNDS_INSET, COURT.halfL - INBOUNDS_INSET));
     game.resetMotion();
     game.inbound.receiver = game.inbound.pickReceiver(victim);
+    game.inbound.refRelay(victim);   // ファウル再開も 選手→審判→スローワー の投げ渡しで
   }
 
   // ショットクロック満了はオフェンスのバイオレーション。オフェンスに

@@ -8,7 +8,12 @@ import { runDefenseDuringDeadish } from "../ai/defense";
 import type { Game } from "../game";
 
 export class InboundSystem {
-  t = 0;                            // 投げ入れまでの残り時間
+  t = 0;                            // 投げ入れまでの残り時間(審判不在時のフォールバック)
+  private threw = false;             // 審判がスローワーへ投げ始めたか
+  private throwT = 0;                // 審判→スローワーの投げ渡しの残り時間
+  private throwDur = 0.55;           // 投げ渡しの所要時間(P速度で決まる)
+  private passOffX = 0;              // パスの着弾ぶれ(P精度で決まる)
+  private passOffZ = 0;
   receiver: Player | null = null;   // 受け手
   oobWalker: Player | null = null;  // OOB地点へ歩く投げ手（updatePause が動かす）
   oobSpot = new Vector3();
@@ -36,6 +41,8 @@ export class InboundSystem {
     // ハンドリングの高くないビッグが投げ手なら、投げたらフロントコートへ抜けさせる
     // （ガードが降りて組み立て、ビッグがバックコートでトラップされるのを避ける）。
     if (g.isBig(taker) && taker.evalRole !== "プレイメイキングビッグ") taker.frontRunT = 8;
+    // 得点後などボールはコート上(リム下)にある: 近くの選手が審判へ投げ、審判がスローワーへ投げ渡す。
+    this.refRelay(taker);
     // メイド/FT後は失点側が入れる — 誰のボールか表示
     g.setEvent(`THROW-IN\n${teamShort(team)} BALL`, team, 1.8);
   }
@@ -74,7 +81,25 @@ export class InboundSystem {
     if (opts.announce !== null) {
       g.setEvent(opts.announce ?? `THROW-IN\n${teamShort(team)} BALL`, team, 2.0);
     }
-    g.pauseThen(1.5, () => this.finishOOB());
+    // 集球演出: OOBなら審判が拾いに行き、コート内なら最寄りの選手が審判へ投げる。
+    const oob = Math.abs(ox) > COURT.halfW + 0.1 || Math.abs(oz) > COURT.halfL + 0.1;
+    g.referees.acquireBall(ox, oz, sx, sz, oob ? "retrieve" : "auto");
+    g.pauseThen(oob ? 2.6 : 2.0, () => this.finishOOB());
+  }
+
+  // 既に審判がボールを持っている状態(クオーター開始等)からの投げ渡しを準備する。
+  // taker がスローイン地点に着いていること前提。審判が taker へ投げ渡す。
+  // コート上のボールを 選手→審判→スローワー で投げ渡す(得点後/ファウル等)。taker は地点に立つ。
+  refRelay(taker: Player): void {
+    this.threw = false;
+    // ボール地点の近くに選手がいれば「選手→審判へ投げ渡し」、いなければ「審判が拾いに行く」を
+    // 自動判定(acquireBall 内)。集球完了後、審判がスローワーへ投げ渡す(update)。
+    this.game.referees.acquireBall(this.game.ball.pos.x, this.game.ball.pos.z, taker.pos.x, taker.pos.z, "throw");
+  }
+
+  beginRefThrow(taker: Player): void {
+    this.threw = false;   // 審判は既にボールを保持済み → update が投げ渡す
+    this.game.referees.inboundSetup(taker.pos.x, taker.pos.z);
   }
 
   // 告知が終わった: 投げ手が地点に着いた — ボールを手に持たせて投げ入れ開始。
@@ -91,6 +116,8 @@ export class InboundSystem {
     g.resetMotion();
     this.receiver = this.pickReceiver(taker);
     if (g.isBig(taker) && taker.evalRole !== "プレイメイキングビッグ") taker.frontRunT = 8;
+    this.threw = false;   // 集球(拾う/選手が投げる)は pause 中に済み → update が投げ渡す
+    g.referees.inboundSetup(taker.pos.x, taker.pos.z);
     this.oobWalker = null;
   }
 
@@ -132,10 +159,33 @@ export class InboundSystem {
     }
     runDefenseDuringDeadish(g, dt);
 
-    // ボールはインバウンダーの手で、ラインのすぐ外に待機
-    g.ball.pos.set(inb.pos.x, 1.3, inb.pos.z);
-
-    this.t -= dt;
-    if (this.t <= 0) g.throwIn(inb);
+    // 再開の演出: 集球中(選手が審判へ投げる/審判が拾いに行く)は referees が管理。集球完了後、
+    // 審判がスローワーへ投げ渡してから投げ入れる。
+    const refs = g.referees;
+    const ref = refs.onBallRef;
+    if (refs.acqActive) {
+      return;   // 集球中: ボールは updateAcq が管理。まだ投げ入れない。
+    }
+    if (ref) {
+      if (ref.frozen && !this.threw) { g.ball.pos.copyFrom(ref.ballHold()); return; }   // キャッチ硬直中は待つ
+      // 集球完了 → 審判がスローワーへパスモーションで投げ渡す。P速度で速さ、P精度で着弾ぶれ。
+      if (!this.threw) {
+        this.threw = true; ref.signal("pass", 0.6);
+        const acc = 1 - ref.body.attr.passAcc / 100;   // P精度50 → 0.5
+        this.passOffX = rand(-1, 1) * acc * 0.6; this.passOffZ = rand(-1, 1) * acc * 0.6;
+        this.throwDur = 0.4 + (1 - ref.body.attr.passSpd / 100) * 0.4;   // P速度50 → 0.6秒
+        this.throwT = this.throwDur;
+      }
+      this.throwT -= dt;
+      const k = clamp(1 - this.throwT / this.throwDur, 0, 1);
+      const h = ref.ballHold();
+      const tx = inb.pos.x + this.passOffX, tz = inb.pos.z + this.passOffZ;
+      g.ball.pos.set(h.x + (tx - h.x) * k, h.y + (1.3 - h.y) * k + 0.9 * Math.sin(k * Math.PI), h.z + (tz - h.z) * k);
+      if (this.throwT <= 0) { refs.inboundDone(); g.throwIn(inb); }
+    } else {
+      g.ball.pos.set(inb.pos.x, 1.3, inb.pos.z);  // 審判不在時はスローワーの手に
+      this.t -= dt;
+      if (this.t <= 0) g.throwIn(inb);
+    }
   }
 }

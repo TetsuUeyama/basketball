@@ -165,9 +165,12 @@ export function quarterWalkOff(game: Game, next: () => void): void {
     for (const p of game.players) {
       game.subWalkers.push({ p, ...benchGatherSpot(p.team, p.slot) });
     }
-    // ボールを次ピリオドのスローイン地点（センターライン、左サイドライン）に置く
-    game.ball.pos.set(-(COURT.halfW + OOB_OUTSET), 0.12, 0);
+    // ボールはワープさせない。その場(コート上)から近くの選手が審判へ投げ渡し、審判は次
+    // ピリオドのスローイン投げ渡し位置(センターライン左サイド)に立って受け、開始まで保持する。
+    const qx = -(COURT.halfW + OOB_OUTSET);
+    const ballX = game.ball.pos.x, ballZ = game.ball.pos.z;
     game.ball.vel.set(0, 0, 0);
+    game.referees.acquireBall(ballX, ballZ, qx, 0, "auto");
     game.subNext = next;
     game.subT = 0;
     game.ballMode = "subs";
