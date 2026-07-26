@@ -741,6 +741,7 @@ export class Player {
   benchGazeT = 0;                         // 次の向け直しまでの時間
   benchActT = 1 + Math.random() * 5;      // 次のそわそわまでの時間
   benchArmT = 0;                          // 現在の腕のジェスチャーの残り時間
+  benchClapT = 0;                         // 拍手ジェスチャーの残り時間（>0で手を叩く）
 
   /** パス/シュートのフォロースルー中は true — 動き出してはいけない。 */
   get rooted(): boolean {

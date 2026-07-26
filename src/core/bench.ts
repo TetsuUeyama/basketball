@@ -49,24 +49,33 @@ export function updateBenchCheer(game: Game, dt: number): void {
         if (game.onCourt(p)) continue;
         if (game.subWalkers.some((w) => w.p === p)) continue; // 歩行中 — 歓声には参加しない
         p.updateJump(dt);
+        if (p.landT > 0) p.landT = Math.max(0, p.landT - dt);   // ベンチはtickCooldown対象外なので減算（連続で跳べるように）
         const seat = benchSeat(game, p);
         const frontX = seat.x - (0.8 + amp * 0.7);   // 前へ踏み出す量
         // 各自の一拍だけ残してから戻る（一斉着席を避ける）
         const windOff = ((p.idx * 37) % 10) * 0.08;   // 0 .. 約0.72秒
         const winding = game.cheerT[t] <= -windOff;
         if (!winding) {
+          if (p.seated) p.jump(rand(0.15, 0.35) + amp * 0.3, rand(0.35, 0.5));   // 立ち上がりの小ジャンプ
           p.stand();   // 席から立ち上がって祝う
           // ベンチの前へ踏み出す
           p.pos.x += (frontX - p.pos.x) * Math.min(1, dt * 5);
           p.pos.z = seat.z;
-          // ダンク／スリーではより大きく、より頻繁に跳ぶ
+          // ダンク／スリーではより大きく、より頻繁に跳ぶ（高さはランダム）
           if (!p.airborne && chance((1.6 + amp * 2.4) * dt)) {
             p.jump(rand(0.2, 0.38) + amp * 0.4, rand(0.35, 0.55));
           }
-          // 腕を頭上へ。選手ごとに角度を変える。大きなプレイでは高く突き上げる
+          // 腕: 選手ごとにバリエーション（両手上げ／片手を高く／前に突き出す）
           const ox = ((p.idx * 37) % 11 - 5) * 0.06;
           const oy = ((p.idx * 13) % 7) * 0.08;
-          p.reach(new Vector3(p.pos.x + ox, 2.9 + oy + amp * 0.5, p.pos.z), true);
+          const variant = (p.idx * 7 + t) % 4;
+          if (variant === 1) {
+            p.reach(new Vector3(p.pos.x + 0.45, 3.05 + amp * 0.5, p.pos.z));                 // 片手を高く
+          } else if (variant === 2) {
+            p.reach(new Vector3(p.pos.x + 0.7, 1.7 + oy, p.pos.z + benchSideSign(t) * 0.4)); // 片手を前へ突き出す
+          } else {
+            p.reach(new Vector3(p.pos.x + ox, 2.9 + oy + amp * 0.5, p.pos.z), true);         // 両手を頭上へ
+          }
         } else {
           // 収束: 席へ歩いて戻り、着いたら座る
           p.pos.x += (seat.x - p.pos.x) * Math.min(1, dt * 5);

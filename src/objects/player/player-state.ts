@@ -39,7 +39,7 @@ Player.prototype.resetPose = function(): void {
   this.plantT = 0; this.rootT = 0; this.reactT = 0; this.coolT = 0; this.gatherT = 0;
   this.pickupT = 0; this.quickT = 0; this.baitT = 0; this.wallT = 0;
   this.keepShieldT = 0; this.lean = 0;
-  this.cutting = false; this.screening = false;
+  this.cutting = false; this.screening = false; this.benchClapT = 0;
   // アクション3段階
   this.actKind = ""; this.actPhase = ""; this.actT = 0; this.actFired = false;
   // 腕を即座に休めへ（イーズを介さず直接セット）

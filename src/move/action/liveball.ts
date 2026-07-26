@@ -12,10 +12,12 @@ export function updateLive(game: Game, dt: number): void {
   // 付近でリリース。コミット済みなので判断もドライブもしない。
   if (game.pendingPassTo) {
     game.pendingPassT -= dt;
-    // ターンパス: 体をターゲットへ回す間、ボールは手の中で下のままにする
-    // （updateFacing が回転させる）。ジャンプパスは代わりにボールを頭上へ持ち上げる。
-    if (game.pendingPassTurn) game.ball.pos.set(h.pos.x + h.carryX, 1.0, h.pos.z + h.carryZ);
-    else game.ball.pos.set(h.pos.x, 2.0, h.pos.z);
+    // ターンパス: 体をターゲットへ回す間、ボールは胸の前で保持し胴の回転に追従させる
+    // （chestFront は root ヨー＋ツイストのフレーム）。ジャンプパスは頭上へ持ち上げる。
+    if (game.pendingPassTurn) {
+      const cf = h.chestFront(0.32);
+      game.ball.pos.set(cf.x, 1.0, cf.z);
+    } else game.ball.pos.set(h.pos.x, 2.0, h.pos.z);
     if (game.pendingPassT <= 0) {
       const target = game.pendingPassTo;
       const turn = game.pendingPassTurn;
@@ -45,15 +47,18 @@ export function updateLive(game: Game, dt: number): void {
   if (game.ballMode !== "held") return;   // こぼれかけたキャッチからはたき出された
   swarmStrips(game, dt);
   if (game.ballMode !== "held") return;   // このフレームのはたきでドリブルが終わった
-  // ドリブルのキャリー位置: 生きたボールがハンドラーのどこに収まるか。前方=リム方向へ押す、
-  // 守備者に正対時は遠い側の腰へ、ベイト(baitT)中はわざと前方に見せる。移動の速さは D精度。
-  const rim = game.attackFloor(h.team);
-  const { ux: fx, uz: fz } = dirTo2D(h.pos.x, h.pos.z, rim.x, rim.z);
-  let tx = fx * 0.5, tz = fz * 0.5;                    // デフォルト: 前方キャリー
+  // ドリブルのキャリー位置: 生きたボールがハンドラーのどこに収まるか。前方=胸の向き
+  // （＝リムへ向かう時はリム方向、ピボット時は上半身の回転に追従）、守備者に正対時は
+  // 遠い側の腰へ、ベイト(baitT)中はわざと前方に見せる。移動の速さは D精度。
+  // chestFront は root ヨー＋ツイストのフレームなので、上半身を回してもボールが手に付いてくる。
+  const cf0 = h.chestFront(1);
+  let cfx = cf0.x - h.pos.x, cfz = cf0.z - h.pos.z;
+  const cfl = Math.hypot(cfx, cfz) || 1; cfx /= cfl; cfz /= cfl;   // 胸前方の単位ベクトル
+  let tx = cfx * 0.5, tz = cfz * 0.5;                 // デフォルト: 胸前方キャリー
   const od = game.onBallDefender(h);
   const dOn = od ? dist2D(od.pos, h.pos) : 99;
   if (h.baitT > 0) {
-    tx = fx * 0.6; tz = fz * 0.6;                      // 見せているボール
+    tx = cfx * 0.6; tz = cfz * 0.6;                   // 見せているボール（胸前方）
   } else if (od && dOn < 1.7) {
     // 正対／シールド中: ひねった上体を基準に、守備者から遠い側の腰へボールを収める。
     const cf = h.chestFront(1);                                   // 胸の前方（ひねりを考慮）、単位ベクトル
