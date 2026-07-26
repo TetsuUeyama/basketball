@@ -116,6 +116,12 @@ export class Player {
   offTimer = 0;                  // 次のオフボール判断までのクールダウン
   reactT = 0;      // 守備: シェードが追いつくまでの反応の遅れ
   looseReactT = 0; // ルーズボール: この選手が追いかけ始めるまでの反応の遅れ（反応でスケール）
+  // オフボールのマーク外し: shakeOpenT>0 で担当守備を振り切って空いている(deny が緩む/読みが鈍る)。
+  shakeOpenT = 0;  // 振り切って空いている残り秒
+  shakeT = 0;      // 次の振り切り試行までのクールダウン
+  shakeDirX = 0;   // 振り切り時の分離方向（ワールドXZ単位）
+  shakeDirZ = 0;
+  shakePower = false;  // true=パワー勝負(背中で押さえる) / false=クイックネス
 
   // ═════════ アクションの3段階（発生=windup / 実行=active / クールダウン=cooldown） ═════════
   // 全アクション共通のライフサイクル。beginAction で発生開始→自動遷移。windup 完了フレームで

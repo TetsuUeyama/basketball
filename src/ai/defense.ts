@@ -280,22 +280,44 @@ export function runDefense(game: Game, dt: number): void {
     // トランジション: ポゼッション交代で上に残っていたら、まず戻る
     if (getBackOnDefense(game, dt, d, man)) continue;
 
-    // オフボール: ゴール方向へサグしてヘルプ。
+    // オフボール: 1パスアウェイはパスコースを DENY（マークのボール側に立って塞ぐ）、
+    // ウィークサイド(遠い)はゴール方向へサグしてヘルプ。
     const help = game.tactics[defTeam].defense.help * twWeight(d);
-    // クロック終盤の DENY: ヘルプサグを外して担当に密着しボールを拒否
-    const sag = (1.2 + help * 1.4) * (game.teamHas(defTeam, "dfLine") ? 1.15 : 1)
-      * (1 - denyIntensity(game, defTeam) * 0.8);
-    const st = towardPoint(man.pos.x, man.pos.z, protect.x, protect.z, sag);
-    let stx = st.x, stz = st.z;
-    // 進路 denial: 動いている男の行き先を影で追う(先読みは上限付き)。
+    const ballGap = game.handler ? dist2D(man.pos, game.handler.pos) : 99;
+    let stx: number, stz: number;
+    let denying = false;
+    if (game.handler && ballGap < 9.0 && ballGap > 0.8 && !man.airborne) {
+      denying = true;
+      // DENY: マークとボールの間のパスコースへ割って入り消す。ボール→マーク線上の、マークから
+      // ボール側へ laneStep 出た点（レーンに体を入れる）。密着度＝守備+敏捷（振り切られない能力）。
+      const lock = rate(d.attr.defense) * 0.55 + rate(d.attr.agility) * 0.45;
+      // レーンへ割り込む距離: 良い守備ほど深くボール寄りでレーンを潰す（振り切られ中は浅くなる）。
+      // マークが速く動く間はマーク近くでレーンに留まり(横ずれを抑える)、静止時は深く割り込む。
+      const mv = Math.hypot(man.velX, man.velZ);
+      // タイト寄り(マーク近く)にしてボール回転への追従遅れを抑える＝レーン上に留まる。
+      const laneStep = clamp((0.7 + lock * 0.6 - man.shakeOpenT * 1.2) * (mv > 3 ? 0.7 : 1), 0.5, 1.3);
+      const dn = towardPoint(man.pos.x, man.pos.z, game.handler.pos.x, game.handler.pos.z, laneStep);
+      stx = dn.x; stz = dn.z;
+    } else {
+      // クロック終盤の DENY 強化も含めたヘルプサグ
+      const sag = (1.2 + help * 1.4) * (game.teamHas(defTeam, "dfLine") ? 1.15 : 1)
+        * (1 - denyIntensity(game, defTeam) * 0.8);
+      const st = towardPoint(man.pos.x, man.pos.z, protect.x, protect.z, sag);
+      stx = st.x; stz = st.z;
+    }
+    // 進路 denial: 動いている男の行き先を影で追う(先読みは上限付き)。振り切り優位で読みが鈍る。
+    // deny 中は先読みを弱めてボール→マークのレーン上に体を残す（レーンを塞ぐのが見えるように）。
     const mSpd = Math.hypot(man.velX, man.velZ);
     if (mSpd > 2.5) {
-      const read = 0.15 + rate(d.attr.reaction) * 0.22 + rate(d.attr.defense) * 0.10;
+      const read = (0.15 + rate(d.attr.reaction) * 0.22 + rate(d.attr.defense) * 0.10)
+        * (1 - man.shakeOpenT * 0.6) * (denying ? 0.4 : 1);
       const cap = Math.min(1, 2.0 / (mSpd * read || 1));   // 先読みは最大~2m
       stx += man.velX * read * cap;
       stz += man.velZ * read * cap;
     }
-    moveToward2D(d.pos, stx, stz, d.accelToward(dt, stx, stz, defEffort(game, d, protect)) * dt);
+    // deny 中はレーンへ素早く寄せる（追従の横ずれを抑え、パスコースを塞ぐのが見えるように）。
+    const eff = denying ? Math.max(defEffort(game, d, protect), 1.25) : defEffort(game, d, protect);
+    moveToward2D(d.pos, stx, stz, d.accelToward(dt, stx, stz, eff) * dt);
     game.clampCourt(d.pos);
   }
 }

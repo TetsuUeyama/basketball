@@ -92,6 +92,13 @@ export function updateOffBallMotion(game: Game, dt: number, team: number, exclud
       moveToward2D(p.pos, t2.x, t2.z, p.accelToward(dt, t2.x, t2.z) * dt);
       spacingNudge(game, dt, p, 1.7);
       game.clampCourt(p.pos);
+    } else if (p.shakeOpenT > 0) {
+      // マーク外し中: 分離方向へバーストして空きを作る（クイックは離れる、パワーはシールを押し込む）。
+      const burst = p.shakePower ? 0.85 : 1.15;
+      const tx = p.pos.x + p.shakeDirX * 2.0, tz = p.pos.z + p.shakeDirZ * 2.0;
+      moveToward2D(p.pos, tx, tz, p.accelToward(dt, tx, tz, burst) * dt);
+      spacingNudge(game, dt, p, 3.2);
+      game.clampCourt(p.pos);
     } else {
       let spot = spots[p.spotIdx];
       const atPost = p.spotIdx >= 5;
@@ -132,6 +139,8 @@ export function updateOffBallMotion(game: Game, dt: number, team: number, exclud
       spacingNudge(game, dt, p, atPost ? 2.0 : 4.2);   // 味方と近づきすぎない（間合いを広く）
       // ボールからの連続的な分離: ドリブラーが寄ってきたら離れる
       ballSpacingNudge(game, dt, p, atPost ? 2.4 : 4.6);
+      // マーク外し: 担当守備を振り切ってパスコースを作る（クイックネス or パワー勝負）
+      tryShake(game, dt, p);
 
       if (p.offTimer <= 0) {
         p.offTimer = rand(2.0, 4.0);
@@ -187,6 +196,49 @@ function pickOffBallAction(game: Game, team: number, spots: Vector3[], p: Player
   // それ以外はパスレーンを開け、ドライブギャップを空けるよう再配置
   if (chance(game.teamHas(team, "general") ? 0.7 : 0.5)) {
     p.spotIdx = bestOpenSpot(game, team, spots, p);
+  }
+}
+
+// マーク外し: 担当守備者を振り切って自分へのパスコースを作る。守備が近く(deny)て
+// 1パスアウェイの時だけ発動。クイックネス(offense+敏捷 vs 守備+敏捷)か、パワー
+// (バランスで背中に押し込む vs 守備のバランス)の勝負。成功で shakeOpenT を立て、
+// deny が緩む＋守備の読みが鈍る＝オープンになりパスを呼び込む。
+function tryShake(game: Game, dt: number, p: Player): void {
+  if (p.shakeT > 0 || !game.handler || game.handler === p) return;
+  const d = game.teamPlayers(1 - p.team)[p.slot];   // 担当守備者(index一致)
+  if (!d) return;
+  if (dist2D(d.pos, p.pos) > 2.2) return;            // 守備が離れている → 既に空き、不要
+  if (dist2D(p.pos, game.handler.pos) > 7) return;   // ウィークサイドは対象外
+  p.shakeT = rand(1.4, 2.8);                         // 試行クールダウン
+  // ビッグ/高バランスはパワー勝負を選びやすく、それ以外は基本クイックネス
+  const power = game.isBig(p)
+    ? rate(p.attr.balance) > 0.5
+    : rate(p.attr.balance) > 0.72 && chance(rate(p.attr.balance) - 0.45);
+  if (power) {
+    // パワー: バランスで守備を背中に押し込みパスコースを確保
+    const off = rate(p.attr.balance) * 0.8 + rate(p.attr.aggression) * 0.2;
+    const def = rate(d.attr.balance) * 0.8 + rate(d.attr.defense) * 0.2;
+    if (chance(clamp(0.45 + (off - def) * 0.9, 0.1, 0.9))) {
+      p.shakeOpenT = rand(0.7, 1.2);
+      p.shakePower = true;
+      // ボール→自分 の延長方向へシール（守備を背にボールを呼び込む）
+      const bx = p.pos.x - game.handler.pos.x, bz = p.pos.z - game.handler.pos.z;
+      const bl = Math.hypot(bx, bz) || 1;
+      p.shakeDirX = bx / bl; p.shakeDirZ = bz / bl;
+    }
+  } else {
+    // クイックネス: offense+敏捷 が 守備の defense+敏捷 を上回れば振り切る
+    const off = rate(p.attr.offense) * 0.45 + rate(p.attr.agility) * 0.55;
+    const def = rate(d.attr.defense) * 0.5 + rate(d.attr.agility) * 0.5;
+    if (chance(clamp(0.42 + (off - def) * 1.1, 0.08, 0.92))) {
+      p.shakeOpenT = rand(0.6, 1.0);
+      p.shakePower = false;
+      // 守備の横（逆側）へ鋭くカットして分離する
+      const rx = p.pos.x - d.pos.x, rz = p.pos.z - d.pos.z;
+      const rl = Math.hypot(rx, rz) || 1;
+      const side = chance(0.5) ? 1 : -1;
+      p.shakeDirX = (-rz / rl) * side; p.shakeDirZ = (rx / rl) * side;
+    }
   }
 }
 
