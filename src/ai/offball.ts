@@ -109,9 +109,10 @@ export function updateOffBallMotion(game: Game, dt: number, team: number, exclud
         game.clampCourt(p.pos);
         continue;
       }
-      // スポットが混んだら再配置(ハンドラー/味方が近づいた)。ボールのトリガは広め(4.5m)。
-      if ((game.handler && dist2DTo(game.handler.pos, spot.x, spot.z) < 4.5)
-          || nearestTeammateDist(game, p) < (atPost ? 2.0 : 3.2)) {
+      // スポットが混んだら再配置(ハンドラー/味方が近づいた)。ボールのトリガは広め(4.8m)、
+      // 味方が近い(過密)なら空きスペースへ移す。
+      if ((game.handler && dist2DTo(game.handler.pos, spot.x, spot.z) < 4.8)
+          || nearestTeammateDist(game, p) < (atPost ? 2.3 : 3.8)) {
         p.spotIdx = bestOpenSpot(game, team, spots, p);
         spot = spots[p.spotIdx];
       }
@@ -128,7 +129,7 @@ export function updateOffBallMotion(game: Game, dt: number, team: number, exclud
       }
       const sj = game.steerAround(p, spx, spz, true);   // 通り抜けず迂回
       moveToward2D(p.pos, sj.x, sj.z, p.accelToward(dt, sj.x, sj.z) * dt);
-      spacingNudge(game, dt, p, atPost ? 1.6 : 3.5);
+      spacingNudge(game, dt, p, atPost ? 2.0 : 4.2);   // 味方と近づきすぎない（間合いを広く）
       // ボールからの連続的な分離: ドリブラーが寄ってきたら離れる
       ballSpacingNudge(game, dt, p, atPost ? 2.4 : 4.6);
 
@@ -220,7 +221,7 @@ function spacingNudge(game: Game, dt: number, p: Player, min = 3.5): void {
   }
   const rl = Math.hypot(rx, rz);
   if (rl > 1e-3) {
-    const step = p.accelSpeed(dt, 0.7) * dt * Math.min(1, rl);
+    const step = p.accelSpeed(dt, 0.8) * dt * Math.min(1, rl);   // 分離を押し出す
     moveToward2D(p.pos, p.pos.x + rx / rl, p.pos.z + rz / rl, step);
   }
 }
@@ -323,6 +324,12 @@ export function bestOpenSpot(game: Game, team: number, spots: Vector3[], self: P
 
     let open = Infinity;
     for (const d of game.teamPlayers(1 - team)) open = Math.min(open, dist2DTo(d.pos, s.x, s.z));
+    // 味方から最も近い距離: 空きスペース(味方が居ない場所)を選ばせる＝密集回避
+    let mate = Infinity;
+    for (const q of game.teamPlayers(team)) {
+      if (q === self || q === game.handler) continue;
+      mate = Math.min(mate, dist2DTo(q.pos, s.x, s.z));
+    }
     const fromHandler = game.handler ? dist2DTo(game.handler.pos, s.x, s.z) : 5;
     const lane = game.handler ? laneOpenness(game, game.handler.pos, s.x, s.z) : 1;
     const clog = game.handler ? clogPenalty(game.handler.pos, rimFloor, s.x, s.z) : 0;
@@ -333,11 +340,13 @@ export function bestOpenSpot(game: Game, team: number, spots: Vector3[], self: P
     let score: number;
     if (i >= 5) {
       score = 6.0 + Math.min(open, 2.0) * 0.5 + lane * 0.8
+        + Math.min(mate, 4) * 0.3               // 味方から離れたローブロックを優先
         - clog * 2.5
         - dist2DTo(self.pos, s.x, s.z) * 0.1
         + (self.has("centerSpot") ? 1.5 : 0);
     } else {
       score = open * (self.has("positioning") ? 1.35 : 1)
+        + Math.min(mate, 7) * 0.8               // 味方から離れた空きスペースを優先（密集回避・幅を使う。開き優先は保つ）
         + Math.min(fromHandler, 6) * 0.3
         + lane * 2.0
         - clog * 2.5
