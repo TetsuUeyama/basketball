@@ -25,13 +25,15 @@ Player.prototype.gatherHold = function(world: Vector3): void {
     const domE = R ? this.elbowR : this.elbowL;
     const offP = R ? this.armPivotL : this.armPivotR;   // 添え手
     const offE = R ? this.elbowL : this.elbowR;
+    const offside = R ? -1 : 1;                          // 添え手の外側
     this.armRateCap = MOVE_RATE.reach;
-    // 利き手: ボールへ向け、前腕を内側に曲げてボールを下から支える
+    // 利き手: ボールへ向け、前腕を内側に曲げてボールを下から支える（シュートハンド）
     this.aimArm(domP, world);
     this.bendElbow(domE, 0.65);
-    // 添え手: ボール脇に添える。さらに深く曲げて前腕を内側へ（押し手にしない）
-    this.aimArm(offP, world);
-    this.bendElbow(offE, 0.9);
+    // 添え手: ボール正面でなく外側の脇へ回す（両手投げに見せない＝利き手主体）。
+    // upper を offside・やや上・前へ向け、深く曲げて手だけボール脇に添える。
+    this.setArmDir(offP, offside * 0.45, 0.35, -this.numberSide * 0.55);
+    this.bendElbow(offE, 0.95);
     this.armRateCap = 0;
 };
 

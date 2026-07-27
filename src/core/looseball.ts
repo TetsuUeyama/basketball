@@ -37,6 +37,7 @@ export function updateLoose(game: Game, dt: number): void {
 
     game.looseAge += dt;
     chaseLoose(game, dt);
+    contestShove(game, dt);   // 競り合いの押し合い: バランスで弱い方を中心からずらす
     // 確保を一拍遅らせ、争奪として見えるようにする
     if (game.looseAge >= game.looseGrabAfter) resolveLooseContact(game);
     if (game.ballMode !== "loose") return;   // このフレームで誰かが確保した
@@ -111,6 +112,32 @@ export function chaseLoose(game: Game, dt: number): void {
         moveToward2D(p.pos, spot.x, spot.z, p.accelSpeed(dt, 0.8) * dt);
         game.clampCourt(p.pos);
       }
+    }
+  }
+
+  // 競り合いの押し合い: ボール至近で相手と体が重なったら、ボディバランス差で弱い方を
+  // ボール中心から外へずらす（強い方は踏みとどまり確保に近づく）。接触点でのボックスアウト。
+  const SHOVE_RATE = 1.5;   // 最大バランス差での押し退け速度(m/s)
+export function contestShove(game: Game, dt: number): void {
+    const b = game.ball.pos;
+    const near = game.players.filter((p) => dist2DTo(b, p.pos.x, p.pos.z) < 1.6);
+    for (const p of near) {
+      // 最も近い相手（体が重なる距離のみ）
+      let q: Player | null = null, qd = 0.85;
+      for (const o of near) {
+        if (o.team === p.team) continue;
+        const dd = dist2DTo(o.pos, p.pos.x, p.pos.z);
+        if (dd < qd) { qd = dd; q = o; }
+      }
+      if (!q) continue;
+      const edge = clamp(rate(q.attr.balance) - rate(p.attr.balance), 0, 0.6);  // 相手が強い分だけ押される
+      if (edge <= 0) continue;
+      const rx = p.pos.x - b.x, rz = p.pos.z - b.z;                              // ボール中心から外向き
+      const rl = Math.hypot(rx, rz) || 1;
+      const push = edge * SHOVE_RATE * dt;
+      p.pos.x += (rx / rl) * push;
+      p.pos.z += (rz / rl) * push;
+      game.clampCourt(p.pos);
     }
   }
 

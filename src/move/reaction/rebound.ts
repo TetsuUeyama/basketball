@@ -22,6 +22,6 @@ export function looseSecureChance(p: Player, defending: boolean, looseTips: numb
 export function twoHandedCatch(p: Player, ballY: number, horiz: number, contested: boolean): boolean {
   if (contested) return false;                        // 相手と競っている → 崩れて弾く
   if (ballY < 0.9) return false;                      // 低すぎ(床際)は別処理(すくい上げ)
-  if (ballY > p.reachTopY() - 0.18) return false;     // 伸び切り(最大リーチ際) → 片手
-  return horiz <= 0.5;                                // 体の正面近く → 両手が添う
+  if (ballY > p.reachTopY() - 0.08) return false;     // 伸び切り(最大リーチ際)のみ片手 — 窓を拡大
+  return horiz <= 0.7;                                // 体の前方に添えば両手で確保 — 窓を拡大
 }
