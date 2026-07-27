@@ -15,6 +15,10 @@ export class BroadcastCamera {
   private introMode = false;
   // クラブ選択のショーケース中は true。選択チームを固定フレームで映す。
   private showcase = false;
+  // ティップオフ後の自動アングル回転(緩やかに一度だけ回し、完了でユーザー操作へ返す)。
+  private autoAngle = false;
+  private aimAlpha = -Math.PI / 2;
+  private aimBeta = 0.95;
 
   constructor(scene: Scene, canvas: HTMLCanvasElement) {
     this.cam = new ArcRotateCamera("cam", -Math.PI / 2, 0.95, 24, new Vector3(0, 1.2, 0), scene);
@@ -128,9 +132,29 @@ export class BroadcastCamera {
     this.cam.radius = 24;
   }
 
+  /** ティップオフ後、放送アングルを90°回して構える: −Xサイドからベンチ(+X)を奥に、やや斜め上から
+   *  見下ろす。緩やかに一度だけ回し、完了したらユーザーのドラッグ/ズームへ操作を返す。 */
+  orientBroadcast(): void {
+    this.autoAngle = true;
+    this.aimAlpha = -Math.PI;   // 既定 −π/2 から90°回転 → ベンチ(+X)が奥
+    this.aimBeta = 1.2;         // 水平寄り = 選手を横から見る側面ビュー(やや見下ろし)
+  }
+  /** 自動アングル回転を取り消す(新しい試合の準備など)。 */
+  cancelAutoAngle(): void { this.autoAngle = false; }
+
   update(dt: number, ballX: number, ballZ: number, ballY = 1.2, followBall = false): void {
     if (this.introMode) return;        // ツアーがカメラを支配
     if (this.showcase) return;         // ショーケースがカメラを支配
+    // ティップオフ後の自動アングル: alpha/beta を目標へ緩やかに寄せ、着いたらユーザー操作へ返す
+    if (this.autoAngle) {
+      const e = Math.min(1, dt * 0.5);   // 緩やかな回転速度
+      this.cam.alpha = lerp(this.cam.alpha, this.aimAlpha, e);
+      this.cam.beta = lerp(this.cam.beta, this.aimBeta, e);
+      if (Math.abs(this.cam.alpha - this.aimAlpha) < 0.005 && Math.abs(this.cam.beta - this.aimBeta) < 0.005) {
+        this.cam.alpha = this.aimAlpha; this.cam.beta = this.aimBeta;
+        this.autoAngle = false;
+      }
+    }
     if (!this.autoFollow) return;
     if (followBall) {
       const e = Math.min(1, dt * 5);   // ボールは速いので機敏に

@@ -110,15 +110,23 @@ ui.onUniformPreview = (cfg) => {
 
 const intro = new IntroTour(game, camera);
 
+// ティップオフ後の放送アングル自動回転(一度きり)。camTipDone=済み / camTipArmT=ティップ終了後の経過
+let camTipDone = true;
+let camTipArmT = -1;
+
 ui.onStart = () => {
   game.applyRoster();
   game.reset();            // 選手はティップオフの位置 / ベンチの座席につく
   intro.begin();
+  camera.cancelAutoAngle();
+  camTipDone = false; camTipArmT = -1;   // 新しい試合 → ティップオフ後の自動アングルを予約
 };
 
 canvas.addEventListener("pointerdown", () => {
   intro.skip();            // イントロ中はタップで即座に次のショットへ進む
+  camera.cancelAutoAngle(); // ユーザーが触れたら自動アングル回転を止める(好みの角度を保持)
 });
+canvas.addEventListener("wheel", () => camera.cancelAutoAngle());
 
 engine.runRenderLoop(() => {
   // dt をクランプし、停止/再フォーカスされたタブがシムを飛躍させないようにする
@@ -136,6 +144,12 @@ engine.runRenderLoop(() => {
     intro.abort();              // ツアーの途中で試合前へ戻る: 中止してカメラを解放
   }
   ui.update(game);
+  // ティップオフでボールが投げられ、しばらくしたら放送アングルを90°回す(ベンチを奥・やや見下ろし)。
+  // ティップオフが終わってライブになってから一定時間で一度だけ発火。
+  if (ui.playing && !intro.active() && !camTipDone) {
+    if (camTipArmT < 0) { if (game.mode !== "tipoff") camTipArmT = 0; }
+    else { camTipArmT += dt; if (camTipArmT >= 1.0) { camera.orientBroadcast(); camTipDone = true; } }
+  }
   camera.update(dt, game.ball.pos.x, game.ball.pos.z, game.ball.pos.y, game.camFollowBall);
   // クラブウィザードのユニフォームプレビューが出ている間は、専用のプレビューシーン
   // (孤立した選手、コートなし)だけをレンダリングする。それ以外はメインシーン。

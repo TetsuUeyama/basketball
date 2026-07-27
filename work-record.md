@@ -4833,3 +4833,10 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - ユーザー要望: ボールを審判が拾いに行ったら、その場所からスローワーへ投げる。
 - referees.ts: retrieveHold フラグ追加(acquireBall でクリア)。updateAcq retrieve の後半を「投げ渡し位置へ歩く」から「拾った場所に留まりボール保持+スローワー地点を向く→acqDone、btX/btZ を拾った場所に固定、retrieveHold=true」に変更。inboundSetup は retrieveHold 時は besideSpot へ歩かせず現在地(拾った場所)に固定しスローワーを向く。以降 inbound.update が ref.ballHold()(=拾った場所)からスローワーへ投げる。
 - 検証: tsc✓。⚠️投げ距離/見た目はブラウザ目視要確認(長距離なら inbound の throwDur/arc 調整可)。
+
+## 394 ティップオフ後、放送カメラを緩やかに90°回転(ベンチを奥・やや見下ろし)
+- ユーザー要望: 試合開始のティップオフでボールが投げられ少ししたら、表示を90°回転させベンチを奥に、やや斜め上から見下ろす角へ自動回転。回転は緩やか。
+- camera.ts BroadcastCamera: autoAngle/aimAlpha/aimBeta 追加。orientBroadcast() = aimAlpha=-π(既定-π/2から90°→-Xサイドからベンチ+Xを奥に)/aimBeta=0.85(やや見下ろし)。update 冒頭(intro/showcase guard後)で alpha/beta を lerp(dt*0.5=緩やか)、到達で autoAngle解除しユーザー操作へ返す。cancelAutoAngle() 追加。
+- main.ts: camTipDone/camTipArmT 追加。onStart で予約(cancel+false/-1)。renderループで !intro.active() かつ game.mode!=="tipoff"(ティップ終了)後 2.0s で orientBroadcast()一度きり。
+- コート軸: Z=長さ/X=幅、ベンチ+X。既定 alpha-π/2 は-Z奥の縦ビュー、-πで-Xからの横ビュー=ベンチ奥。
+- 検証: tsc✓。⚠️回転方向/見下ろし角(aimBeta0.85)/速度(dt*0.5)/間(2.0s)はブラウザ目視要確認・調整可。未コミット。
