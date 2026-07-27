@@ -3,21 +3,23 @@
 // 試合ロジックには関与しない演出専用。
 import { Scene, Vector3 } from "@babylonjs/core";
 import { Referee } from "../objects/referee";
-import { COURT } from "../config";
+import { COURT, OOB_WALL } from "../config";
 import type { Player } from "../objects/player/player";
 import type { Game } from "../game";
 
 interface Acquire {
-  ref: Referee; mode: "retrieve" | "throw"; t: number;
-  bx: number; bz: number;         // ボール地点(投げ元 / 拾う地点)
+  ref: Referee; mode: "retrieve" | "throw" | "return"; t: number;
+  bx: number; bz: number;         // ボール地点(投げ元 / 拾う地点 / 返球の起点)
   sx: number; sz: number;         // 審判の到達地点(投げ渡し位置 besideSpot)
   startX: number; startZ: number; // 審判の開始位置
+  benchThrower?: Player | null;   // ベンチから拾って投げ返す控え選手(いれば)
 }
 
 export class RefereeSystem {
   readonly refs: [Referee, Referee];
   private ballRef: Referee | null = null;   // ボール保持中の審判(tipoff/inbound)
   private acq: Acquire | null = null;        // 集球(拾う/受け取る)進行中
+  private retrieveHold = false;              // 審判が拾いに行った → 拾った場所からスローワーへ投げる(歩いて戻らない)
   private btX = 0; private btZ = 0;          // ボール当番が歩いて向かう所定位置(ワープ回避)
   private bfX = 0; private bfZ = 0;          // ボール当番が向く先(スローワー)
   thrower: Player | null = null;             // 審判へボールを投げ渡す選手(演出: 腕を振る)
@@ -113,6 +115,7 @@ export class RefereeSystem {
   // 「審判が拾いに行く」(OOB)、"auto"は近く(3.5m以内)に選手がいれば投げ、いなければ拾いに行く。
   // 投げ手はボールを取るチーム(possession)の最寄り選手(インバウンダー除く)。
   acquireBall(bx: number, bz: number, sx: number, sz: number, mode: "auto" | "throw" | "retrieve" = "auto"): void {
+    this.retrieveHold = false;                             // 新規集球 → 拾い留まりフラグをクリア
     const bs = this.besideSpot(sx, sz);                    // 投げ渡し位置(スローワー横)
     const ref = this.pickSideRef(sx);                      // 同サイドの審判(逆サイドが回ってこない)
     this.ballRef = ref;
@@ -126,9 +129,27 @@ export class RefereeSystem {
       this.thrower = thrower;
       this.acq = { ref, mode: "throw", t: 0, bx, bz, sx: bs.x, sz: bs.z, startX: ref.pos.x, startZ: ref.pos.z };
     } else {
-      // 近くに選手がいない/OOB → 審判が自分の位置→ボール→投げ渡し位置と歩いて拾い運ぶ。
+      // OOB。壁を越えて飛んで行った場合だけ、向こうから審判へ山なりに投げ返される(return)。
+      // コートと壁の間(アプロン)で止まった場合は今まで通り: 近くの選手/ベンチが拾って投げ、
+      // 誰も近くにいなければ審判が歩いて拾いに行く(retrieve)。ボールが勝手に審判へ飛ばない。
       this.thrower = null;
-      this.acq = { ref, mode: "retrieve", t: 0, bx, bz, sx: bs.x, sz: bs.z, startX: ref.pos.x, startZ: ref.pos.z };
+      const atWall = Math.abs(bx) >= COURT.halfW + OOB_WALL - 0.3 || Math.abs(bz) >= COURT.halfL + OOB_WALL - 0.3;
+      const bench = !atWall && bx > COURT.halfW - 0.5 ? this.nearestBenchPlayer(bx, bz) : null;
+      if (atWall) {
+        // 壁を越えた → 向こうから山なりに投げ返される
+        this.acq = { ref, mode: "return", t: 0, bx, bz, sx: bs.x, sz: bs.z, startX: ref.pos.x, startZ: ref.pos.z };
+      } else if (bench && dist2d(bench.pos, bx, bz) < 4) {
+        bench.stand();   // アプロンのベンチ付近: 控えが立って拾って投げる(腕は updateAcq が直接ポーズ)
+        this.acq = { ref, mode: "throw", t: 0, bx: bench.pos.x, bz: bench.pos.z,
+          sx: bs.x, sz: bs.z, startX: ref.pos.x, startZ: ref.pos.z, benchThrower: bench };
+      } else if (near) {
+        // アプロン: コート上の最寄り選手が拾って投げる(今まで通り)
+        this.thrower = thrower;
+        this.acq = { ref, mode: "throw", t: 0, bx, bz, sx: bs.x, sz: bs.z, startX: ref.pos.x, startZ: ref.pos.z };
+      } else {
+        // アプロンで止まり誰も近くにいない → 審判が歩いて拾いに行く(勝手に飛ばさない)
+        this.acq = { ref, mode: "retrieve", t: 0, bx, bz, sx: bs.x, sz: bs.z, startX: ref.pos.x, startZ: ref.pos.z };
+      }
     }
   }
 
@@ -140,6 +161,18 @@ export class RefereeSystem {
     for (const p of this.game.teamPlayers(this.game.possession)) {
       if (p === this.game.handler) continue;
       const d = dist2d(p.pos, x, z); if (d < bd) { bd = d; best = p; }
+    }
+    return best;
+  }
+
+  // OOB地点に最も近い着席中の控え選手(両チームのベンチから)。いなければ null。
+  private nearestBenchPlayer(x: number, z: number): Player | null {
+    let best: Player | null = null, bd = Infinity;
+    for (let t = 0; t < 2; t++) {
+      for (const p of this.game.allPlayers(t)) {
+        if (this.game.onCourt(p) || !p.seated) continue;
+        const d = dist2d(p.pos, x, z); if (d < bd) { bd = d; best = p; }
+      }
     }
     return best;
   }
@@ -156,10 +189,40 @@ export class RefereeSystem {
 
   private updateAcq(dt: number): void {
     const a = this.acq!; a.t += dt; const g = this.game;
-    if (a.t > 4) { g.ball.pos.copyFrom(a.ref.ballHold()); this.acqDone(); return; }   // 安全上限
+    if (a.t > 4) { g.ball.pos.copyFrom(a.ref.ballHold()); this.finishBench(a); this.acqDone(); return; }   // 安全上限
+    if (a.mode === "return") {
+      // 壁を越えた返球: 即座に反射させず、まず壁を貫通してさらに外へ飛んで消え(FLY)、少ししてから
+      // 壁の向こうから審判の手へ山なりに帰ってくる(RETURN)。審判は投げ渡し位置へ歩き、来る方向を向く。
+      this.walkToward(a.ref, a.sx, a.sz, dt);
+      a.ref.faceToward(a.bx, a.bz);
+      const rh = a.ref.ballHold();
+      const FLY = 0.6;      // 壁を貫通して外へ飛んで行く時間
+      // ボールが越えた壁の外向き方向と、壁の向こうの点(帰ってくる起点)
+      const outX = Math.abs(a.bx) >= COURT.halfW + OOB_WALL - 0.3 ? Math.sign(a.bx) : 0;
+      const outZ = Math.abs(a.bz) >= COURT.halfL + OOB_WALL - 0.3 ? Math.sign(a.bz) : 0;
+      const beyondX = a.bx + outX * 2.5, beyondZ = a.bz + outZ * 2.5;
+      if (a.t < FLY) {
+        // 貫通: 壁を越えてさらに外へ飛び、放物線で下へ抜けて視界外へ消える
+        const p = a.t / FLY;
+        g.ball.pos.set(a.bx + (beyondX - a.bx) * p, 1.8 - 2.2 * p * p, a.bz + (beyondZ - a.bz) * p);
+        a.ref.update(dt);
+        return;
+      }
+      // 少し置いてから、壁の向こうから審判の手へ山なりに帰ってくる
+      const k = clamp((a.t - FLY) / 1.1, 0, 1);
+      if (k < 1) {
+        const arc = 3.0 * Math.sin(k * Math.PI);   // 高い山なり
+        g.ball.pos.set(beyondX + (rh.x - beyondX) * k, 0.3 + (rh.y - 0.3) * k + arc, beyondZ + (rh.z - beyondZ) * k);
+      } else {
+        g.ball.pos.copyFrom(rh); a.ref.catch(); this.acqDone();
+      }
+      a.ref.update(dt);
+      return;
+    }
     if (a.mode === "retrieve") {
-      // 拾いに行く: 審判が自分の位置→ボール地点(拾う)→投げ渡し位置(運ぶ) と歩く。
-      const WALK = 1.0;   // 前半: ボールへ
+      // 拾いに行く: 審判が自分の位置→ボール地点へ歩いて拾い、その場所からスローワーへ投げる
+      // (投げ渡し位置まで歩いて戻らない)。
+      const WALK = 1.0;   // ボールへ歩く
       if (a.t < WALK) {
         const k = a.t / WALK;
         a.ref.pos.x = a.startX + (a.bx - a.startX) * k;
@@ -167,12 +230,15 @@ export class RefereeSystem {
         a.ref.faceToward(a.bx, a.bz);
         g.ball.pos.set(a.bx, 0.15, a.bz);   // ボールは床で待つ
       } else {
-        const k = clamp((a.t - WALK) / 1.2, 0, 1);
-        a.ref.pos.x = a.bx + (a.sx - a.bx) * k;
-        a.ref.pos.z = a.bz + (a.sz - a.bz) * k;
+        // 拾った → その場に留まってボールを持ち、スローワー地点の方を向く。以降 inbound が
+        // この場所から投げる(inboundSetup が retrieveHold で handoff 位置へ歩かせない)。
+        a.ref.pos.set(a.bx, 0, a.bz);
         a.ref.faceToward(a.sx, a.sz);
-        g.ball.pos.copyFrom(a.ref.ballHold());   // 拾って手に
-        if (k >= 1) this.acqDone();
+        g.ball.pos.copyFrom(a.ref.ballHold());
+        this.acqDone();
+        this.btX = a.bx; this.btZ = a.bz;   // 拾った場所に固定(歩かせない)
+        this.bfX = a.sx; this.bfZ = a.sz;
+        this.retrieveHold = true;
       }
     } else {
       // 選手が投げる: 審判は投げ渡し位置へ歩いて向かい(同サイド・短距離)、ボールが
@@ -182,17 +248,32 @@ export class RefereeSystem {
       const k = clamp(a.t / 0.8, 0, 1);
       const rh = a.ref.ballHold();
       this.throwAt.copyFrom(rh);   // 投げ手の選手が腕を向ける先(審判の手)
+      // ベンチの控えが投げる場合: コート外なので毎フレーム更新されない。審判の方を向かせ、両手を
+      // 審判(ボール先)へ伸ばす投げモーションを直接ポーズして描画同期する(lastDt を与えて腕をイーズ)。
+      if (a.benchThrower) {
+        const bt = a.benchThrower;
+        bt.lastDt = dt;
+        bt.faceToward(rh.x, rh.z);
+        bt.reach(new Vector3(rh.x, rh.y, rh.z), true);
+        bt.sync();
+      }
       if (k < 1) {
         const arc = 1.4 * Math.sin(k * Math.PI);
         g.ball.pos.set(a.bx + (rh.x - a.bx) * k, 1.4 + (rh.y - 1.4) * k + arc, a.bz + (rh.z - a.bz) * k);
       } else {
         g.ball.pos.copyFrom(rh);
+        this.finishBench(a);         // 控えは投げ終わって着席へ戻す
         this.thrower = null;         // 投げ終わり → 選手の投げモーション解除
         a.ref.catch();              // 審判は両手でキャッチ + 硬直
         this.acqDone();
       }
     }
     a.ref.update(dt);
+  }
+
+  // ベンチの控えが投げ終わったら着席に戻す(コート外なので明示的に座らせて同期)。
+  private finishBench(a: Acquire): void {
+    if (a.benchThrower) { a.benchThrower.sit(); a.benchThrower.sync(); a.benchThrower = null; }
   }
 
   // 集球完了: ボール当番の審判が投げ渡し位置で保持する状態へ移行(以降 inbound.update が投げる)。
@@ -210,9 +291,15 @@ export class RefereeSystem {
     const r = this.acq ? this.acq.ref : this.pickSideRef(spotX);
     this.acq = null;                 // 集球完了 → 通常の保持/投げ渡しへ
     this.ballRef = r;
-    // スローワーの横(ライン沿い、コート外)を「所定位置」に。そこへ歩いて向かう(ワープしない)。
-    const bs = this.besideSpot(spotX, spotZ);
-    this.btX = bs.x; this.btZ = bs.z; this.bfX = spotX; this.bfZ = spotZ;
+    if (this.retrieveHold) {
+      // 審判が拾いに行った → 拾った場所(現在地)からスローワーへ投げる。投げ渡し位置へ歩かせない。
+      this.retrieveHold = false;
+      this.btX = r.pos.x; this.btZ = r.pos.z; this.bfX = spotX; this.bfZ = spotZ;
+    } else {
+      // スローワーの横(ライン沿い、コート外)を「所定位置」に。そこへ歩いて向かう(ワープしない)。
+      const bs = this.besideSpot(spotX, spotZ);
+      this.btX = bs.x; this.btZ = bs.z; this.bfX = spotX; this.bfZ = spotZ;
+    }
     r.signal("hold", 99);
     return r;
   }

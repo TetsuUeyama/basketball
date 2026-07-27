@@ -83,36 +83,41 @@ export function updateCharge(game: Game, dt: number): void {
     if (!h) { game.ballMode = "held"; return; }
     game.chargeT -= dt;
     setChargeBall(game, h);   // 胸前・低めで構え、進捗で前傾＋沈み込みを深める
-    const d = game.teamPlayers(1 - h.team)[h.slot];   // シューターの担当守備者
-    const beaten = h.beatenT > 0 || h.powerT > 0;     // 抜き去った → クローズアウトが遅れる
-    if (d && !beaten) {
-      const gap = dist2D(d.pos, h.pos);
-      if (!d.airborne && d.landT <= 0) {
-        // シューターへ強くクローズアウト
-        if (gap > 0.75) {
-          const clo = d.accelToward(dt, h.pos.x, h.pos.z, 1.15) * dt;
-          moveToward2D(d.pos, h.pos.x, h.pos.z, clo);
-          game.clampCourt(d.pos);
-        }
-        // リリースが近づくと、近くの守備者が踏み切って挑む —
-        // 反応/守判断 がタイミング、ジャンプ が高さ
-        if (game.chargeT < 0.13 && gap < 1.7) {
-          const read = rate(d.attr.reaction) * 0.5 + rate(d.attr.defense) * 0.5;
-          if (chance((0.25 + read * 1.5) * dt * 9)) game.contestLeap(d, h.pos, leapHeight(d), 0.6);
-        }
+    // コンテスト候補: シューターの担当守備者と、最寄りの守備者。溜め中は updateCharge しか
+    // 動かない(他守備者は停止)ため、担当がサグ/振り切られて離れていても、近くの助けが
+    // クローズアウト＆コンテストに飛べるよう最寄りも動かす。
+    const man = game.teamPlayers(1 - h.team)[h.slot];   // シューターの担当守備者
+    const nd = game.nearestDefender(h);
+    const ndGap = nd ? dist2D(nd.pos, h.pos) : 99;
+    const beaten = h.beatenT > 0 || h.powerT > 0;       // 抜き去った担当 → クローズアウトが遅れる
+    const contesters: Player[] = [];
+    if (man && !beaten) contesters.push(man);           // 担当: 抜かれていなければ閉じる
+    if (nd && nd !== man) contesters.push(nd);          // 最寄りの助け: 担当が離れていても飛べる
+    for (const c of contesters) {
+      if (c.airborne || c.landT > 0) continue;
+      const gap = dist2D(c.pos, h.pos);
+      // シューターへ強くクローズアウト
+      if (gap > 0.75) {
+        moveToward2D(c.pos, h.pos.x, h.pos.z, c.accelToward(dt, h.pos.x, h.pos.z, 1.15) * dt);
+        game.clampCourt(c.pos);
+      }
+      // リリースが近づくと踏み切って挑む — 反応/守判断=タイミング、ジャンプ=高さ。
+      // クローズアウトが届いた間合い(~2.2m)まで拾い、寄っても飛ばない事態を防ぐ。
+      if (game.chargeT < 0.16 && gap < 2.2) {
+        const read = rate(c.attr.reaction) * 0.5 + rate(c.attr.defense) * 0.5;
+        if (chance((0.25 + read * 1.5) * dt * 9)) game.contestLeap(c, h.pos, leapHeight(c), 0.6);
       }
       // ギャザー中のストリップ: 頭上に溜められたボールを守備者がはたく。長いギャザーほど
       // 弾かれやすく、高いボールに届く必要がある(空中だと有利)。背の高いシューターは遠ざける。
       if (gap < 1.2) {
-        const poke = defHands(d);
-        const secure = rate(h.attr.handling) * 0.5 + clamp((h.height - d.height) * 0.6, -0.15, 0.35);
-        const reach = d.airborne ? 1.3 : 0.5;   // ボールは頭上 — 跳んで届く必要がある
-        if (chance(Math.max(0, poke - secure) * reach * dt * 5)) { stripGather(game, h, d); return; }
+        const poke = defHands(c);
+        const secure = rate(h.attr.handling) * 0.5 + clamp((h.height - c.height) * 0.6, -0.15, 0.35);
+        const reach = c.airborne ? 1.3 : 0.5;   // ボールは頭上 — 跳んで届く必要がある
+        if (chance(Math.max(0, poke - secure) * reach * dt * 5)) { stripGather(game, h, c); return; }
       }
     }
     // リリース判断: 溜め完了(chargeT≤0)で通常リリース。状況で早め(急ぎ撃ち)/遅め(ホールド)。
-    const nd = game.nearestDefender(h);
-    const gap = nd ? dist2D(nd.pos, h.pos) : 99;
+    const gap = ndGap;
     const panic = game.shotClock < 0.5 || (game.gameClock > 0 && game.gameClock < BUZZER_WINDOW);
     const blockImminent = !!nd && nd.airborne && gap < 1.6;   // 守備者が跳んでブロックに来た
     if (game.chargeT > 0) {
@@ -407,6 +412,10 @@ export function aimShotTarget(game: Game, dHoop: number): void {
     const zSign = Math.sign(rim.z) || 1;
     game.shotTarget.x = rim.x + rand(-1, 1) * scatter;
     game.shotTarget.z = rim.z + zSign * rand(0.05, 0.3 + scatter * 0.5);   // 奥へ(バックボード寄りに)偏らせる
+    // バックボードより奥を狙わない: ボールの表面が板の面に触れるまで(中心はその半径ぶん手前)に留め、
+    // スクリプトの飛翔で板をめり込み突き抜けないようにする。板に当たった球は以後ルーズ物理で反射する。
+    const maxZ = RIM.backboardZ - 0.025 - 0.12;                             // 板の面 − ボール半径
+    if (Math.abs(game.shotTarget.z) > maxZ) game.shotTarget.z = zSign * maxZ;
     game.shotTarget.y = RIM.height + rand(-0.2, 0.5);
   }
 

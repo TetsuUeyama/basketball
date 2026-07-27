@@ -75,12 +75,14 @@ Player.prototype.updateLegs = function(dt: number): void {
     // numberSide に紐づく——両チームともどちらの端を攻めても前に歩き、膝を後ろへ
     // 曲げる。
     const ns = this.numberSide;
+    // 背負い(バックダウン)中は振りを反転し、背中向きのまま後ろへ(リムへ)ステップする。
+    const dir = this.postT > 0 ? -ns : ns;
     const sL = Math.sin(this.stridePhase), sR = Math.sin(this.stridePhase + Math.PI);
-    setJoint(this.hipL, JOINT.hip, sL * amp * ns);          // + 位相で足を前へ振る
-    setJoint(this.hipR, JOINT.hip, sR * amp * ns);
+    setJoint(this.hipL, JOINT.hip, sL * amp * dir);          // + 位相で足を前へ振る(背負い時は後ろへ)
+    setJoint(this.hipR, JOINT.hip, sR * amp * dir);
     const bend = 0.5 + frac * 0.6;
-    setJoint(this.kneeL, JOINT.knee, -Math.max(0, sL) * bend * ns);   // 前方への振りで脛が後ろへ流れる
-    setJoint(this.kneeR, JOINT.knee, -Math.max(0, sR) * bend * ns);
+    setJoint(this.kneeL, JOINT.knee, -Math.max(0, sL * (this.postT > 0 ? -1 : 1)) * bend * ns);   // 振り脚で脛が流れる
+    setJoint(this.kneeR, JOINT.knee, -Math.max(0, sR * (this.postT > 0 ? -1 : 1)) * bend * ns);
 };
 
   // どんぐりの靴のペンギン歩き: 移動中は足が素早いつま先上げのパタパタを交互に

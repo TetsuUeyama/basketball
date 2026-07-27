@@ -11,6 +11,7 @@ declare module "./player" {
     buildHairMeshes(style: number): void;
     applyLook(): void;
     setNumberSide(sign: number): void;
+    setJerseyMark(text: string, color: string): void;
     applyModel(): void;
     refreshScale(): void;
     refreshBodyDepth(): void;
@@ -155,10 +156,11 @@ Player.prototype.setNumberSide = function(sign: number): void {
     this.sideApplied = true;
     this.numberSide = sign >= 0 ? 1 : -1;
     const human = HUD_OPTS.model === "human";
-    this.numHumanPlus.isVisible = human && sign > 0;
-    this.numHumanMinus.isVisible = human && sign < 0;
-    this.numAcornPlus.isVisible = !human && sign > 0;
-    this.numAcornMinus.isVisible = !human && sign < 0;
+    const both = this.numBothSides;   // 審判のマークは前後両面に表示
+    this.numHumanPlus.isVisible = human && (sign > 0 || both);
+    this.numHumanMinus.isVisible = human && (sign < 0 || both);
+    this.numAcornPlus.isVisible = !human && (sign > 0 || both);
+    this.numAcornMinus.isVisible = !human && (sign < 0 || both);
     this.armPivotL.position.z = -this.numberSide * 0.06;
     this.armPivotR.position.z = -this.numberSide * 0.06;
     // つま先は胸/腕と同じ方向（前 = -numberSide·Z）を指すので、-Zを攻めるチームが
@@ -189,6 +191,24 @@ Player.prototype.setNumberSide = function(sign: number): void {
       this.foldSeatedLegs();   // 着席の折り畳みを正しい向きに保つ
       if (HUD_OPTS.model === "acorn") this.foldAcornSeat();
     }
+};
+
+  /** 背番号デカールを任意の文字（指定色）に差し替え、前後両面へ表示する。
+   *  審判用: 背番号の代わりに大きな極太の「R」を胸と背中に付ける。 */
+Player.prototype.setJerseyMark = function(text: string, color: string): void {
+    const ctx = this.numTex.getContext() as unknown as CanvasRenderingContext2D;
+    ctx.clearRect(0, 0, 128, 128);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "900 106px sans-serif";       // 大きく極太
+    ctx.lineWidth = 8;                        // フチをなぞってさらに太らせる
+    ctx.fillText(text, 64, 70);
+    ctx.strokeText(text, 64, 70);
+    this.numTex.update();
+    this.numBothSides = true;
+    this.setNumberSide(this.numberSide || 1);   // 前後両面のシェルを表示する
 };
 
   /** モデル切替（人型 ⇄ どんぐりカプセル）: 選択中のボディだけを表示し、腕の

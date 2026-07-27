@@ -15,3 +15,13 @@ export function looseSecureChance(p: Player, defending: boolean, looseTips: numb
   if (looseTips >= 3) secure = 1;      // ピンボール化させない
   return clamp(secure, 0.1, 0.96);
 }
+
+// 両手キャッチ判定: ボールが体の正面近く(横に伸び切っていない)で、最大リーチに余裕を
+// 残して届き、近い相手に競り負けていない好位置なら「両手で掴んだ」= 確保。満たさない
+// 接触(伸び切り/横づかみ/密接な競り)はタップ(弾き)になる。horiz=選手からボールの水平距離。
+export function twoHandedCatch(p: Player, ballY: number, horiz: number, contested: boolean): boolean {
+  if (contested) return false;                        // 相手と競っている → 崩れて弾く
+  if (ballY < 0.9) return false;                      // 低すぎ(床際)は別処理(すくい上げ)
+  if (ballY > p.reachTopY() - 0.18) return false;     // 伸び切り(最大リーチ際) → 片手
+  return horiz <= 0.5;                                // 体の正面近く → 両手が添う
+}

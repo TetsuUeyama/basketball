@@ -80,6 +80,13 @@ export function updateFacing(game: Game, dt: number): void {
         if (dist2D(p.pos, b) > 0.5) p.faceChestToward(b.x, b.z);
         continue;
       }
+      // スローイン: 投げ手(スローワー)は審判(＝ボールの来る方向)へ胸を向けて両手で受ける。
+      // 審判不在のフォールバック時はボールが自分の手元にあり向きが退化するので通常処理に任せる。
+      if (game.ballMode === "inbound" && p === game.handler && game.referees.onBallRef) {
+        const ref = game.referees.onBallRef;
+        p.faceChestToward(ref.pos.x, ref.pos.z);
+        continue;
+      }
       // キャッチをまとめている間(gatherT): 上体をひねって胸を最寄り守備者から背け、
       // ボールを隠す。守備者がいなければキャッチ姿勢を保つだけ。
       if (p === game.handler && p.gatherT > 0 && p.catchIntent === "shield") {
@@ -111,7 +118,13 @@ export function updateFacing(game: Game, dt: number): void {
           continue;
         }
       }
-      const aim = (p === game.handler || p === game.shooter) ? game.attackFloor(p.team) : b;
+      let aim: { x: number; z: number } = (p === game.handler || p === game.shooter) ? game.attackFloor(p.team) : b;
+      // 背負い(ポストアップ): 胸をリムと反対へ向ける=背中をリムへ。既存のバックペダル処理で
+      // 脚も背中向きのままリムへ押し込む。狙いをリムの反対点に置き換えるだけで成立する。
+      if (p === game.handler && p.postT > 0) {
+        const rim = game.attackFloor(p.team);
+        aim = { x: p.pos.x + (p.pos.x - rim.x), z: p.pos.z + (p.pos.z - rim.z) };
+      }
       // 下半身: 走っている間、脚は進行方向を向き、胴体はプレイの方へひねる(twistToward)。
       // 目標から遠ざかる（バックペダル）ときは脚も正対を保つ。静止すると全身が正対する。
       let lx = aim.x, lz = aim.z;

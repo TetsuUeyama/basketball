@@ -4732,3 +4732,104 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - inbound.ts: 投げ渡し前に ref.frozen(キャッチ硬直)を待つ。signal("pass")。P速度で throwDur(50→0.6s)、P精度で着弾ぶれ passOff(50→±0.3m)。
 - 検証: tsc✓/vite build✓/tipoff Y=5/回帰 BLUE35.5・全勝・NaN無し・完走。
 - ⚠️見た目(両手キャッチ/パスモーション/足速/硬直)はブラウザ目視要確認。
+
+## 378 リバウンド両手キャッチ/空中プットバック・アウトレット＋守備の再発バグ2件を修正
+- リバウンド機能追加(未コミット): 好位置で両手が添えば確定キャッチ・崩れ(伸び切り/横/競り)はタップ(rebound.ts twoHandedCatch, looseball.ts resolveLooseContact/contactLooseBall)。空中確保はそのままプットバック(OFFリバ&リム3.5m内)かアウトレット/キック(offense.ts reboundAirAction, player.reboundGo/reboundPutback)。
+- 守備再発バグ調査: ユーザー指摘「①誰も止めてないのに進路を開け他をマークしに行く ②3P溜め中に誰も飛ばない/近づかない」。git diff で自分の未コミット差分(offense/looseball/rebound/player*)は defense.ts/shooting.ts 未変更=原因でないと確認。
+- 原因①: bc4c783 が off-ball を help-sag→deny に置換。ドライブ中も deny 優先でヘルプに潰れず外へ出て進路を開けていた。→ driveLive(beatenT/powerT>0)中は deny を止め help-sag に戻す(defense.ts)。
+- 原因②: 溜め中は updateCharge のみ稼働しコンテストはスロット担当1人限定＋91154d7で溜め短縮。担当がサグ位置だと誰も寄れない。→ 最寄り守備者も contesters に加えクローズアウト＆コンテスト、跳躍間合いを1.7→2.2m/chargeT0.13→0.16へ(shooting.ts updateCharge)。
+- 検証: tsc✓。⚠️守備の失点バランス(deny/ヘルプ/被3P%)と見た目はヘッドレス/静的検証不可。ブラウザ実機+実測(BLUE値)で要確認。
+
+## 379 プレス詰めの棒立ち(急停止rootT)修正＋低ハンドラーはダブルチームで即捌く
+- ①「プレスに行った守備者が棒立ち」の原因確定: 重心/leanでなく tickMotion の急停止プラント。ダッシュで詰め moveToward2D が目標へスナップ→1フレームで速度が高→~0→psp>3&sp<2&shed>0.4 で plantT に加え rootT(完全硬直)が付き accelSpeed=0 で動けない(敏捷低いほど0.4〜0.6s)。→ 急停止は plantT(再加速スロットル)のみ残し rootT を付けない(run.ts)。切り返し=カットプラントの rootT は据置。副作用: 攻守とも急停止後すぐ動ける(スライド可・再ダッシュは throttle)。
+- ②低ハンドラーのダブルチーム: keepDribbleDecide が pass 不成立時にシールド/リムへにじり寄りで抱え込んでいた。→ 先頭に doubleTeamed(h) 分岐を追加し pass→trapKickOut→retreatFromTrap で即捌く/圧から後退(組み立てに加わらない)。
+- 反省: ①の初回説明で現象(プレス詰め)を確認せず lean/着地/プラントを並べた雑な解説をした。以後は該当パスを特定してから答える。
+- 検証: tsc✓。⚠️守備の詰め/被ドライブと TO 率のバランスはヘッドレス不可、実機+実測要。
+
+## 380 フルコートプレスのセーフティが固定点で棒立ち → ボール連動の動的セーフティに
+- ユーザー指摘の「プレスで特定の1人がボールに寄らず遠くで突っ立つ」を runPress 精査で特定: 5役のうち safety だけが tx=0/tz=リム-6m の完全固定点で、ボール/相手に非連動→到達後プレス中ずっと静止(defense-schemes.ts)。他4役(primary/trapper/deny×2)はボール/マークを追う。
+- 修正: safety を towardPoint(リム→ボール, 7m)+tx中央クランプ(±3.5)に変更しボールのサイド/進行へ連動(静止解消)。util import に towardPoint 追加。
+- 注意: safety が後方に残るのは over-the-top 防止の意図的配置。全面プレス(セーフティ廃止で全員圧)を望む場合は別途 scheme 変更(ロングパス被弾増=実測要)。ユーザー確認待ち。
+- 反省: 棒立ちの原因を2度誤診(lean→急停止rootT)。3度目は現象を「収束後停止/そもそも寄らない」に切り分け、後者=固定目標の safety と特定してから修正。
+- 検証: tsc✓。⚠️見た目/被ロングパスは実機要確認。
+
+## 381 リバウンド/スティール/ルーズ確保のボールワープ解消＋立ちリバウンドの手上げ
+- ①ワープ解消: secureLoose がボールを手元へスナップ(低球=XZを選手へ瞬間移動/高球=次tickでキャリー位置へ落下)していた。→ 確保時にボールの実位置を grabFrom(X/Y/Z) に記録し、距離に応じた pickupT(0.2〜0.42s)を張るだけにしてスナップ廃止。liveball の pickup 補間を「grabFrom→手元ポケット(chestFront)へ地続きに補間」に変更(高球=降ろす/横=引き寄せる/床=すくい上げ)。Player に grabFromX/Y/Z 追加。reboundGo(空中プットバック/アウトレット)時も設定=不成立で着地した場合のワープも防止(putback/pass成立時はballMode変化でpickup未消費)。
+- ②立ちリバウンドの手上げ: poses.ts loose 時、従来は空中の選手しかボールへ手を出していなかった。→ looseIsRebound かつ b.y>1.1 で、ジャンプしていない近接(2.0m)選手も reachBall(両手)で上へ手を伸ばして確保にいくよう追加。確保中(pickupT>0)は held ポーズで holdBallHands し、降ろされるボールを両手で追う。
+- 対象外: パス受け/インターセプト(passing.ts)は受け手とボールが出会う点でスナップ=実質地続き(Y1.1→1.0)のため据置。ドリブルスティールの初弾(game.steal)は手元から弾かれる小移動+速度ありで据置。
+- 検証: tsc✓。⚠️見た目(降ろし/手上げ)はブラウザ目視要確認。
+
+## 382 フィジカル型のポストアップ押し合いを実装(ハンドリング非依存)
+- 設計指摘(ユーザー): ハンドリングが低くてもC/PFは背中で押し込んでゴール下を確保するのが本業。低ハンドル=シールド/組み立て回避(keepDribble)に回すとフィジカル型が丸ごと無価値になる。守備側もフィジカルで押し負けない役割が要る。
+- 原因: 低dribbleAccのビッグは mustKeepDribble に捕まり keepDribbleDecide(シールド/じりじり)へ→postMove(ポストアップ)に到達せず。到達しても postMove は目標をリムに置くだけで押し合いの決着が無い=ゴール下でついてるだけ。オンボールの背負い押し合い機構が未実装だった。
+- 修正: ①mustKeepDribble を、ビッグ/post持ちがリム6.5m内なら false に(シールドに回さずポストアップへ通す)。②postMove を背負い押し合いに: 守備者が背後密着なら powerT を張り、edge=balance*0.55+post0.2 − 守balance*0.5 − 守defense*0.15 で押し込み強度/長さをスケール。既存 powerT 前進+壁判定(balance+defense)を再利用=押し込めれば前進→dHoop<1.8でfinishAtRim、押し負ければ壁→stalledT→キック/リトリート。接触の強さは既存属性 balance(=ボディバランス「接触時の強さ」)で表現(独立 tip 属性は無し)。
+- 未対応(次段): 背中で押す back-down アニメ。ロジック挙動を確認してから足す(アニメは目視検証不可のため同時に積まない)。共有 powerT 壁への tip/balance 追加(守備強化)も調整余地として保留。
+- 検証: tsc✓。⚠️ポスト得点率・押し合いバランスは実測要、挙動はブラウザ目視要確認。
+
+## 383 背負い(バックダウン)アニメ実装: 背中をリムへ+バック歩き
+- 前回382はロジックのみでアニメ未実装だった(=背負いの見た目が出ず目視確認不能)。ユーザー指摘を受けアニメ実装。
+- postT タイマー新設(player.ts/resetPose/tickCooldown)。postMove が powerT と同時に張り、壁stop でクリア。
+- updateFacing(visuals.ts): postT>0 の間、狙いをリムの反対点に置換→胸がリムと反対=背中がリムへ。既存バックペダル処理で脚も背中向きのままリムへ。
+- updateLegs(locomotion.ts): postT>0 の間ストライドの振り(hip/knee)を反転→後ろ(リム方向)へステップ=バック歩き。postT でスコープし他選手に影響なし。
+- 未対応: off-arm の前腕バー(背中で押し返すポーズ)は未実装。脚の反転は近似。
+- 検証: tsc✓。⚠️見た目(背中向き/バック歩き/ムーンウォーク有無)はブラウザ目視要確認。
+
+## 384 バックコート違反多発の修正: trapKickOut にバックコート除外が無かった
+- ユーザー指摘: バックコート違反が多発。受け手は明らかにセンター未通過(=狙って投げている、ズレではない)。
+- 調査: 違反発火は passing.ts:294 の over&back 1箇所のみ。chooseReceiver / betterOptionAvailable は frontT && attackSign*pos.z<0.4 でバックコートの味方を除外済み。だが force パス経路の trapKickOut(offense.ts:647) は「最もオープンな味方」を選ぶだけでバックコート判定が無く、後方の後追い(誰も見ておらず最オープン)へ強制キック→違反。トラップ/ダブルは頻発、かつ379で keepDribbleDecide にも trapKickOut を追加済み=多発。
+- 修正: trapKickOut のループ先頭に frontT && attackSign(h.team)*mate.pos.z<0.4 の除外を追加。
+- 途中の誤診(パスのリード/はずれでキャッチ点がバックコートへ→passCatchクランプ)は撤去済み。受け手が明らかにフロントの件と矛盾するため。
+- 検証: tsc✓。⚠️多発が止まるかは実機確認要。残る場合は別の未除外 force 経路。
+
+## 385 審判の見た目: 背番号→丸囲みR(前後両面)＋2人で別髪型
+- Player: numTex をフィールド化(this.numTex=numTex)、numBothSides フラグ追加。setNumberSide を両面対応(numBothSides なら前後シェル両方 isVisible)。setJerseyMark(text,circled) 新設=numTex を〇囲み文字に再描画し numBothSides=true→両面表示。
+- Referee: 構築時 look=resolveLook([2,0,style]) で髪型指定(審判1=10 ロング肩まで / 審判2=9 センター分け=ミディアム暫定)。recolor 後に body.setJerseyMark("R", true) で胸+背中に丸囲みR。
+- 検証: tsc✓。⚠️見た目(丸囲みR/両面/髪型)はブラウザ目視要確認。ミディアム相当の専用スタイルが無く 9 で暫定。
+
+## 386 審判の投げ渡し: スローワーが審判を向いて両手で受ける
+- visuals.ts updateFacing: ballMode="inbound" かつ handler(=スローワー)なら onBallRef の方へ faceChestToward。審判不在(onBallRef無)時はボールが自分の手元で向きが退化するのでガードして通常処理へ。
+- poses.ts "inbound": reach(b) → reach(b, true) で両手受け/保持。
+- 検証: tsc✓。⚠️見た目(審判を向く/両手受け)はブラウザ目視要確認。
+
+## 387 スローイン: 審判から受けて即投げるのを、一拍おいてから投げ入れるように
+- inbound.ts: 投げ渡し完了(throwT<=0)で即 g.throwIn していたのを、caught=true/holdT=rand(0.6,0.9) をセットして保持へ。update 冒頭(acqActive の後)に caught 分岐を追加=ボールを手元(inb,1.3)に保持し holdT 消化後に throwIn。inboundDone は完了時に呼ぶので保持中は onBallRef=null→スローワーはコート向きに戻る。
+- caught は refRelay/beginRefThrow/finishOOB でリセット。
+- 検証: tsc✓。⚠️間の長さ/見た目はブラウザ目視要確認(調整は rand(0.6,0.9))。
+
+## 388 OOB回収: 審判が歩いて拾うのをやめ、山なり返球＋ベンチ控えの投げ返しに
+- ユーザー要望: OOBで壁に当たって跳ね返る→跳ね返さずそのまま消えて審判へ山なりに帰る/ベンチ付近で止まったらベンチ選手が拾って投げる。
+- referees.ts: OOB(acquireBall の retrieve 分岐)を廃し、OOB地点で分岐。
+  - return モード新設: ボールが a.bx,bz→審判の手へ arc=3.0*sin の山なりで帰る(1.1s)。審判は投げ渡し位置へ歩き来る方向を向いて catch。壁反射は起きない(元々 loose は reflect=false)。
+  - ベンチ判定: bx>halfW-0.5 かつ nearestBenchPlayer(着席控え, 両チーム allPlayers から onCourt/seated で抽出)が4m以内なら mode="throw"+benchThrower。控えを stand→updateAcq で lastDt/faceToward/reach(両手)/sync を直接駆動して投げモーション、完了で sit(finishBench)。
+  - 旧 retrieve 分岐コードは到達しないが安全網として残置。得点後/ファウルの on-court 投げは不変。
+- 検証: tsc✓。⚠️弧の高さ/返球速度/ベンチ判定/控えポーズはブラウザ目視要確認(3.0/1.1s/4m 等調整可)。
+
+## 389 OOB回収の再調整: 山なり返球は「外壁到達時」のみ、アプロンは従来通り選手が投げる
+- ユーザー補足: 山なり返球は外側の壁まで達した場合の話。壁より手前(アプロン=フィールド外だが壁未満)は今まで通り選手が投げて渡す。
+- referees.ts acquireBall の OOB 分岐に atWall 判定を追加(|bx|>=halfW+OOB_WALL-0.3 || |bz|>=halfL+OOB_WALL-0.3)。
+  - atWall → return(山なり)。
+  - アプロン(!atWall) → ベンチ付近なら控え投げ、else 最寄りコート選手が near(3.5m)なら投げ、どちらも無ければ return フォールバック。
+- OOB_WALL を import 追加。looseball:29 が壁到達、looseT セーフティがアプロン停止でそれぞれ OOB を起こすので地点距離で判別可能。
+- 検証: tsc✓。⚠️壁/アプロンの切替と見た目はブラウザ目視要確認(0.3/4m/3.5m 調整可)。
+
+## 390 バックボード物理を追加(反射＋ボール半径)。中心貫通で真下落下を修正
+- ユーザー指摘: ボードに当たったボールが反射せず真下に落ちる/板がボールの中心に当たる(半径未考慮)。
+- 原因: backboardZ は court.ts の描画のみで物理衝突が無い。加えて aimShotTarget のミスの的が z=rim.z+最大~0.775=~13.78 と板(13.6)奥まで散り、スクリプト飛翔で板を中心貫通していた。
+- ball.ts: BALL.radius=0.12/boardBounce=0.6 追加。BOARD 面寸法(faceZ=backboardZ-0.025, halfW0.9, yBot/yTop=height+0.3±0.525)。bounceOffBoard() を新設し stepBallFlight で常時呼ぶ(reflect非依存)。表面(中心±r)で判定し面に接する位置へクランプ+vel.z反転。両エンド対応。
+- shooting.ts aimShotTarget: ミスの的 z を |z|<=backboardZ-0.025-0.12(=13.455) にクランプ=中心が板を突き抜けない。板に触れた後はルーズ物理で反射。made/startRebound は板から離れる向きなので誤反射しない。
+- 検証: tsc✓。⚠️反発強さ/当たり範囲はブラウザ目視要確認(boardBounce=0.6 調整可)。
+
+## 391 OOB: アプロン停止で誰も近くにいない時は審判が拾いに行く(returnフォールバックを廃止)
+- ユーザー補足: コートと壁の間(アプロン)で止まったボールが勝手に審判へ飛ぶ(return)のは不可。その場合は審判が歩いて拾いに行く。山なり投げ返しは壁を越えて飛んだ場合のみ。
+- referees.ts acquireBall: 分岐を atWall→return / アプロン(bench近→bench投げ / near→コート選手投げ / それ以外→retrieve) に整理。アプロンの最終フォールバックを return から retrieve(審判が歩いて拾う)へ変更。
+- 検証: tsc✓。⚠️切替と見た目はブラウザ目視要確認。
+
+## 392 壁越え返球を「即反射」から「貫通→少し置いて山なり帰還」に
+- ユーザー要望: 壁で即反射でなく、壁を貫通し少ししてから帰ってくる。
+- referees.ts updateAcq の return モードを2段階に。FLY(0.6s): OOB地点→壁の外2.5m先へ飛ばし y=1.8-2.2p^2 で下へ抜け視界外へ消える。以降1.1s: 壁の向こう(beyond)から審判の手へ arc=3.0*sin の山なりで帰り、catch→acqDone。越えた壁の外向きは OOB地点の |bx|/|bz| >= half+OOB_WALL-0.3 から判定。合計1.7s<pause2.6s。
+- 検証: tsc✓。⚠️見た目(貫通消失/帰還の間・弧)はブラウザ目視要確認(2.5m/0.6s/3.0 調整可)。
+
+## 393 審判が拾いに行った時は、拾った場所からスローワーへ投げる(歩いて戻らない)
+- ユーザー要望: ボールを審判が拾いに行ったら、その場所からスローワーへ投げる。
+- referees.ts: retrieveHold フラグ追加(acquireBall でクリア)。updateAcq retrieve の後半を「投げ渡し位置へ歩く」から「拾った場所に留まりボール保持+スローワー地点を向く→acqDone、btX/btZ を拾った場所に固定、retrieveHold=true」に変更。inboundSetup は retrieveHold 時は besideSpot へ歩かせず現在地(拾った場所)に固定しスローワーを向く。以降 inbound.update が ref.ballHold()(=拾った場所)からスローワーへ投げる。
+- 検証: tsc✓。⚠️投げ距離/見た目はブラウザ目視要確認(長距離なら inbound の throwDur/arc 調整可)。

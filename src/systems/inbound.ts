@@ -12,6 +12,8 @@ export class InboundSystem {
   private threw = false;             // 審判がスローワーへ投げ始めたか
   private throwT = 0;                // 審判→スローワーの投げ渡しの残り時間
   private throwDur = 0.55;           // 投げ渡しの所要時間(P速度で決まる)
+  private caught = false;            // スローワーが審判からの投げ渡しを受け取った(=間を置いてから投げ入れる)
+  private holdT = 0;                 // 受け取り後、投げ入れるまでの間(秒)
   private passOffX = 0;              // パスの着弾ぶれ(P精度で決まる)
   private passOffZ = 0;
   receiver: Player | null = null;   // 受け手
@@ -91,14 +93,14 @@ export class InboundSystem {
   // taker がスローイン地点に着いていること前提。審判が taker へ投げ渡す。
   // コート上のボールを 選手→審判→スローワー で投げ渡す(得点後/ファウル等)。taker は地点に立つ。
   refRelay(taker: Player): void {
-    this.threw = false;
+    this.threw = false; this.caught = false;
     // ボール地点の近くに選手がいれば「選手→審判へ投げ渡し」、いなければ「審判が拾いに行く」を
     // 自動判定(acquireBall 内)。集球完了後、審判がスローワーへ投げ渡す(update)。
     this.game.referees.acquireBall(this.game.ball.pos.x, this.game.ball.pos.z, taker.pos.x, taker.pos.z, "throw");
   }
 
   beginRefThrow(taker: Player): void {
-    this.threw = false;   // 審判は既にボールを保持済み → update が投げ渡す
+    this.threw = false; this.caught = false;   // 審判は既にボールを保持済み → update が投げ渡す
     this.game.referees.inboundSetup(taker.pos.x, taker.pos.z);
   }
 
@@ -116,7 +118,7 @@ export class InboundSystem {
     g.resetMotion();
     this.receiver = this.pickReceiver(taker);
     if (g.isBig(taker) && taker.evalRole !== "プレイメイキングビッグ") taker.frontRunT = 8;
-    this.threw = false;   // 集球(拾う/選手が投げる)は pause 中に済み → update が投げ渡す
+    this.threw = false; this.caught = false;   // 集球(拾う/選手が投げる)は pause 中に済み → update が投げ渡す
     g.referees.inboundSetup(taker.pos.x, taker.pos.z);
     this.oobWalker = null;
   }
@@ -162,10 +164,18 @@ export class InboundSystem {
     // 再開の演出: 集球中(選手が審判へ投げる/審判が拾いに行く)は referees が管理。集球完了後、
     // 審判がスローワーへ投げ渡してから投げ入れる。
     const refs = g.referees;
-    const ref = refs.onBallRef;
     if (refs.acqActive) {
       return;   // 集球中: ボールは updateAcq が管理。まだ投げ入れない。
     }
+    // 受け取った後は少し持ってから投げ入れる(審判から受けて即投げるのを防ぐ)。この間はボールを
+    // 手元に保持し、スローワーはコート(リム方向)へ向き直る(onBallRef は inboundDone で消えている)。
+    if (this.caught) {
+      g.ball.pos.set(inb.pos.x, 1.3, inb.pos.z);
+      this.holdT -= dt;
+      if (this.holdT <= 0) g.throwIn(inb);
+      return;
+    }
+    const ref = refs.onBallRef;
     if (ref) {
       if (ref.frozen && !this.threw) { g.ball.pos.copyFrom(ref.ballHold()); return; }   // キャッチ硬直中は待つ
       // 集球完了 → 審判がスローワーへパスモーションで投げ渡す。P速度で速さ、P精度で着弾ぶれ。
@@ -181,7 +191,8 @@ export class InboundSystem {
       const h = ref.ballHold();
       const tx = inb.pos.x + this.passOffX, tz = inb.pos.z + this.passOffZ;
       g.ball.pos.set(h.x + (tx - h.x) * k, h.y + (1.3 - h.y) * k + 0.9 * Math.sin(k * Math.PI), h.z + (tz - h.z) * k);
-      if (this.throwT <= 0) { refs.inboundDone(); g.throwIn(inb); }
+      // 投げ渡し完了 → すぐには投げ入れず、受け取りの間(holdT)を置いてから投げ入れる。
+      if (this.throwT <= 0) { refs.inboundDone(); this.caught = true; this.holdT = rand(0.6, 0.9); }
     } else {
       g.ball.pos.set(inb.pos.x, 1.3, inb.pos.z);  // 審判不在時はスローワーの手に
       this.t -= dt;

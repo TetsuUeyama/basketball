@@ -28,6 +28,12 @@ function clockPush(game: Game, frac: number): number {
 }
 
 export function runOffense(game: Game, dt: number, h: Player): void {
+    // 空中でリバウンドを掴んだ直後: 着地を待たず、そのままプットバック/アウトレットへ。
+    if (h.reboundGo) {
+      h.reboundGo = false;
+      reboundAirAction(game, h);
+      if (game.ballMode !== "held") return;   // 撃った/投げた → このtickは終了
+    }
     const team = h.team;
     const rimFloor = game.attackFloor(team);
     const dHoop = dist2D(h.pos, rimFloor);
@@ -97,6 +103,7 @@ export function runOffense(game: Game, dt: number, h: Player): void {
           - rate(h.attr.balance) * 0.75 - (h.has("post") ? 0.15 : 0);
         if (chance(clamp(stop, 0, 0.85) * dt * 2.5 * (0.55 + overlap * 0.9))) {
           h.powerT = 0;
+          h.postT = 0;                                   // 背負い終了(壁で止められた)
           h.stalledT = rand(0.3, 0.5);                   // 壁で止められた
           dm.defWin("stop");                             // 踏ん張った
         }
@@ -141,6 +148,17 @@ export function runOffense(game: Game, dt: number, h: Player): void {
       const s = game.attackSign(h.team);
       if (h.pos.z * s < 0.05) h.pos.z = 0.05 * s;
     }
+  }
+
+  // 空中で確保したリバウンドを、着地を待たずに処理する。プットバック(リムへフィニッシュ)
+  // か、アウトレット/キック(良い相手が居れば即リリース)。どちらも不成立なら held のまま
+  // 着地し、通常オフェンスへ委ねる。reboundPutback は secureLoose が判定済み。
+function reboundAirAction(game: Game, h: Player): void {
+    if (h.reboundPutback) {
+      finishAtRim(game, h, game.nearestDefenderDist(h));
+      return;
+    }
+    pass(game, h);   // 良いアウトレット/キックがあれば ballMode=pass、無ければ着地
   }
 
   // ボールハンドラーの選択 — シュート/ドライブ/パス/リセット — 選手自身の
@@ -557,11 +575,23 @@ export function mustKeepDribble(game: Game, h: Player, dDef: number): boolean {
     if (!game.frontT) return false;                          // 運び上げは別所で処理
     if (dDef > 1.8) return false;                            // 誰も付いていない → 自由にドリブル
     if (game.shotClock < 4) return false;                    // クロック切れ間近 → 得点を試みねば
+    // フィジカル型(ビッグ/post)はゴール下では背中で押し込んで勝負する。ハンドリングが
+    // 低くてもシールド/組み立て回避に回さず、ポストアップ(体で押す)へ通す。
+    if ((game.isBig(h) || h.has("post")) && dist2D(h.pos, game.attackFloor(h.team)) < 6.5) return false;
     return rate(h.attr.dribbleAcc) < KEEP_DRIBBLE_THRESH;    // 本当に下手なハンドルのみ
   }
 
   // マークされた下手なハンドラーのキープ専用の選択肢: 渡す/じりじり前進/保持してシールド。
 export function keepDribbleDecide(game: Game, h: Player, dHoop: number, dDef: number, rimFloor: Vector3): void {
+    // ダブルチーム: ハンドルの低い選手は組み立てに加わらない — 抱え込まず即捌く。
+    // 開いた味方へパス → 無ければトラップが空けた味方へキックアウト → それも無ければ
+    // 圧から一歩引いて立て直す(リム方向へにじり寄らない)。
+    if (doubleTeamed(game, h)) {
+      if (pass(game, h)) return;
+      if (trapKickOut(game, h)) return;
+      retreatFromTrap(game, h);
+      return;
+    }
     // 僅かな隙間があるリム際 → それでも決める(イージーな一本は決して断らない)
     if (dHoop < 2.0 && dDef > 0.85) { finishAtRim(game, h, dDef); return; }
     // ヘルプが来た → 即座に手放す
@@ -575,10 +605,26 @@ export function keepDribbleDecide(game: Game, h: Player, dHoop: number, dDef: nu
     h.keepShieldT = 0.5;   // ドリブルを這うほどに絞り + 体を斜めに(移動 + 向き)
   }
 
-  // ビッグが相手を押し込む: リムへ真っ直ぐドライブ(クロスオーバー/フェイント無し)。
+  // ビッグが相手を押し込む: 背中で守備者を押し下げてリムへ迫る(クロスオーバー/フェイント無し)。
+  // ハンドリング非依存 — 接触の強さ=ボディバランス(balance)+postが押し込み・逆押し込みを支配する。
 export function postMove(game: Game, h: Player): void {
     const rim = game.attackFloor(h.team);
-    h.driveTarget.set(rim.x, 0, rim.z);
+    const d = game.onBallDefender(h);
+    const dRim = dist2D(h.pos, rim);
+    // 背負い成立(守備者が自分とリムの間に密着)なら power で背中から押し込む。既存の powerT
+    // 前進+壁判定を再利用: 押し込めれば前進しフィニッシュ圏へ、押し負ければ壁で止まり
+    // stalledT へ(キック/リトリート)。押し込みの強さ/長さは物理優位(edge)でスケール。
+    if (d && dRim > 1.7 && dRim < 6.5 && h.powerT <= 0 && h.stalledT <= 0
+        && dist2D(h.pos, d.pos) < 1.5 && dist2D(d.pos, rim) < dRim) {
+      const edge = clamp(rate(h.attr.balance) * 0.55 + (h.has("post") ? 0.2 : 0)
+        - rate(d.attr.balance) * 0.5 - rate(d.attr.defense) * 0.15, -0.6, 1);
+      h.driveSide = game.pickSide(h);
+      h.powerT = rand(0.5, 0.85) * (1 + Math.max(0, edge) * 0.5);
+      h.postT = h.powerT;   // 背負い(バックダウン)アニメ: 背中をリムへ向けてバックペダル
+      game.setDrive(h, rim, Math.max(1.0, dRim - 1.6));   // リムへ一歩押し込む
+      return;
+    }
+    h.driveTarget.set(rim.x, 0, rim.z);   // 背後に守備者無し/至近 → そのままリムへ
   }
 
   // 運び上げてくるガードへボールを渡す: 射程内で覆われていない時のみ。
@@ -604,6 +650,9 @@ export function trapKickOut(game: Game, h: Player): boolean {
     for (const mate of game.teamPlayers(h.team)) {
       if (mate === h) continue;
       if (dist2D(h.pos, mate.pos) > MAX_PASS) continue;
+      // フロントコート確立後、まだハーフを越えていない味方へは返さない — オーバー&バック違反。
+      // (後方の後追いは誰も見ておらず「最もオープン」に見えるので明示的に除外する)
+      if (game.frontT && game.attackSign(h.team) * mate.pos.z < 0.4) continue;
       // トラップから別のトラップへキックしない — ダブルチームされた味方はスキップ
       if (doubleTeamed(game, mate) || mate.trappedT > 0) continue;
       const open = game.nearestDefenderDist(mate);

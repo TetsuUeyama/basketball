@@ -82,12 +82,13 @@ export function updateLive(game: Game, dt: number): void {
   // 足首の高さから pickupT かけてポケットへ上がる。短いすくい上げ中はドリブルの弾みを上書き。
   if (h.pickupT > 0) {
     const prog = h.pickupDur > 0 ? clamp(1 - h.pickupT / h.pickupDur, 0, 1) : 1;
-    const scoop = h.chestFront(0.24);
-    const py = 0.22 + (0.95 - 0.22) * prog;                    // 床 → キャリーの高さ
+    const pocket = h.chestFront(0.24);                         // 収める先(手元・胸前ポケット)
+    // 記録した確保地点 → 手元ポケットへ地続きに補間(高い球=降ろす/横=引き寄せる/床=すくい上げ)。
+    // ワープさせず実位置から手に収まって見える。
     game.ball.pos.set(
-      h.pos.x + (scoop.x - h.pos.x) * prog,
-      py,
-      h.pos.z + (scoop.z - h.pos.z) * prog,
+      h.grabFromX + (pocket.x - h.grabFromX) * prog,
+      h.grabFromY + (0.95 - h.grabFromY) * prog,
+      h.grabFromZ + (pocket.z - h.grabFromZ) * prog,
     );
   } else {
     // 運ぶボールは手の高さと床の間で弾む（ダムダム）

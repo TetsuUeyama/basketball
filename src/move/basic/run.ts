@@ -81,6 +81,7 @@ Player.prototype.tickCooldown = function(dt: number): void {
   if (this.wallT > 0) this.wallT = Math.max(0, this.wallT - dt);
   if (this.gatherT > 0) this.gatherT = Math.max(0, this.gatherT - dt);
   if (this.pickupT > 0) this.pickupT = Math.max(0, this.pickupT - dt);
+  if (this.postT > 0) this.postT = Math.max(0, this.postT - dt);
   if (this.plantT > 0) this.plantT = Math.max(0, this.plantT - dt);
   if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
   if (this.rootT > 0) this.rootT = Math.max(0, this.rootT - dt);
@@ -178,8 +179,10 @@ Player.prototype.tickMotion = function(dt: number, resting: boolean): void {
           // ダッシュからのブレーキ: 完全停止で~0.3 s（エリート）.. ~2.0 s（遅い）、
           // 一度にどれだけ速度を落としたかでスケールする。
           const plant = shed * (0.3 + (1 - quick) * 1.7);  // ~0.3s（エリート）.. ~2.0s（遅い）
+          // 急停止は再加速(次の踏み出し)だけをスロットルする。完全硬直(rootT)は付けない —
+          // ダッシュで詰めてブレーキした守備者(プレス/クローズアウト)がその場で棒立ちに
+          // なるのを防ぐ。スライド/構えは即できる。切り返し(カットプラント)の rootT は残す。
           if (plant > this.plantT) { this.plantT = plant; this.plantDur = plant; }
-          this.rootT = Math.max(this.rootT, plant * FREEZE_FRAC);   // 急停止の頭側は完全硬直
         }
       }
     }

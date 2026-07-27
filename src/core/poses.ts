@@ -59,6 +59,9 @@ export function poseHands(game: Game, ): void {
           } else if (game.handler.gatherT > 0) {
             // キャッチをまとめている間: 両手のキャッチポーズを続ける
             game.handler.holdBallHands(b);
+          } else if (game.handler.pickupT > 0) {
+            // 確保/すくい上げ中: 両手をボールに乗せ、降ろされる/引き寄せられるボールを追う
+            game.handler.holdBallHands(b);
           } else {
             // ドリブル: ボールを運ぶのと同じ側の手でドリブルの高さにかまえる
             const bw = new Vector3(b.x, 0.95, b.z);
@@ -72,7 +75,7 @@ export function poseHands(game: Game, ): void {
         raiseAirborne(game, b, game.shooter);         // 早く跳んだ守備者は上がっている
         break;
       case "inbound":
-        game.handler?.reach(b);                      // スローインのためボールを保持する
+        game.handler?.reach(b, true);                // 審判からの投げ渡しを両手で受ける／保持する
         break;
       case "shot":
         // フィニッシャーはリムまで手をボールに乗せ続ける。ジャンパーは最初の一拍だけ
@@ -100,6 +103,15 @@ export function poseHands(game: Game, ): void {
       case "loose":
         // リバウンドに跳ぶ全員がボールに手を伸ばす（フォロースルー中のシューターは除く）
         raiseAirborne(game, b, game.shooter && game.shooter.coolT > 0 ? game.shooter : null);
+        // リバウンド: ジャンプしていなくても、近くの選手は上へ手を上げてボールを確保しにいく
+        if (game.looseIsRebound && b.y > 1.1) {
+          const rb = new Vector3(b.x, b.y, b.z);
+          for (const p of game.players) {
+            if (p.airborne || p.foulReactT > 0) continue;
+            if (p === game.shooter && p.coolT > 0) continue;   // フォロースルー中のシューターは除く
+            if (dist2D(p.pos, b) < 2.0) p.reachBall(rb, true);
+          }
+        }
         // はたき落とされたボールの地面での争奪: 奪う側は手を突き出し、失った者は取り戻そうとする
         {
           const lb = new Vector3(b.x, Math.max(0.35, b.y), b.z);

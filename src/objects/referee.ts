@@ -3,6 +3,7 @@
 // には一切関与しない演出専用。得点/ファウルのシグナル、トス、スローインの投げ渡しを行う。
 import { Scene, Vector3, Color3 } from "@babylonjs/core";
 import { Player } from "./player/player";
+import { resolveLook } from "./player/player-look";
 import { ROSTER } from "../roster";
 
 export class Referee {
@@ -18,10 +19,14 @@ export class Referee {
     const base = ROSTER[0][0];
     const attr = { ...base.attr };
     for (const k in attr) (attr as Record<string, number>)[k] = 50;   // 能力オール50
-    const def = { ...base, name: "審判", height: 1.9, look: undefined, attr };
+    // 髪型: 審判1はロング(肩まで=10)、審判2はミディアム(センター分け=9)。肌/髪色は共通。
+    const style = idx === 0 ? 10 : 9;
+    const def = { ...base, name: "審判", height: 1.9, look: resolveLook([2, 0, style]), attr };
     this.body = new Player(scene, 0, 90 + idx, def as typeof base);
     this.body.setNameTagVisible(false);
     this.recolor();
+    // 背番号の代わりに、大きな極太の「R」(クリムゾンレッド)を胸(前面)と背中(背面)の両方に付ける。
+    this.body.setJerseyMark("R", "#DC143C");
   }
 
   get runSpeed(): number { return this.body.runSpeed; }

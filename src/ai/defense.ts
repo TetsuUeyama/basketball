@@ -291,11 +291,14 @@ export function runDefense(game: Game, dt: number): void {
 
     // オフボール: 1パスアウェイはパスコースを DENY（マークのボール側に立って塞ぐ）、
     // ウィークサイド(遠い)はゴール方向へサグしてヘルプ。
+    // ただしハンドラーがライブドライブ中(抜き去り/パワー)は deny を止め、全員ヘルプサグで
+    // リムへ潰れる — パスコースを消しに外へ出て進路を開けてしまうのを防ぐ(help & recover)。
     const help = game.tactics[defTeam].defense.help * twWeight(d);
+    const driveLive = !!game.handler && (game.handler.beatenT > 0 || game.handler.powerT > 0);
     const ballGap = game.handler ? dist2D(man.pos, game.handler.pos) : 99;
     let stx: number, stz: number;
     let denying = false;
-    if (game.handler && ballGap < 9.0 && ballGap > 0.8 && !man.airborne) {
+    if (game.handler && !driveLive && ballGap < 9.0 && ballGap > 0.8 && !man.airborne) {
       denying = true;
       // DENY: マークとボールの間のパスコースへ割って入り消す。ボール→マーク線上の、マークから
       // ボール側へ laneStep 出た点（レーンに体を入れる）。密着度＝守備+敏捷（振り切られない能力）。

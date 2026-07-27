@@ -2,7 +2,7 @@
 import { Player } from "../objects/player/player";
 import { RIM } from "../config";
 import { defHands, ballSecurity } from "../eval";
-import { rate, clamp, chance, dist2D, moveToward2D, dirTo2D } from "../util";
+import { rate, clamp, chance, dist2D, moveToward2D, dirTo2D, towardPoint } from "../util";
 import { defEffort, defendOnBall, getBackOnDefense } from "./defense";
 import type { Game } from "../game";
 
@@ -158,10 +158,12 @@ export function runPress(game: Game, dt: number): void {
     d.decayLean(dt);
     game.clampCourt(d.pos);
   }
-  // SAFETY: 自軍リムへ中央で下がり over-the-top のレイアップを止める
+  // SAFETY: over-the-top のレイアップを止める最後の砦。固定点に凍結させず、リム→ボール
+  // 方向の一定距離(7m)に置いてボールのサイド/進行に連動させる(静止=棒立ちを防ぐ)。
   {
-    const tx = 0, tz = protect.z - Math.sign(protect.z || 1) * 6;
-    moveToward2D(safety.pos, tx, tz, safety.accelToward(dt, tx, tz, 1.0) * dt);
+    const sp = towardPoint(protect.x, protect.z, h.pos.x, h.pos.z, 7);   // リムから7m、ボール方向
+    const tx = clamp(sp.x, -3.5, 3.5);                     // 中央寄りに締めつつボール側へ寄る
+    moveToward2D(safety.pos, tx, sp.z, safety.accelToward(dt, tx, sp.z, 1.0) * dt);
     game.clampCourt(safety.pos);
   }
 

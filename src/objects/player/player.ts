@@ -91,9 +91,21 @@ export class Player {
   // スローイン後の前進: 非PMビッグの投げ手はバックコートに残らず、フロントコートへ
   // 抜けてガードに組み立てを任せる。フロントコート確立(frontT)かこの秒数で解除。
   frontRunT = 0;
+  // リバウンドを空中で確保した直後: 次tickでプットバック/アウトレットを即実行する合図。
+  // reboundPutback=true ならリムへプットバック、false ならアウトレット/キックを試みる。
+  reboundGo = false;
+  reboundPutback = false;
   // ルーズボールを手で床からすくい上げる: ボールが保持位置へ上がり、手が下→上に追う
   pickupT = 0;
   pickupDur = 0;
+  // 確保の起点(ワールド): ボールを瞬間移動させず、掴んだ実位置から手元へ地続きに補間するため
+  // secureLoose が記録し、liveball の pickup が補間する。
+  grabFromX = 0;
+  grabFromY = 0;
+  grabFromZ = 0;
+  // 背負いポストアップ中(バックダウン): >0 の間は背中をリムへ向けてバックペダルで押し込む。
+  // postMove が powerT と同時に張り、tickCooldown で減算。壁で止まったらクリア。
+  postT = 0;
   // 硬直: こぼしかけたキャッチを収めている最中。ボールは手の中で揺れ、密着守備者がはたき出せる。
   gatherT = 0;
   gatherDur = 0;   // ギャザーの全長
@@ -269,6 +281,8 @@ export class Player {
   numHumanMinus!: Mesh;
   numAcornPlus!: Mesh;
   numAcornMinus!: Mesh;
+  numTex!: DynamicTexture;   // 背番号デカールのテクスチャ（審判の丸囲みR差し替え用に保持）
+  numBothSides = false;      // true=前後両面に表示（審判のマーク）。既定は背中側のみ
   numberSide = 1;   // 現在どちらのローカルZサイドに番号を表示しているか
   sideApplied = false; // Gameがまだ背中側を選んでいない — シェルは非表示のまま
   headMat!: StandardMaterial;  // 肌色（選手が変わると再着色）
@@ -587,6 +601,7 @@ export class Player {
     // 背番号、ユニフォームの背面にプリント。ボディはヨーしないので「背面」とは攻める
     // バスケットから遠い側 — 各Zサイドごとに1つ焼き込み、setNumberSide()が正しい方を表示する。
     const numTex = new DynamicTexture(`numtex_${team}_${idx}`, { width: 128, height: 128 }, scene, false);
+    this.numTex = numTex;   // 保持（審判の丸囲みRなど後から差し替え可能に）
     numTex.hasAlpha = true;
     const ctx = numTex.getContext() as unknown as CanvasRenderingContext2D;
     ctx.clearRect(0, 0, 128, 128);

@@ -1,10 +1,13 @@
 // ルーズボール物理。自由球の飛翔・反射、選手の追走、接触判定、確保(secureLoose)を集約。
 import { Player } from "../objects/player/player";
 import { COURT, SHOT_CLOCK, OOB_WALL } from "../config";
-import { rate, dist2DTo, moveToward2D, chance, rand, nearestOf } from "../util";
-import { looseSecureChance } from "../move/reaction/rebound";
+import { rate, clamp, dist2DTo, moveToward2D, rand, nearestOf } from "../util";
+import { twoHandedCatch } from "../move/reaction/rebound";
 import { stepBallFlight } from "../move/basic/ball";
 import type { Game } from "../game";
+
+// 空中リバウンド確保をプットバックにするリムまでの距離(m)。これを超えるとアウトレット/キック。
+const PUTBACK_RANGE = 3.5;
 
   // ボール自由飛翔の1フレーム（物理は move/basic/ball.ts のベースに委譲）。
   // ルーズボールと得点後の落下演出で共有する。生きたルーズボール(reflect = false)は
@@ -108,33 +111,39 @@ export function chaseLoose(game: Game, dt: number): void {
 export function resolveLooseContact(game: Game, ): void {
     let best: Player | null = null;
     let bestReach = -Infinity;
+    const reachers: Player[] = [];
     for (const p of game.players) {
       if (p.touchCool > 0) continue;
       if (p.looseReactT > 0) continue;   // まだ反応していない
       if (dist2DTo(game.ball.pos, p.pos.x, p.pos.z) > 0.6) continue;
       const top = p.reachTopY();
       if (game.ball.pos.y > top || game.ball.pos.y < 0.3) continue; // 高すぎ／低すぎて届かない
+      reachers.push(p);
       if (top > bestReach) { bestReach = top; best = p; }
     }
-    if (best) contactLooseBall(game, best);
+    if (!best) return;
+    // 競り: best 以外に同じボールへ手が届く相手がいれば競り合い(崩れて弾く)
+    const contested = reachers.some((q) => q !== best && q.team !== best!.team);
+    contactLooseBall(game, best, contested);
   }
 
-  // 手がボールに届く: 確保する（キャッチ）か、タップする（軌道をはじく）。
-export function contactLooseBall(game: Game, p: Player): void {
+  // 手がボールに届く: 好位置で両手が添えば確保（キャッチ）、崩れ（伸び切り/横/競り）は
+  // タップ（軌道をはじく）。何度もはじき続けたら確保させ、ピンボール化を防ぐ。
+export function contactLooseBall(game: Game, p: Player, contested: boolean): void {
     game.lastTouch = p;   // 手が触れた — 以後のアウトオブバウンズを決める
-    // 確保確率は reaction/rebound へ分離。抽選と確保/はじきの処理はここ。
-    const defending = p.team !== game.looseOff;
-    if (chance(looseSecureChance(p, defending, game.looseTips))) {
+    const horiz = dist2DTo(game.ball.pos, p.pos.x, p.pos.z);
+    if (twoHandedCatch(p, game.ball.pos.y, horiz, contested)) {
       secureLoose(game, p);
-    } else {
-      // タップ: ボールを上へ、外へはじく
-      game.looseTips++;
-      p.touchCool = 0.22;
-      const a = rand(0, Math.PI * 2);
-      game.ball.vel.set(Math.cos(a) * rand(0.6, 1.9), rand(2.4, 3.8), Math.sin(a) * rand(0.6, 1.9));
-      p.jump(0.4, 0.45);
-      game.setEvent("TIP", p.team);
+      return;
     }
+    if (game.looseTips >= 3) { secureLoose(game, p); return; }   // ピンボール化させない
+    // タップ: ボールを上へ、外へはじく
+    game.looseTips++;
+    p.touchCool = 0.22;
+    const a = rand(0, Math.PI * 2);
+    game.ball.vel.set(Math.cos(a) * rand(0.6, 1.9), rand(2.4, 3.8), Math.sin(a) * rand(0.6, 1.9));
+    p.jump(0.4, 0.45);
+    game.setEvent("TIP", p.team);
   }
 
   // 選手がルーズボールを確保して着地し、プレイが再開する。
@@ -159,10 +168,24 @@ export function secureLoose(game: Game, p: Player, label?: string): void {
     game.resetMotion();
     if (!offensive) game.maybeStartPush();   // ポゼッション交代 → 速攻を走らせる
     game.leakOut();          // 飛び出しランナーが走り出す
-    // 手で拾い上げる（跳ねない）: 床から持ち上げるすくい上げ。空中のボールはキャッチする。
-    if (game.ball.pos.y < 1.2) {
-      p.pickupT = p.pickupDur = 0.35;
-      game.ball.pos.set(p.pos.x, Math.max(0.22, game.ball.pos.y), p.pos.z);
+    // 空中でリバウンドを掴んだ: 着地を待たず、次tickでそのままプットバック/アウトレットへ。
+    // オフェンスリバウンドかつリム至近ならプットバック、それ以外はアウトレット/キック。
+    if (game.looseIsRebound && p.airborne && game.ball.pos.y >= 1.2) {
+      const rimF = game.attackFloor(p.team);
+      p.reboundGo = true;
+      p.reboundPutback = offensive && dist2DTo(p.pos, rimF.x, rimF.z) < PUTBACK_RANGE;
+    }
+    // 確保: ボールを瞬間移動させず、今ある位置を起点に手元へ地続きで収める。
+    // 起点を記録し、liveball の pickup が実位置→手元へ補間する(高い球=降ろす/横=引き寄せる/
+    // 床=すくい上げ)。距離が遠い/高いほど収めに少し時間をかける。空中プットバック/アウトレット
+    // (reboundGo)は次tickでシュート/パスへ移り pickup は消費されない(不成立で着地時のみ効く)。
+    p.grabFromX = game.ball.pos.x;
+    p.grabFromY = game.ball.pos.y;
+    p.grabFromZ = game.ball.pos.z;
+    {
+      const gdx = game.ball.pos.x - p.pos.x, gdz = game.ball.pos.z - p.pos.z;
+      const gd3 = Math.hypot(gdx, gdz, game.ball.pos.y - 0.95);
+      p.pickupT = p.pickupDur = clamp(0.18 + gd3 * 0.12, 0.2, 0.42);
     }
     game.setEvent(label ?? (offensive ? "OFF. REBOUND" : "REBOUND"), p.team);
   }
