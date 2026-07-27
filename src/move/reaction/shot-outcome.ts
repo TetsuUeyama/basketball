@@ -43,6 +43,12 @@ export function jumpShotMakeProbability(
   // コンテストのリーチ = 手のひら当たり判定（有効時 def−off でサイズ可変、無効時は固定1.8m）。
   const cReach = ctx.palmHitbox && cn ? palmRadius(cn, h) : 1.8;
   p -= clamp(cReach - dDef, 0, cReach) * 0.24 * contestScale * perimQ;
+  // 目の前で跳んで手をシュートコースに入れてくる守備者は、視界とリリースを乱して精度を大きく削る。
+  // (今までは水平距離だけでコンテストを測っていた — 跳んだ手のコンテストを make% に反映)
+  if (cn && cn.airborne && dDef < cReach + 0.4) {
+    const inFace = clamp(1 - dDef / (cReach + 0.4), 0, 1);   // 0(離れ)..1(目の前)
+    p -= inFace * 0.2 * contestScale;
+  }
   // 体勢の崩れ（移動しながらの射撃）— S技術がメカニクスを保つ
   if (h.beatenT > 0 || h.curSpd > h.runSpeed * 0.55) {
     p -= 0.10 * (1 - rate(h.attr.shotTech));

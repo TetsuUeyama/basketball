@@ -109,10 +109,11 @@ export function updateCharge(game: Game, dt: number): void {
       }
       // ギャザー中のストリップ: 頭上に溜められたボールを守備者がはたく。長いギャザーほど
       // 弾かれやすく、高いボールに届く必要がある(空中だと有利)。背の高いシューターは遠ざける。
-      if (gap < 1.2) {
+      if (gap < 1.3) {
+        // 打つ前に手がボールに当たれば弾いて打たせない(はたき出し=ルーズへ)。
         const poke = defHands(c);
         const secure = rate(h.attr.handling) * 0.5 + clamp((h.height - c.height) * 0.6, -0.15, 0.35);
-        const reach = c.airborne ? 1.3 : 0.5;   // ボールは頭上 — 跳んで届く必要がある
+        const reach = c.airborne ? 1.4 : 0.7;   // 跳べば頭上のボールにも届く。立ちでも手が当たれば弾く
         if (chance(Math.max(0, poke - secure) * reach * dt * 5)) { stripGather(game, h, c); return; }
       }
     }
@@ -183,6 +184,7 @@ export function releaseShot(game: Game, h: Player, dHoop: number, dDef: number, 
     // ブロックをかわして打てる（3Pは対象外）。
     const blocker = tryBlock(game, h, false, !isThree);
     if (blocker) { swatShot(game, h, blocker); return; }
+    grazeShot(game, h);   // かすり: 手が触れれば軌道が乱れて外れる(スワットには至らない部分接触)
     if (tryShootingFoul(game, h, dDef, false)) return;
 
     // リリースは頭上やや前（利き手を前へ伸ばして放つ）
@@ -323,6 +325,20 @@ export function tryBlock(game: Game, shooter: Player, isFinish: boolean, evadeOK
     return best;
   }
 
+  // かすり: フルブロック(スワット)には至らないが、伸ばした手がシュートに触れる部分接触。触れると
+  // 軌道が乱れて外れる(当たり具合=ずれ幅はランダム)。ブロックより起こりやすく、跳んで手を出して
+  // いれば更に触れやすい。3P/ミドル共通。releaseShot が tryBlock の後に呼ぶ。
+export function grazeShot(game: Game, h: Player): void {
+    const cand = bestBlocker(game.teamPlayers(1 - h.team), h, false, game.shotWindup, PALM_HITBOX);
+    if (!cand) return;
+    // ブロック(スワット)より起きやすいが、ブロック判定に続けて掛かるので過剰にならない程度に。
+    const pGraze = clamp(cand.p * 1.0 + (cand.def.airborne ? 0.06 : 0.02), 0, 0.5);
+    if (chance(pGraze)) {
+      game.shotMade = false;                 // かすったら外れる
+      game.shotGraze = 0.5 + rand(0, 1.0);   // 当たり具合(軌道のずれ幅)。aimShotTarget が消費
+    }
+  }
+
   // シュートがはたかれる: ブロッカーが跳び、ボールはリムでルーズになる。
 export function swatShot(game: Game, shooter: Player, blocker: Player): void {
     blocker.stats.blk++;
@@ -407,8 +423,10 @@ export function tryShootingFoul(game: Game, h: Player, dDef: number, layup: bool
 export function aimShotTarget(game: Game, dHoop: number): void {
     const rim = game.attackRim(game.possession);
     game.shotTarget.copyFrom(rim);
-    if (game.shotMade) return;
-    const scatter = 0.4 + Math.min(1, Math.max(0, dHoop - THREE_DIST) / 8) * 0.55;   // 0.4 .. 約0.95
+    if (game.shotMade) { game.shotGraze = 0; return; }
+    // かすったミスは当たり具合(shotGraze)ぶん大きく逸れる — 手に当たって軌道が乱れた分。
+    const scatter = 0.4 + Math.min(1, Math.max(0, dHoop - THREE_DIST) / 8) * 0.55   // 0.4 .. 約0.95
+      + game.shotGraze;
     const zSign = Math.sign(rim.z) || 1;
     game.shotTarget.x = rim.x + rand(-1, 1) * scatter;
     game.shotTarget.z = rim.z + zSign * rand(0.05, 0.3 + scatter * 0.5);   // 奥へ(バックボード寄りに)偏らせる
@@ -416,7 +434,8 @@ export function aimShotTarget(game: Game, dHoop: number): void {
     // スクリプトの飛翔で板をめり込み突き抜けないようにする。板に当たった球は以後ルーズ物理で反射する。
     const maxZ = RIM.backboardZ - 0.025 - 0.12;                             // 板の面 − ボール半径
     if (Math.abs(game.shotTarget.z) > maxZ) game.shotTarget.z = zSign * maxZ;
-    game.shotTarget.y = RIM.height + rand(-0.2, 0.5);
+    game.shotTarget.y = RIM.height + rand(-0.2, 0.5) + (game.shotGraze > 0 ? rand(-0.25, 0.5) : 0);
+    game.shotGraze = 0;   // 当たり具合を消費
   }
 
 export function updateShot(game: Game, dt: number): void {

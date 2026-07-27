@@ -56,13 +56,24 @@ UI.prototype.buildTitle = function(): void {
     };
 
     const clubBtn = bigBtn("クラブチーム対戦", "リーグとチームを選んで対戦", () => this.startClubMatchup());
+    const randClubBtn = bigBtn("ランダムクラブ", "実クラブをランダムに選んで対戦", () => {
+      // 実クラブから重複しない2つをランダムに選ぶ
+      const a = Math.floor(Math.random() * CLUBS.length);
+      let b = Math.floor(Math.random() * CLUBS.length);
+      if (CLUBS.length > 1) { while (b === a) b = Math.floor(Math.random() * CLUBS.length); }
+      this.assignClub(0, a);        // ロスター + 名前 + ユニフォーム + 自動ラインナップ/ロール
+      this.assignClub(1, b);
+      this.onSetupLineups();        // 相手を考慮した DEFAULT の5人（エディタ表示前）
+      this.refreshEditors();
+      this.setPhase("pregame");
+    });
     const randBtn = bigBtn("ランダム対戦", "ランダム編成で対戦（編成は自由に変更可）", () => {
       this.newMatchup();
       this.onSetupLineups();        // 相手を考慮した DEFAULT の5人（エディタ表示前）
       this.setPhase("pregame");
     });
 
-    p.append(title, sub, clubBtn, randBtn);
+    p.append(title, sub, clubBtn, randClubBtn, randBtn);
     this.root.appendChild(p);
     this.titlePanel = p;
 };

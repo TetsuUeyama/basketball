@@ -29,6 +29,7 @@ export function trapReliever(game: Game, team: number): Player | null {
   let best: Player | null = null, bestScore = -Infinity;
   for (const p of game.teamPlayers(team)) {
     if (p === h || p.rooted || p.screening || p.frontRunT > 0) continue;
+    if (p.justPassedT > 0) continue;   // パス直後の選手はボール(トラップ)へ戻さない — 回避後に再度掛かるのを防ぐ
     if (doubleTeamed(game, p) || p.trappedT > 0) continue;   // トラップされた選手は送らない
     const dd = dist2D(p.pos, h.pos);
     if (dd > 11) continue;                                   // 遠すぎる

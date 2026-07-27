@@ -70,7 +70,12 @@ Player.prototype.reachIK = function(pivot: TransformNode, elbow: TransformNode, 
     const sx = this.root.position.x + (c * px + s * pz);
     const sy = this.root.position.y + py;
     const sz = this.root.position.z + (-s * px + c * pz);
-    const r = armIKQuats(sx, sy, sz, th, world, Player.UPPER_ARM, Player.FOREARM);
+    // 体より後ろの目標へは手を伸ばさない: 肩からの reach のローカルZ(前後)成分が後ろ(+numberSide)
+    // なら、目標を肩の前額面へ投影して真上・真横までに留める(背後への貫通を防ぐ)。
+    let tgt = world;
+    const rz = s * (world.x - sx) + c * (world.z - sz);
+    if (rz * this.numberSide > 0) tgt = new Vector3(world.x - s * rz, world.y, world.z - c * rz);
+    const r = armIKQuats(sx, sy, sz, th, tgt, Player.UPPER_ARM, Player.FOREARM);
     if (!r) return false;
     this.easeArm(pivot, r.qUp);
     this.easeArm(elbow, r.qElbow);

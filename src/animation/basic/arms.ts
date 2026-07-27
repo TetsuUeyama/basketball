@@ -75,6 +75,9 @@ Player.prototype.aimArm = function(pivot: TransformNode, world: Vector3): void {
   // 守備の低い選手の手は切り替えで遅れ（armRateCap 小）、上書きが無ければ
   // MOVE_RATE.arm で機敏に動く。
 Player.prototype.setArmDir = function(pivot: TransformNode, dx: number, dy: number, dz: number): void {
+    // 腕は体より後ろへ行かせない: 前方 = −numberSide·Z なので、後ろ向き(+numberSide·Z)の成分は
+    // 肩の面(真上・真横まで)で止める。挙げた腕が背中側へ倒れたり、手/ボールが胴を貫通するのを防ぐ。
+    if (dz * this.numberSide > 0) dz = 0;
     const len = Math.hypot(dx, dy, dz) || 1;
     this.easeArm(pivot, aimDownTo(dx / len, dy / len, dz / len));
 };

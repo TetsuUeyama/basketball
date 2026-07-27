@@ -415,12 +415,16 @@ export function bestOpenSpot(game: Game, team: number, spots: Vector3[], self: P
         - dist2DTo(self.pos, s.x, s.z) * 0.1
         + (self.has("centerSpot") ? 1.5 : 0);
     } else {
-      score = open * (self.has("positioning") ? 1.35 : 1)
-        + Math.min(mate, 7) * 0.8               // 味方から離れた空きスペースを優先（密集回避・幅を使う。開き優先は保つ）
-        + Math.min(fromHandler, 6) * 0.3
-        + lane * 2.0
-        - clog * 2.5
-        - dist2DTo(self.pos, s.x, s.z) * 0.1;
+      // オフェンスのポジション優先度: ①相手がいない(オープン)を最重視 ②密集回避＝スペーシング
+      // ③フリーの味方を作るパスコース ④相手ゴールに近い得点圏 ⑤ボールから適度に離れる。
+      const rimDist = dist2DTo(rimFloor, s.x, s.z);
+      score = open * (self.has("positioning") ? 1.35 : 1) * 1.15   // ①オープン(相手がいない)を最重視
+        + Math.min(mate, 7) * 1.05              // ②密集回避=スペーシング(味方から離れた空きへ)
+        + lane * 2.0                            // ③フリーの味方を作る(パスコースが通る位置)
+        + Math.max(0, 9 - rimDist) * 0.3        // ④相手ゴールに近い得点圏を加点(上限9m)
+        + Math.min(fromHandler, 6) * 0.25       // ⑤ボールから適度に離れる
+        - clog * 2.5                            // ドライブレーンを塞がない
+        - dist2DTo(self.pos, s.x, s.z) * 0.1;   // 移動コスト
       if (self.has("sideSpot") && (i === 3 || i === 4)) score += 1.5;
       if (game.prefersPost(self)) score = Math.min(score, 4.0) - 1.5;
     }

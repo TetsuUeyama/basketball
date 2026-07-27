@@ -2,12 +2,12 @@ import "./stubs";
 import { writeFileSync } from "node:fs";
 import { NullEngine, Scene } from "@babylonjs/core";
 import { Game } from "../src/game";
-import { Player } from "../src/entities";
-import { buildCourt } from "../src/court";
+import { Player } from "../src/objects/player/player";
+import { buildCourt } from "../src/objects/court";
 
 Player.HEADLESS = true;   // skip per-swap hair/name-tag rebuilds (no rendering → no leak)
-import { clubTeam } from "../src/attributes";
-import { CLUBS } from "../src/clubdb";
+import { clubTeam } from "../src/roster";
+import { CLUBS } from "../src/data/club/clubdb";
 
 const engine = new NullEngine();
 const scene = new Scene(engine);
@@ -84,8 +84,20 @@ const leaderboard = (label: string, k: string, per: boolean) => {
   ).join("\n");
 };
 
+// リーグ全体のシュート成功率
+let TfgM = 0, TfgA = 0, TtpM = 0, TtpA = 0, TftM = 0, TftA = 0;
+for (const p of all) { TfgM += p.fgm; TfgA += p.fga; TtpM += p.tpm; TtpA += p.tpa; TftM += p.ftm; TftA += p.fta; }
+const pct = (m: number, a: number) => (a > 0 ? (100 * m / a).toFixed(1) : "-");
+const shootLine =
+  `FG ${TfgM}/${TfgA} (${pct(TfgM, TfgA)}%)  |  3P ${TtpM}/${TtpA} (${pct(TtpM, TtpA)}%)  |  `
+  + `2P(含レイアップ/ダンク) ${TfgM - TtpM}/${TfgA - TtpA} (${pct(TfgM - TtpM, TfgA - TtpA)}%)  |  FT ${TftM}/${TftA} (${pct(TftM, TftA)}%)`;
+console.log("\nSHOOTING: " + shootLine);
+
 const out = [
   `# 総当り(H&A) 全${CLUBS.length}クラブ / ${done}試合 / DT=${DT} / ${elapsed}s`,
+  ``,
+  `## リーグ全体シュート成功率`,
+  shootLine,
   ``,
   `## チーム順位 (勝-敗[-分], 得失点差)`,
   standings,

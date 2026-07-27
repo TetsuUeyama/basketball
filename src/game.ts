@@ -130,6 +130,7 @@ export class Game {
   shotFrom = new Vector3();
   shotTarget = new Vector3();   // ボールが実際に飛ぶ先 — 成功ならリム、ミスなら的を外した点
   shotMade = false;
+  shotGraze = 0;   // >0: 手がシュートにかすった当たり具合(軌道のずれ幅)。aimShotTarget が消費
   shotWasDunk = false;   // 直前のフィニッシュがダンク
   shotPoints = 2;
   shotT = 0;

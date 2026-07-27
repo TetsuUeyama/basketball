@@ -132,7 +132,13 @@ export function getBackOnDefense(game: Game, dt: number, d: Player, man: Player)
   const s = game.attackSign(game.possession);  // 守備の自陣: z*s > 0
   const upCourt = d.pos.z * s < 0.5;           // まだハーフを越えていない
   const manBack = man.pos.z * s < 0.5;         // …担当も
-  if (game.isBig(d) && (upCourt || manBack)) {
+  // 取り残された: (a) ボールが自分より自陣リム寄り＝抜かれてボールの後ろに取り残された、または
+  // (b) 担当マンから大きく離れマークしていない(プレス/トラップで離れた)。どちらも全力で自陣へ戻る。
+  const h = game.handler;
+  const behindBall = !!h && s * h.pos.z > s * d.pos.z + 2.5;
+  const offMan = dist2D(d.pos, man.pos) > 5;
+  const stranded = upCourt && (behindBall || offMan);   // バックコート側に取り残された時だけ(ハーフコートの通常守備では発火しない)
+  if (game.isBig(d) && (upCourt || manBack || stranded)) {
     const depth = d.role === "C" ? 1.6 : 3.0;
     const tz = s * (RIM.z - depth);
     const gb = game.steerAround(d, 0, tz);   // 体を避けて全力で戻る
@@ -140,7 +146,7 @@ export function getBackOnDefense(game: Game, dt: number, d: Player, man: Player)
     game.clampCourt(d.pos);
     return true;
   }
-  if (upCourt && manBack) {
+  if ((upCourt && manBack) || stranded) {
     const gb = game.steerAround(d, man.pos.x * 0.4, s * (RIM.z - 7));
     moveToward2D(d.pos, gb.x, gb.z, d.accelToward(dt, gb.x, gb.z, 1.12) * dt);
     game.clampCourt(d.pos);
@@ -168,14 +174,15 @@ export function runDefense(game: Game, dt: number): void {
   // ピック&ロールのカバレッジ窓
   tickScreenCoverage(game, dt);
 
-  // 一度に一人のリムプロテクター: ボールとリムの間の最良位置の LOW MAN が壁になる。ビッグ優先(−1.2m)。
-  let rimHelper: Player | null = null;
-  if (game.handler && (game.handler.beatenT > 0 || game.handler.powerT > 0)) {
+  // 常駐リムアンカー: オフボール守備者で最もリムに近い1人(ビッグ優先 −1.2m)を常時ペイントの
+  // 壁役に固定する。抜かれた時だけでなく常にゴール下へ残し、センターがゴール下を空けないようにする。
+  let anchor: Player | null = null;
+  {
     let best = Infinity;
     for (const d of defenders) {
-      if (offense[d.slot] === game.handler) continue;   // 抜かれたオンボール以外
+      if (offense[d.slot] === game.handler) continue;   // オンボールは除外
       const score = dist2D(d.pos, protect) - (game.isBig(d) ? 1.2 : 0);
-      if (score < best) { best = score; rimHelper = d; }
+      if (score < best) { best = score; anchor = d; }
     }
   }
 
@@ -191,6 +198,17 @@ export function runDefense(game: Game, dt: number): void {
     }
 
     if (isOnBall) {
+      // 抜かれてボールの後ろに取り残されたら、クッションで追うのでなく全力で自陣へ戻る(ゲットバック)。
+      if (getBackOnDefense(game, dt, d, man)) continue;
+      // プレス非採用のボール運び中(!frontT)は前に出ず、自陣センター手前で受ける準備をする。
+      // プレス相当の位置リスクだけ負って何もしない状態を避ける — 相手が越えてきたらマンマーク。
+      if (!game.pressOn && !game.frontT) {
+        const s = game.attackSign(game.possession);
+        const wx = man.pos.x * 0.6, wz = s * 1.5;
+        moveToward2D(d.pos, wx, wz, d.accelToward(dt, wx, wz, Math.max(defEffort(game, d, protect), 0.9)) * dt);
+        game.clampCourt(d.pos);
+        continue;
+      }
       defendOnBall(game, dt, d, man, protect);
       // クッションからリーチイン(密着時にスティール/ファウル判定)。
       const press = game.tactics[defTeam].defense.pressure * twWeight(d);
@@ -246,9 +264,9 @@ export function runDefense(game: Game, dt: number): void {
       continue;
     }
 
-    // リム保護: ハンドラーが担当を抜いてリムへ迫ったら、オフボールのビッグが担当を捨てて
-    // ボールとリムの間へ下がり壁になる。
-    if (game.handler && d === rimHelper) {
+    // リムアンカー: 常時ペイントに残る壁役。ハンドラーがリムへ迫れば飛んでコンテスト、
+    // 遠ければゴール下(リムと担当の間・リム寄り)に常駐してゴール下を空けない。
+    if (d === anchor && game.handler) {
       const hx = game.handler.pos.x, hz = game.handler.pos.z;
       const dRim = dist2DTo(game.handler.pos, protect.x, protect.z);
       // リムプロテクターは飛ぶタイミングを計る
@@ -278,6 +296,21 @@ export function runDefense(game: Game, dt: number): void {
       }
     }
 
+    // プレス非採用のボール運び中(!frontT): 前に出ず自陣ハーフに沈んで守る。担当がまだセンター/
+    // 相手側にいる間はマークに上がらず、自陣側へ越えてきたら通常のマン/ヘルプに移る。
+    if (!game.pressOn && !game.frontT && game.handler) {
+      const s = game.attackSign(game.possession);
+      const manDepth = man.pos.z * s;            // 担当の自陣深さ(<0=相手バックコート)
+      if (manDepth < 2.5) {
+        const tz = s * clamp(4.0 - manDepth * 0.4, 2.0, 5.5);   // 自陣側に深く沈む(センターを越えない)
+        const tx = man.pos.x * 0.5;
+        moveToward2D(d.pos, tx, tz, d.accelToward(dt, tx, tz, Math.max(defEffort(game, d, protect), 0.9)) * dt);
+        game.clampCourt(d.pos);
+        d.decayLean(dt);
+        continue;
+      }
+    }
+
     // 通路ブロック: 相手が横に回り込んだら、新しいレーンの入口へスライドして応じる
     if (d.wallT > 0) {
       moveToward2D(d.pos, d.wallX, d.wallZ,
@@ -289,16 +322,21 @@ export function runDefense(game: Game, dt: number): void {
     // トランジション: ポゼッション交代で上に残っていたら、まず戻る
     if (getBackOnDefense(game, dt, d, man)) continue;
 
-    // オフボール: 1パスアウェイはパスコースを DENY（マークのボール側に立って塞ぐ）、
-    // ウィークサイド(遠い)はゴール方向へサグしてヘルプ。
-    // ただしハンドラーがライブドライブ中(抜き去り/パワー)は deny を止め、全員ヘルプサグで
-    // リムへ潰れる — パスコースを消しに外へ出て進路を開けてしまうのを防ぐ(help & recover)。
+    // オフボール: ストロングサイド(ボール側)の1パスアウェイのみパスコースを DENY し、
+    // ウィークサイド/遠い担当はゴール方向へ深くサグしてヘルプ(ボールを追って外に出ない)。
+    // ハンドラーがライブドライブ中(抜き去り/パワー)は deny を止め、全員ヘルプサグでリムへ潰れる。
     const help = game.tactics[defTeam].defense.help * twWeight(d);
     const driveLive = !!game.handler && (game.handler.beatenT > 0 || game.handler.powerT > 0);
     const ballGap = game.handler ? dist2D(man.pos, game.handler.pos) : 99;
+    // ボール側判定: 担当がボールと同じ左右(リム基準)か、ボールが中央付近ならストロングサイド扱い。
+    let ballSide = true;
+    if (game.handler) {
+      const bx = game.handler.pos.x - protect.x, mx = man.pos.x - protect.x;
+      ballSide = Math.abs(bx) < 1.5 || mx * bx >= 0;
+    }
     let stx: number, stz: number;
     let denying = false;
-    if (game.handler && !driveLive && ballGap < 9.0 && ballGap > 0.8 && !man.airborne) {
+    if (game.handler && !driveLive && ballSide && ballGap < 6.5 && ballGap > 0.8 && !man.airborne) {
       denying = true;
       // DENY: マークとボールの間のパスコースへ割って入り消す。ボール→マーク線上の、マークから
       // ボール側へ laneStep 出た点（レーンに体を入れる）。密着度＝守備+敏捷（振り切られない能力）。
@@ -311,8 +349,9 @@ export function runDefense(game: Game, dt: number): void {
       const dn = towardPoint(man.pos.x, man.pos.z, game.handler.pos.x, game.handler.pos.z, laneStep);
       stx = dn.x; stz = dn.z;
     } else {
-      // クロック終盤の DENY 強化も含めたヘルプサグ
-      const sag = (1.2 + help * 1.4) * (game.teamHas(defTeam, "dfLine") ? 1.15 : 1)
+      // ヘルプサグ: ウィークサイド/遠いほど深くリムへ寄る。クロック終盤の DENY 強化も反映。
+      const weak = !ballSide || ballGap > 6.5;
+      const sag = (1.2 + help * 1.4 + (weak ? 1.2 : 0)) * (game.teamHas(defTeam, "dfLine") ? 1.15 : 1)
         * (1 - denyIntensity(game, defTeam) * 0.8);
       const st = towardPoint(man.pos.x, man.pos.z, protect.x, protect.z, sag);
       stx = st.x; stz = st.z;

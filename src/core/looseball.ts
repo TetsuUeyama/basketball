@@ -6,8 +6,9 @@ import { twoHandedCatch } from "../move/reaction/rebound";
 import { stepBallFlight } from "../move/basic/ball";
 import type { Game } from "../game";
 
-// 空中リバウンド確保をプットバックにするリムまでの距離(m)。これを超えるとアウトレット/キック。
-const PUTBACK_RANGE = 3.5;
+// 空中リバウンド確保をプットバックにするリムまでの距離(m)。ダンク/レイアップが打てる至近のみ。
+// これを超える(距離が離れている)とプットバックせず、アウトレット/キック→着地して通常オフェンス。
+const PUTBACK_RANGE = 2.0;
 
   // ボール自由飛翔の1フレーム（物理は move/basic/ball.ts のベースに委譲）。
   // ルーズボールと得点後の落下演出で共有する。生きたルーズボール(reflect = false)は
@@ -50,6 +51,12 @@ export function updateLoose(game: Game, dt: number): void {
         return;
       }
       const near = nearestOf(game.players, (p) => dist2DTo(game.ball.pos, p.pos.x, p.pos.z))!;
+      // 最寄りが遠い間はボールを手元へワープさせない: 追走を続けさせ(chaseLoose が最寄りを寄せる)、
+      // 届いた選手が resolveLooseContact(0.6m)で確保する。長く誰も届かない時だけ最後の手段で確保。
+      if (dist2DTo(game.ball.pos, near.pos.x, near.pos.z) > 1.2 && game.looseAge < 6) {
+        game.looseT = 0.4;   // 安全網を延長して追走を継続(ワープ回避)
+        return;
+      }
       secureLoose(game, near);
     }
   }
