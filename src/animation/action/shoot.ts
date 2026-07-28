@@ -27,11 +27,11 @@ Player.prototype.gatherHold = function(world: Vector3): void {
     const offE = R ? this.elbowL : this.elbowR;
     const offside = R ? -1 : 1;                          // 添え手の外側
     this.armRateCap = MOVE_RATE.reach;
-    // 利き手: IKでボールへ届かせる。IKの極ベクトルが肘を自然に下へ落とすので、横に張らず
-    // 肘が下＝シュートポケットになる。届かない時のみ下向きFKで構える。
+    // 利き手: IKで手のひらをボールに乗せる(=必ず触れる)。ボールは懐(手前)にあるのでIKの極ベクトルが
+    // 肘を下へ収める。届かない時のみ下向きFKで構える。
     if (!this.reachIK(domP, domE, world)) {
-      this.setArmDir(domP, (R ? 1 : -1) * 0.18, -0.75, -this.numberSide * 0.35);
-      this.bendElbow(domE, 1.05);
+      this.setArmDir(domP, (R ? 1 : -1) * 0.1, -0.8, -this.numberSide * 0.3);
+      this.bendElbow(domE, 1.2);
     }
     // 添え手: ボール正面でなく外側の脇へ回す（両手投げに見せない＝利き手主体）。
     // upper を offside・やや上・前へ向け、深く曲げて手だけボール脇に添える。

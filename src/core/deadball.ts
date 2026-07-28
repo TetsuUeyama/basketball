@@ -52,16 +52,31 @@ export function shotClockViolation(game: Game): void {
     const sx = game.ball.pos.x, sz = game.ball.pos.z;
     const front = sz * game.attackSign(def) > 0;
     game.handler = null;
-    // 守備側が喜ぶ: 違反を誘った最寄りの守備者は大きく両手を上げてホップ(block)、
-    // 他はガッツポーズの拳パンプ(steal)。
+    // 守備側が喜ぶ: 近い2人ずつハイタッチで叩き合い、余った選手は大きく喜ぶ/拍手する。
     {
       const defenders = game.teamPlayers(def);
-      let hero = defenders[0], hd = Infinity;
-      for (const d of defenders) { const dd = dist2D(d.pos, game.ball.pos); if (dd < hd) { hd = dd; hero = d; } }
-      for (const d of defenders) d.defWin(d === hero ? "block" : "steal");
+      const used = new Set<Player>();
+      for (const a of defenders) {                 // 近い者同士をハイタッチのペアに
+        if (used.has(a)) continue;
+        let partner: Player | null = null, pd = 4.5;
+        for (const b of defenders) {
+          if (b === a || used.has(b)) continue;
+          const dd = dist2D(a.pos, b.pos);
+          if (dd < pd) { pd = dd; partner = b; }
+        }
+        if (partner) {
+          used.add(a); used.add(partner);
+          const mx = (a.pos.x + partner.pos.x) / 2, mz = (a.pos.z + partner.pos.z) / 2;  // 中間点で落ち合う
+          a.defWin("highfive"); a.defWinToward.set(mx, 0, mz);
+          partner.defWin("highfive"); partner.defWinToward.set(mx, 0, mz);
+        }
+      }
+      for (const d of defenders) { if (!used.has(d)) d.defWin("clap"); }   // 余り(ペア無し)は頭上で拍手
+      for (const d of defenders) d.defWinDur = d.defWinT = 2.6;            // ポーズ中ずっと続く長尺
     }
-    game.setEvent("SHOT CLOCK VIOLATION", offTeam, 2.6);
-    game.pauseThen(1.2, () => withSubs(game, () => game.inbound.startAt(def, sx, sz,
+    game.setEvent("SHOT CLOCK VIOLATION", offTeam, 2.8);
+    // 喜びを見せてから再開: インバウンドで動き出す前にポーズを長めに取る。
+    game.pauseThen(2.8, () => withSubs(game, () => game.inbound.startAt(def, sx, sz,
       { clock: front ? SHOT_CLOCK_PARTIAL : SHOT_CLOCK })));
   }
 

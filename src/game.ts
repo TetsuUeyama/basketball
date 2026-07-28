@@ -731,6 +731,14 @@ export class Game {
         this.inbound.oobWalker.runSpeed * 0.6 * dt);
       this.inbound.oobWalker.faceToward(this.inbound.oobSpot.x, this.inbound.oobSpot.z);  // 向かう先を向く(ボールへ後ろ歩きしない)
     }
+    // 喜び中のハイタッチ: ペアは中間点へ歩み寄り、手が届く距離(約1.3m)で止まって叩き合う。
+    for (const p of this.players) {
+      if (p.defWinKind !== "highfive" || p.defWinT <= 0) continue;
+      if (dist2D(p.pos, p.defWinToward) > 0.65) {
+        moveToward2D(p.pos, p.defWinToward.x, p.defWinToward.z, p.runSpeed * 0.4 * dt);
+        this.clampCourt(p.pos);
+      }
+    }
     this.pauseT -= dt;
     if (this.pauseT <= 0) {
       this.ballFalling = false;

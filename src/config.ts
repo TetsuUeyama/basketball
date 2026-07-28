@@ -52,8 +52,8 @@ export const PALM_HITBOX = true;
 // これより長いパスは投げない
 export const MAX_PASS = 13;
 // クォーター圧縮とペースに合わせたショットクロック。部分リセット(ファウル/オフェンスリバウンド後)は短縮。
-export const SHOT_CLOCK = 12;
-export const SHOT_CLOCK_PARTIAL = 8;
+export const SHOT_CLOCK = 6;          // 一時変更(通常12): 違反演出の確認用に短縮
+export const SHOT_CLOCK_PARTIAL = 4;  // 一時変更(通常8): full<partial を避けるため比率維持
 export const QUARTER_TIME = 60;   // 1クォーターあたりのゲーム内秒数(クロックに表示)
 export const QUARTERS = 4;
 export const BUZZER_WINDOW = 0.9; // 残りこの秒数を切ったらブザービーター扱い
@@ -100,13 +100,50 @@ import { CLUB_KITS } from "./data/club/clubkits";
 // eslint-disable-next-line @typescript-eslint/no-use-before-define
 import { CLUB_ABBR } from "./data/club/clubabbr";
 
-export function uniformOf(team: number): Uniform {
-  // 実在のクラブは自分のキットを着る(CLUB_KITS のホーム/アウェイ)。ランダムロスターは
-  // 汎用のチームスロットキット(BLAZE / WAVE)にフォールバックする。
+// 素のキット(ホーム/アウェイ)。実在のクラブは自分のキット(CLUB_KITS)、ランダムロスターは
+// 汎用のチームスロットキット(BLAZE / WAVE)にフォールバックする。
+function baseUniform(team: number): Uniform {
   const variant = TEAM_UNIFORM[team] ? 1 : 0;
   const club = TEAM_CLUB[team];
   if (club && CLUB_KITS[club]) return CLUB_KITS[club][variant];
   return UNIFORMS[team][variant];
+}
+
+// ---- サードユニフォーム(上半身の色被り回避) ----------------------------------
+const lum = (c: RGB) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+const satOf = (c: RGB) => { const mx = Math.max(c.r, c.g, c.b); return mx <= 0 ? 0 : (mx - Math.min(c.r, c.g, c.b)) / mx; };
+const hueOf = (c: RGB) => {
+  const mx = Math.max(c.r, c.g, c.b), mn = Math.min(c.r, c.g, c.b), d = mx - mn;
+  if (d <= 0) return 0;
+  let h = mx === c.r ? ((c.g - c.b) / d) % 6 : mx === c.g ? (c.b - c.r) / d + 2 : (c.r - c.g) / d + 4;
+  h *= 60; return h < 0 ? h + 360 : h;
+};
+// 上半身の色が「同系統」で見分けにくいか。明度差が大きければ区別可(白 vs 濃色)。両方ほぼ無彩色
+// なら明度が近い時のみ衝突(白同士/黒同士)。両方有彩色なら色相が近い時に衝突(同じ系統色)。
+function topsClash(a: RGB, b: RGB): boolean {
+  if (Math.abs(lum(a) - lum(b)) > 0.32) return false;
+  const sa = satOf(a), sb = satOf(b);
+  if (sa < 0.18 && sb < 0.18) return true;
+  if (sa < 0.18 || sb < 0.18) return false;
+  let hd = Math.abs(hueOf(a) - hueOf(b)); if (hd > 180) hd = 360 - hd;
+  return hd < 42;
+}
+// サードキット: ホームの上半身と明度で必ず差がつく中間色(明るいホーム→暗色 / 暗いホーム→白系)。
+// アウェイ元の上半身色をそで(アクセント)に残し、アウェイのアイデンティティを保つ。
+function thirdKit(away: Uniform, homeTop: RGB): Uniform {
+  return lum(homeTop) > 0.5
+    ? { top: { r: 0.14, g: 0.15, b: 0.18 }, bottom: { r: 0.10, g: 0.11, b: 0.13 }, sleeve: away.top, shoes: { r: 0.92, g: 0.92, b: 0.92 } }
+    : { top: { r: 0.93, g: 0.94, b: 0.97 }, bottom: { r: 0.85, g: 0.86, b: 0.90 }, sleeve: away.top, shoes: { r: 0.14, g: 0.14, b: 0.16 } };
+}
+
+export function uniformOf(team: number): Uniform {
+  const base = baseUniform(team);
+  // サードユニフォーム: ホームの上半身とアウェイの上半身が同系統色なら、アウェイが着替える。
+  if (TEAM_UNIFORM[team] === 1) {                 // このチームはアウェイ
+    const homeTop = baseUniform(1 - team).top;    // 相手(ホーム)の上半身色
+    if (topsClash(homeTop, base.top)) return thirdKit(base, homeTop);
+  }
+  return base;
 }
 
 // スコアボードのスコアバッジ用の短いラベル: 実在のクラブは3文字コード(ARS, BAL, …)を

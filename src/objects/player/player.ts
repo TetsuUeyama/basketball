@@ -227,10 +227,12 @@ export class Player {
   foulStaggerX = 0;
   foulStaggerZ = 0;
   // 守備成功の演出（見た目のみ）: "block"（拳を上げてホップ）、"steal"（低い両拳）、
-  // "stop"（腕を広げ前へ踏ん張る）。tickCooldownで減算、poseDefWin()でポーズ付け。
+  // "stop"（腕を広げ前へ踏ん張る）、"cheer"（両手を高く上げてバウンド）、"clap"（拍手）、
+  // "highfive"（相手へ手を上げる）。tickCooldownで減算、poseDefWin()でポーズ付け。
   defWinT = 0;
   defWinDur = 0;
-  defWinKind: "block" | "steal" | "stop" = "block";
+  defWinKind: "block" | "steal" | "stop" | "cheer" | "clap" | "highfive" = "block";
+  defWinToward = new Vector3();   // highfive の相手位置（手を上げる方向）
 
   // ═════════ 3Dメッシュ・ノード（実体） ═════════
   static readonly UPPER_ARM = 0.25;   // 上腕長（肩→肘）
