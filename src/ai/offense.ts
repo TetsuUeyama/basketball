@@ -514,18 +514,10 @@ export function supportHandler(game: Game, h: Player): Player | null {
 export function bringUpLane(game: Game, h: Player): void {
     const s = game.attackSign(h.team);
     const side = Math.abs(h.pos.x) > 1.5 ? Math.sign(h.pos.x) : openSide(game, h);
-    // 中央にいる間はサイドラインへ break し、その後その側に寄せて運び上げる。
-    const ahead = Math.abs(h.pos.x) < 4 ? 1.8 : 5.0;
-    let tz = h.pos.z + s * ahead;
-    // 支援ハンドラー候補(ガード)が近くに上がるまで前へ行き過ぎない — 全速で孤立して
-    // 苦し紛れにビッグへ渡すのを避ける。クロックに余裕がある時のみ待つ。
-    if (game.shotClock > 8) {
-      const sup = supportHandler(game, h);
-      if (sup && (sup.pos.z - tz) * s < 0) {
-        tz = sup.pos.z + s * 2.5;                          // 支援より最大2.5m前まで
-        if ((tz - h.pos.z) * s < 0) tz = h.pos.z;          // 後退はしない — その場で待つ
-      }
-    }
+    // 目標をフロントコート(トップ付近)まで遠くに固定して連続的に運ぶ。近い点にすると
+    // 決定間隔(~0.3s)ごとに目標へ届いて止まり「歩いて止まって」のかくつきになるため、
+    // 常に十分前方を目標にして滑らかに運ぶ(走っても止まらず歩いてもOK)。
+    const tz = game.attackFloor(h.team).z - s * 8;   // フロントコートのトップ付近
     h.driveTarget.set(side * 5.5, 0, tz);
   }
 

@@ -27,9 +27,12 @@ Player.prototype.gatherHold = function(world: Vector3): void {
     const offE = R ? this.elbowL : this.elbowR;
     const offside = R ? -1 : 1;                          // 添え手の外側
     this.armRateCap = MOVE_RATE.reach;
-    // 利き手: ボールへ向け、前腕を内側に曲げてボールを下から支える（シュートハンド）
-    this.aimArm(domP, world);
-    this.bendElbow(domE, 0.65);
+    // 利き手: IKでボールへ届かせる。IKの極ベクトルが肘を自然に下へ落とすので、横に張らず
+    // 肘が下＝シュートポケットになる。届かない時のみ下向きFKで構える。
+    if (!this.reachIK(domP, domE, world)) {
+      this.setArmDir(domP, (R ? 1 : -1) * 0.18, -0.75, -this.numberSide * 0.35);
+      this.bendElbow(domE, 1.05);
+    }
     // 添え手: ボール正面でなく外側の脇へ回す（両手投げに見せない＝利き手主体）。
     // upper を offside・やや上・前へ向け、深く曲げて手だけボール脇に添える。
     this.setArmDir(offP, offside * 0.45, 0.35, -this.numberSide * 0.55);
@@ -45,9 +48,11 @@ Player.prototype.applyShootLoad = function(): void {
     // 前傾: 胸を腰の切れ目でヒンジさせて前へ倒す（脚・腰は垂直のまま）。dejected と同規約。
     const Pt = -this.numberSide * 0.30 * L;           // 前傾角（フルで約17°）
     const cut = Player.ACORN_CUT;
-    this.torsoNode.rotation.x = Pt;
+    this.torsoNode.rotation.x = Pt;                   // 上半身: 前傾
     this.torsoNode.position.set(0, cut * (1 - Math.cos(Pt)), -cut * Math.sin(Pt));
-    this.acornWaistPivot.rotation.x = -Pt;            // 腰は垂直に保つ
+    // 下半身(腰/尻)を上半身と逆方向(後傾)へ折り、上下でくの字に(座り込むディップ)。
+    // waistPivot は torso(Pt)相対なので、-Pt で垂直、更に逆へ折るため係数を1超に。
+    this.acornWaistPivot.rotation.x = -Pt * 1.7;      // world下半身 ≈ -0.7*Pt(後傾)
     // 前傾しても顔はゴール方向（水平）へ。頭ノード(胴の根元が軸)でなく頭メッシュ自身を
     // その中心で回すので、頭は体に付いたまま位置は動かず、顔だけ水平に戻る。
     this.head.rotation.x = -Pt;
