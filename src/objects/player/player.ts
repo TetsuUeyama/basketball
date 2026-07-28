@@ -7,6 +7,14 @@ import { playerLook, type PlayerLook } from "./player-look";
 import { makeMat } from "../materials";
 import type { Stats } from "./stats";
 
+// 最高速度(m/s)を speed 能力値(0..100)から算出。3点(10→3.86 / 68→5.5 / 97→8.0)を通す
+// 2区間の折れ線。実在選手域(68-97)を 5.5-8.0m/s に広げ、68以下は 3.86 まで緩やかに下げる。
+export function runSpeedForSpeed(speed: number): number {
+  return speed <= 68
+    ? 3.86 + (speed - 10) * (1.64 / 58)   // 10→3.86 .. 68→5.5
+    : 5.5 + (speed - 68) * (2.5 / 29);    // 68→5.5 .. 97→8.0
+}
+
 // 既定の下向きの腕 (0,-1,0) を単位ベクトルへ回転させるクォータニオン。
 export function aimDownTo(vx: number, vy: number, vz: number): Quaternion {
   const dot = -vy;                                   // dot((0,-1,0),(vx,vy,vz))
@@ -306,7 +314,7 @@ export class Player {
     this.look = def.look ?? playerLook(def.name);   // DB選手はdef.look、DB外ダミーは名前フォールバック
     this.attr = def.attr;
     this.height = def.height;
-    this.runSpeed = 3.2 + rate(def.attr.speed) * 4.8; // ~3.2（遅い）.. 8.0（速い）
+    this.runSpeed = runSpeedForSpeed(def.attr.speed); // 折れ線 3.86..8.0（遅い..速い）
 
     // オフェンスのアイデンティティ: ロールのベースラインを能力値（または明示的な優先度）で微調整
     this.role = def.role;

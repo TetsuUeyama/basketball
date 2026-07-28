@@ -5,7 +5,7 @@ import { type PlayerDef } from "../../attributes";
 import { computeOffPriority, roleOffense, offActionOf, ROLE_BEHAVIOR, DEF_ROLE_BEHAVIOR } from "../../roles";
 import { rate, clamp } from "../../util";
 import { playerLook } from "./player-look";
-import { Player } from "./player";
+import { Player, runSpeedForSpeed } from "./player";
 
 declare module "./player" {
   interface Player {
@@ -19,7 +19,7 @@ Player.prototype.applyDef = function(def: PlayerDef): void {
     this.role = def.role;
     this.attr = def.attr;   // 再バインド: 試合前のスワップはdefオブジェクトを差し替えうる
     this.abilities = new Set(def.abilities ?? []);
-    this.runSpeed = 3.2 + rate(def.attr.speed) * 4.8; // コンストラクタと同期を保つ
+    this.runSpeed = runSpeedForSpeed(def.attr.speed); // コンストラクタと同期を保つ
     this.offPriority = computeOffPriority(def);
     this.playmaking = roleOffense(def.role).playmaking;
     // 評価ロールを実挙動へ: 仮想特能の付与と優先度/プレイメイキング補正。

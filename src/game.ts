@@ -820,6 +820,32 @@ export class Game {
   }
 
   // シュート時、ビッグはリバウンドに飛び込み、ガード/ウイングは下がって戻る準備をする。
+  // リバウンドを競る(残って飛び込む)タイプか: PF/C・センター役・リバウンダーロール・長身(≥2.0m)。
+  reboundCrasher(p: Player): boolean {
+    return this.isBig(p) || p.has("centerSpot") || p.evalRole === "リバウンダー" || p.height >= 2.0;
+  }
+
+  // 味方がシュート(溜め/放出)した瞬間のトランジション戻り。リムを競らないオフェンス選手を
+  // 攻撃性に応じて自陣へ戻す(攻撃性95=留まる/現状、低いほど深く速く)。戻したら true。
+  // 溜め(charge)中から呼ぶことで判定を早める。リバウンド競り(reboundCrasher)/リム至近は優先で false。
+  retreatOnShot(p: Player, dt: number): boolean {
+    if (p.team !== this.possession || p.rooted) return false;
+    if (this.reboundCrasher(p)) return false;   // 長身/リバウンダーは残って飛び込み優先
+    const rimFloor = this.attackFloor(this.possession);
+    if (dist2D(p.pos, rimFloor) < 5.5) return false;          // 既にリム至近で競る位置 → 優先
+    const stay = clamp((rate(p.attr.aggression) - 0.55) / 0.40, 0, 1);  // 攻撃性95→1, 65→0.25
+    const backPull = 1 - stay;
+    if (backPull <= 0.05) return false;                       // 攻撃性ほぼ最大 → 現状(セーフティ)
+    const defRim = this.attackFloor(1 - this.possession);     // 守る側のリム
+    const sgn = this.attackSign(this.possession);
+    const safeZ = rimFloor.z - sgn * 7;                       // オフェンスリム7m手前=セーフティ(留まる先)
+    const tz = safeZ + (defRim.z - safeZ) * backPull;         // 攻撃性低いほど自陣リムへ深く戻る
+    const tx = p.pos.x * (1 - backPull * 0.5);                // 中央寄りに絞りながら
+    moveToward2D(p.pos, tx, tz, p.accelSpeed(dt, 0.95 + backPull * 0.6) * dt);   // 戻りは速め
+    this.clampCourt(p.pos);
+    return true;
+  }
+
   crashBoards(dt: number): void {
     const rimFloor = this.attackFloor(this.possession);
     for (const p of this.players) {
@@ -837,7 +863,9 @@ export class Game {
       }
       // フォロースルー中のシューターは回復するまでリバウンドに飛び込めない
       if (p.rooted) { this.clampCourt(p.pos); continue; }
-      const big = this.isBig(p) || p.has("centerSpot"); // センター: ビッグのように飛び込む
+      const big = this.reboundCrasher(p); // ビッグ/長身/リバウンダーはリムへ飛び込む
+      // オフェンス側のトランジション戻り(リムを競らない選手は攻撃性に応じて自陣へ)。溜め中から効かせる。
+      if (this.retreatOnShot(p, dt)) continue;
       // ビッグはリムへ飛び込む。ウイングはサポート、PG は速攻を止めるセーフティとして残る。
       const standoff = big ? 0.8 : (p.role === "PG" ? 6.5 : 4.2);
       const t = towardPoint(rimFloor.x, rimFloor.z, p.pos.x, p.pos.z, standoff);

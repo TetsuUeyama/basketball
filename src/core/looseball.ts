@@ -107,9 +107,11 @@ export function chaseLoose(game: Game, dt: number): void {
           p.jump(0.55 + rate(p.attr.jump) * 0.45, 0.6);
         }
       } else {
-        // 争っていない → スペーシングの位置へ流れて備える
+        // 争っていない → 攻めの定位置へ流れて備える。ただし攻撃性が高いほど先行(先走り)、低い選手は
+        // 確保が決まるまで先走らず備える(相手ボールになった時に守れる=まだ相手攻撃中に攻めへ行かない)。
+        const eager = clamp((rate(p.attr.aggression) - 0.55) / 0.40, 0, 1);   // 攻撃性95→現状, 低→遅い
         const spot = game.formationSpots(p.team)[p.slot];
-        moveToward2D(p.pos, spot.x, spot.z, p.accelSpeed(dt, 0.8) * dt);
+        moveToward2D(p.pos, spot.x, spot.z, p.accelSpeed(dt, 0.25 + eager * 0.6) * dt);
         game.clampCourt(p.pos);
       }
     }

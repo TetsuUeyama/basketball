@@ -1,7 +1,7 @@
 // man ディフェンス本体。ゾーン/プレスは defense-schemes、ピック&ロールのカバレッジは move/reaction/screen。
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
-import { RIM, PALM_HITBOX } from "../config";
+import { RIM, PALM_HITBOX, THREE_DIST } from "../config";
 import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D, dirTo2D, towardPoint } from "../util";
 import { twWeight, palmRadius, effShootRange, stripEdge, shotThreat, defHands, ballSecurity, leapHeight } from "../eval";
 import { reachInFoulRate } from "../move/reaction/foul";
@@ -45,11 +45,15 @@ export function denySmother(game: Game, h: Player, dDef: number): boolean {
 // ドライブを切り、抜かれたら追って復帰。
 export function defendOnBall(game: Game, dt: number, d: Player, man: Player, protect: Vector3): void {
   const effort = defEffort(game, d, protect);
-  // スターはバックコートでボールに圧をかけない。自陣内側で下がって待つ。
-  const s0 = game.attackSign(game.possession);
-  if (effort < 0.9 && man.pos.z * s0 < 0.3) {
-    const wx = man.pos.x * 0.6, wz = s0 * 1.5;
-    moveToward2D(d.pos, wx, wz, d.accelToward(dt, wx, wz, 0.9 * effort) * dt);
+  // アーク外の非シューターは脅威でない: 詰めずアークの内側(リムから約6.25m)でゾーン/ドライブを
+  // 守り、ボールが運ばれても前(センター)へ迎えに出ない。3Pライン内(射程)に入るか本物の3P
+  // シューターなら通常のタイト守備へ移る。「相手が3Pラインに入るまでゾーンを守る」を実現。
+  const hRim = dist2D(man.pos, protect);
+  const shooter3 = rate(man.attr.threeAcc) >= 0.82;
+  if (hRim > THREE_DIST + 0.3 && !shooter3 && man.beatenT <= 0 && man.powerT <= 0) {
+    const hold = hRim - (THREE_DIST - 0.5);   // アークの0.5m内側でボールとリムの間に立つ
+    const t = towardPoint(man.pos.x, man.pos.z, protect.x, protect.z, hold);
+    moveToward2D(d.pos, t.x, t.z, d.accelToward(dt, t.x, t.z, effort) * dt);
     game.clampCourt(d.pos);
     return;
   }
@@ -146,7 +150,7 @@ export function getBackOnDefense(game: Game, dt: number, d: Player, man: Player)
     game.clampCourt(d.pos);
     return true;
   }
-  if ((upCourt && manBack) || stranded) {
+  if (upCourt || stranded) {
     const gb = game.steerAround(d, man.pos.x * 0.4, s * (RIM.z - 7));
     moveToward2D(d.pos, gb.x, gb.z, d.accelToward(dt, gb.x, gb.z, 1.12) * dt);
     game.clampCourt(d.pos);
@@ -200,15 +204,8 @@ export function runDefense(game: Game, dt: number): void {
     if (isOnBall) {
       // 抜かれてボールの後ろに取り残されたら、クッションで追うのでなく全力で自陣へ戻る(ゲットバック)。
       if (getBackOnDefense(game, dt, d, man)) continue;
-      // プレス非採用のボール運び中(!frontT)は前に出ず、自陣センター手前で受ける準備をする。
-      // プレス相当の位置リスクだけ負って何もしない状態を避ける — 相手が越えてきたらマンマーク。
-      if (!game.pressOn && !game.frontT) {
-        const s = game.attackSign(game.possession);
-        const wx = man.pos.x * 0.6, wz = s * 1.5;
-        moveToward2D(d.pos, wx, wz, d.accelToward(dt, wx, wz, Math.max(defEffort(game, d, protect), 0.9)) * dt);
-        game.clampCourt(d.pos);
-        continue;
-      }
+      // 運び上げ中もセンターへ迎えに出ない: defendOnBall がアーク外の非シューターをアーク内側で
+      // 待つ(ゾーン)ので、そのまま任せる。相手が射程に入ったら詰める。
       defendOnBall(game, dt, d, man, protect);
       // クッションからリーチイン(密着時にスティール/ファウル判定)。
       const press = game.tactics[defTeam].defense.pressure * twWeight(d);
@@ -296,21 +293,6 @@ export function runDefense(game: Game, dt: number): void {
       }
     }
 
-    // プレス非採用のボール運び中(!frontT): 前に出ず自陣ハーフに沈んで守る。担当がまだセンター/
-    // 相手側にいる間はマークに上がらず、自陣側へ越えてきたら通常のマン/ヘルプに移る。
-    if (!game.pressOn && !game.frontT && game.handler) {
-      const s = game.attackSign(game.possession);
-      const manDepth = man.pos.z * s;            // 担当の自陣深さ(<0=相手バックコート)
-      if (manDepth < 2.5) {
-        const tz = s * clamp(4.0 - manDepth * 0.4, 2.0, 5.5);   // 自陣側に深く沈む(センターを越えない)
-        const tx = man.pos.x * 0.5;
-        moveToward2D(d.pos, tx, tz, d.accelToward(dt, tx, tz, Math.max(defEffort(game, d, protect), 0.9)) * dt);
-        game.clampCourt(d.pos);
-        d.decayLean(dt);
-        continue;
-      }
-    }
-
     // 通路ブロック: 相手が横に回り込んだら、新しいレーンの入口へスライドして応じる
     if (d.wallT > 0) {
       moveToward2D(d.pos, d.wallX, d.wallZ,
@@ -334,9 +316,15 @@ export function runDefense(game: Game, dt: number): void {
       const bx = game.handler.pos.x - protect.x, mx = man.pos.x - protect.x;
       ballSide = Math.abs(bx) < 1.5 || mx * bx >= 0;
     }
+    // パック・ザ・ペイント: ペイント/得点圏(リムから4.5m内)の脅威か本物の3Pシューターの時だけ付く。
+    // 周辺(アーク付近含む)の非シューターは脅威でないので付かず deny もせず、3Pラインの内側へ深く
+    // サグしてゾーン/リムを守る(釣り出されない)。
+    const mRim = dist2D(man.pos, protect);
+    const shooter3 = rate(man.attr.threeAcc) >= 0.82;   // 上位1割の3Pシューターのみ外まで付く
+    const pickup = mRim < 4.5 || shooter3;
     let stx: number, stz: number;
     let denying = false;
-    if (game.handler && !driveLive && ballSide && ballGap < 6.5 && ballGap > 0.8 && !man.airborne) {
+    if (game.handler && !driveLive && ballSide && ballGap < 6.5 && ballGap > 0.8 && !man.airborne && pickup) {
       denying = true;
       // DENY: マークとボールの間のパスコースへ割って入り消す。ボール→マーク線上の、マークから
       // ボール側へ laneStep 出た点（レーンに体を入れる）。密着度＝守備+敏捷（振り切られない能力）。
@@ -355,6 +343,12 @@ export function runDefense(game: Game, dt: number): void {
         * (1 - denyIntensity(game, defTeam) * 0.8);
       const st = towardPoint(man.pos.x, man.pos.z, protect.x, protect.z, sag);
       stx = st.x; stz = st.z;
+      // 非脅威(アーク外の非シューター)は3Pラインの内側までしか付かない=ゾーン/リムを守る。
+      if (!pickup) {
+        const maxR = 5.0;   // アークより十分内側(ヘルプ/ゾーン)まで詰める
+        const dR = dist2DTo(protect, stx, stz);
+        if (dR > maxR) { const k = maxR / (dR || 1); stx = protect.x + (stx - protect.x) * k; stz = protect.z + (stz - protect.z) * k; }
+      }
     }
     // 進路 denial: 動いている男の行き先を影で追う(先読みは上限付き)。振り切り優位で読みが鈍る。
     // deny 中は先読みを弱めてボール→マークのレーン上に体を残す（レーンを塞ぐのが見えるように）。
@@ -387,7 +381,12 @@ export function runDefenseDuringDeadish(game: Game, dt: number): void {
     const man = offense[d.slot];
     // アウトレット/スローインはビッグが自陣へ全力で戻る場面
     if (getBackOnDefense(game, dt, d, man)) continue;
-    const gs = towardPoint(man.pos.x, man.pos.z, protect.x, protect.z, 1.5);
+    // 非脅威(アーク付近の非シューター)はアーク内(リムから約5m)まで下がってゾーンを守る。
+    // ペイント/得点圏の脅威か本物のシューターのみ 1.5m でタイトに付く。
+    const mRim = dist2D(man.pos, protect);
+    const shooter3 = rate(man.attr.threeAcc) >= 0.82;
+    const sag = (mRim < 4.5 || shooter3) ? 1.5 : Math.max(1.5, mRim - 5.0);
+    const gs = towardPoint(man.pos.x, man.pos.z, protect.x, protect.z, sag);
     moveToward2D(d.pos, gs.x, gs.z, d.accelSpeed(dt) * dt);
     game.clampCourt(d.pos);
   }

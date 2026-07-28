@@ -68,11 +68,13 @@ export function updateOffBallMotion(game: Game, dt: number, team: number, exclud
     }
 
     // レーンを埋める: 速攻でウィング(ハンドラー以外)が自分の側をリムへ走り込む。ビッグは後追い。
+    // 攻撃性が高いほど即走り出し(95=現状)、低い選手は攻撃への移行が遅く遅れて上がる。
     if (game.pushT > 0 && game.handler && p !== game.handler && !game.isBig(p)) {
+      const eager = clamp((rate(p.attr.aggression) - 0.55) / 0.40, 0, 1);
       const s = game.attackSign(team);
       const side = p.pos.x >= 0 ? 1 : -1;
       const fb = game.steerAround(p, side * 4.5, s * (RIM.z - 1.5));
-      moveToward2D(p.pos, fb.x, fb.z, p.accelToward(dt, fb.x, fb.z, 1.25) * dt);
+      moveToward2D(p.pos, fb.x, fb.z, p.accelToward(dt, fb.x, fb.z, 0.55 + eager * 0.8) * dt);
       game.clampCourt(p.pos);
       continue;
     }
@@ -155,8 +157,8 @@ export function updateOffBallMotion(game: Game, dt: number, team: number, exclud
       const sj = game.steerAround(p, spx, spz, true);   // 通り抜けず迂回
       moveToward2D(p.pos, sj.x, sj.z, p.accelToward(dt, sj.x, sj.z) * dt);
       spacingNudge(game, dt, p, atPost ? 2.0 : 4.2);   // 味方と近づきすぎない（間合いを広く）
-      // ボールからの連続的な分離: ドリブラーが寄ってきたら離れる
-      ballSpacingNudge(game, dt, p, atPost ? 2.4 : 4.6);
+      // ボールからの連続的な分離: ドリブラーが寄ってきたら離れる(ドライブ/パスコースのスペース確保で強め)
+      ballSpacingNudge(game, dt, p, atPost ? 2.4 : 5.2);
       // マーク外し: 担当守備を振り切ってパスコースを作る（クイックネス or パワー勝負）
       tryShake(game, dt, p);
 
@@ -418,11 +420,16 @@ export function bestOpenSpot(game: Game, team: number, spots: Vector3[], self: P
       // オフェンスのポジション優先度: ①相手がいない(オープン)を最重視 ②密集回避＝スペーシング
       // ③フリーの味方を作るパスコース ④相手ゴールに近い得点圏 ⑤ボールから適度に離れる。
       const rimDist = dist2DTo(rimFloor, s.x, s.z);
-      score = open * (self.has("positioning") ? 1.35 : 1) * 1.15   // ①オープン(相手がいない)を最重視
+      // スペーシング役(優先度低い/3&D/スポットアップ)ほどワイド(コーナー)を強く好み中央へ寄らない。
+      const spaceRole = clamp(1 - self.offPriority, 0, 1)
+        + (self.evalRole === "3&D" || self.evalRole === "スポットアップ" ? 0.4 : 0);
+      score = open * (self.has("positioning") ? 1.35 : 1) * 1.6    // ①オープン(相手がいない)を最重視=価値UP
         + Math.min(mate, 7) * 1.05              // ②密集回避=スペーシング(味方から離れた空きへ)
         + lane * 2.0                            // ③フリーの味方を作る(パスコースが通る位置)
-        + Math.max(0, 9 - rimDist) * 0.3        // ④相手ゴールに近い得点圏を加点(上限9m)
-        + Math.min(fromHandler, 6) * 0.25       // ⑤ボールから適度に離れる
+        + Math.max(0, 9 - rimDist) * 0.15       // ④相手ゴールに近い得点圏を加点(上限9m)=優先度DOWN(密集回避)
+        + Math.min(fromHandler, 7) * 0.6        // ⑤ボールから離れる=ドライブ/パスコースのスペース(強化)
+        - Math.max(0, 4.5 - fromHandler) * 1.2  // ⑤' ボール至近(4.5m内)のスポットは強く避ける(ボールへ密集させない)
+        + Math.abs(s.x) * (0.2 + spaceRole * 0.55)  // ⑥ワイド維持(コーナー)=中央密集回避(スペーシング役ほど強)
         - clog * 2.5                            // ドライブレーンを塞がない
         - dist2DTo(self.pos, s.x, s.z) * 0.1;   // 移動コスト
       if (self.has("sideSpot") && (i === 3 || i === 4)) score += 1.5;

@@ -173,9 +173,9 @@ export const TACTICS: Tactics[] = [
   // Team 0 — BLAZE: じっくり、内を攻める、保守的なヘルプディフェンス。2-3ゾーンで
   // ペイントをそれなりに固め、めったにプレスしない
   { offense: { pace: 0.35, threeBias: 0.30, driveBias: 0.65, ballMovement: 0.55 },
-    defense: { pressure: 0.40, help: 0.70, zone: 0.35, press: 0.10, deny: 0.25 } },
+    defense: { pressure: 0.40, help: 0.70, zone: 0.35, press: 0.02, deny: 0.25 } },
   // Team 1 — WAVE: 速いペース、3P好き、アグレッシブ。詰めてプレスし、
   // ハーフコートではほぼマン
   { offense: { pace: 0.80, threeBias: 0.75, driveBias: 0.45, ballMovement: 0.65 },
-    defense: { pressure: 0.80, help: 0.40, zone: 0.12, press: 0.40, deny: 0.35 } },
+    defense: { pressure: 0.80, help: 0.40, zone: 0.12, press: 0.04, deny: 0.35 } },
 ];

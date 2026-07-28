@@ -52,6 +52,14 @@ export function shotClockViolation(game: Game): void {
     const sx = game.ball.pos.x, sz = game.ball.pos.z;
     const front = sz * game.attackSign(def) > 0;
     game.handler = null;
+    // 守備側が喜ぶ: 違反を誘った最寄りの守備者は大きく両手を上げてホップ(block)、
+    // 他はガッツポーズの拳パンプ(steal)。
+    {
+      const defenders = game.teamPlayers(def);
+      let hero = defenders[0], hd = Infinity;
+      for (const d of defenders) { const dd = dist2D(d.pos, game.ball.pos); if (dd < hd) { hd = dd; hero = d; } }
+      for (const d of defenders) d.defWin(d === hero ? "block" : "steal");
+    }
     game.setEvent("SHOT CLOCK VIOLATION", offTeam, 2.6);
     game.pauseThen(1.2, () => withSubs(game, () => game.inbound.startAt(def, sx, sz,
       { clock: front ? SHOT_CLOCK_PARTIAL : SHOT_CLOCK })));

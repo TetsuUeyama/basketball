@@ -42,11 +42,11 @@ export function twWeight(p: Player): number {
 }
 
 // この守備者が攻撃アクションに「反応」するまでの時間(秒) — 守備(ディフェンス)と
-// レスポンス(反応)が等しく効き、両方エリートで ≈0.2秒、両方低いと ≈1.2秒、
-// 小さな揺らぎ付き。
+// 守備+反応の平均(ability)でラグが決まる。最速(ability=1)≈0.2秒、最遅(ability=0)≈1.2秒、
+// 平均能力(ability≈0.735)で≈0.6秒。指数0.69で中央を膨らませ平均を0.6へ寄せる。小さな揺らぎ付き。
 export function reactionLag(p: Player): number {
   const ability = (rate(p.attr.defense) + rate(p.attr.reaction)) / 2;   // 1 = 両方エリート
-  return clamp((0.2 + (1 - ability) * 1.0) * rand(0.9, 1.1), 0.2, 1.2);
+  return clamp((0.2 + Math.pow(1 - ability, 0.69)) * rand(0.9, 1.1), 0.2, 1.2);
 }
 
 // L速度(3P射程) → この選手が無理なく打てる距離。75=3Pライン、95=センターライン(上限)。

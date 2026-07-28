@@ -83,6 +83,9 @@ export function updateCharge(game: Game, dt: number): void {
     if (!h) { game.ballMode = "held"; return; }
     game.chargeT -= dt;
     setChargeBall(game, h);   // 胸前・低めで構え、進捗で前傾＋沈み込みを深める
+    // トランジション戻りを溜め(シュートモーション)開始から効かせて判定を早める:
+    // リムを競らない味方が攻撃性に応じて自陣へ戻り始める(速攻を守る)。
+    for (const p of game.teamPlayers(h.team)) { if (p !== h) game.retreatOnShot(p, dt); }
     // コンテスト候補: シューターの担当守備者と、最寄りの守備者。溜め中は updateCharge しか
     // 動かない(他守備者は停止)ため、担当がサグ/振り切られて離れていても、近くの助けが
     // クローズアウト＆コンテストに飛べるよう最寄りも動かす。
@@ -101,11 +104,13 @@ export function updateCharge(game: Game, dt: number): void {
         moveToward2D(c.pos, h.pos.x, h.pos.z, c.accelToward(dt, h.pos.x, h.pos.z, 1.15) * dt);
         game.clampCourt(c.pos);
       }
-      // リリースが近づくと踏み切って挑む — 反応/守判断=タイミング、ジャンプ=高さ。
-      // クローズアウトが届いた間合い(~2.2m)まで拾い、寄っても飛ばない事態を防ぐ。
-      if (game.chargeT < 0.16 && gap < 2.2) {
+      // リリースが近づいたら、間に合わなくても(だめもと)踏み切って挑む。近ければ真上でコンテスト、
+      // 遠ければ横っ飛び(contestLeap が最大1.5mランジ)。フリーで撃たせないため間合い(~3.6m)と
+      // 窓(~0.22s)を広げ、遠いシューターにも跳ぶ。
+      if (game.chargeT < 0.22 && gap < 3.6) {
         const read = rate(c.attr.reaction) * 0.5 + rate(c.attr.defense) * 0.5;
-        if (chance((0.25 + read * 1.5) * dt * 9)) game.contestLeap(c, h.pos, leapHeight(c), 0.6);
+        const near = clamp(1 - (gap - 1.0) / 2.6, 0.35, 1);   // 近いほど確実、遠いだめもとでも最低35%係数
+        if (chance((0.25 + read * 1.5) * near * dt * 9)) game.contestLeap(c, h.pos, leapHeight(c), 0.6);
       }
       // ギャザー中のストリップ: 頭上に溜められたボールを守備者がはたく。長いギャザーほど
       // 弾かれやすく、高いボールに届く必要がある(空中だと有利)。背の高いシューターは遠ざける。
