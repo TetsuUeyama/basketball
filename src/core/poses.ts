@@ -161,7 +161,8 @@ export function poseHands(game: Game, ): void {
     for (const p of game.players) {
       if (p.defWinT <= 0 || p.foulReactT > 0) continue;
       if (p === game.handler || p === game.shooter || p === game.passer) continue;
-      if (p.airborne || scrambling) continue;
+      // デッドボールの喜び(pause)は跳ねている間もポーズを保つ。ライブ中の空中は除く(ボールへ手を伸ばす)。
+      if ((p.airborne && game.ballMode !== "pause") || scrambling) continue;
       p.poseDefWin();
     }
   }

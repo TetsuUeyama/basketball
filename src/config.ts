@@ -52,8 +52,8 @@ export const PALM_HITBOX = true;
 // これより長いパスは投げない
 export const MAX_PASS = 13;
 // クォーター圧縮とペースに合わせたショットクロック。部分リセット(ファウル/オフェンスリバウンド後)は短縮。
-export const SHOT_CLOCK = 6;          // 一時変更(通常12): 違反演出の確認用に短縮
-export const SHOT_CLOCK_PARTIAL = 4;  // 一時変更(通常8): full<partial を避けるため比率維持
+export const SHOT_CLOCK = 12;
+export const SHOT_CLOCK_PARTIAL = 8;
 export const QUARTER_TIME = 60;   // 1クォーターあたりのゲーム内秒数(クロックに表示)
 export const QUARTERS = 4;
 export const BUZZER_WINDOW = 0.9; // 残りこの秒数を切ったらブザービーター扱い

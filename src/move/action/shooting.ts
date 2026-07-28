@@ -71,10 +71,9 @@ export function setChargeBall(game: Game, h: Player): void {
     h.shootLoadTarget = p;
     const rim = game.attackFloor(h.team);
     const fx = rim.x - h.pos.x, fz = rim.z - h.pos.z, fl = Math.hypot(fx, fz) || 1;
-    const front = 0.18 + p * 0.05;                 // 手前(体の近く)で構える
-    // 肩～あごの高さ(セットポイント)で構える。胸より下だと腕長(0.5m)では肘をボール下に入れられない。
-    // 肩の高さなら reachIK が手をボールに乗せ、極ベクトルで肘が下に収まる。
-    const y = SHOT_GATHER_Y + 0.16 - p * 0.05;
+    // おなかの少し前で両手に抱える。リリースで releaseShot が頭上へ持ち上げる。
+    const front = 0.24;                            // おなかの少し前
+    const y = SHOT_GATHER_Y - 0.12 + p * 0.05;     // おなか〜みぞおちの高さ(≈1.08→1.13)
     game.ball.pos.set(h.pos.x + (fx / fl) * front, y, h.pos.z + (fz / fl) * front);
   }
 

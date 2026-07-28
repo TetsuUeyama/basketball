@@ -13,30 +13,12 @@ declare module "../../objects/player/player" {
   }
 }
 
-/** ギャザーの構え: ボールを体の前で抱える。利き手を主にボールへ、逆手を添え、
- *  両前腕を内側に曲げて（肘をたたんで）ボールを前で保持する。両手投げに見えない
- *  よう利き手主体。charge 中に毎フレーム呼ぶ。 */
+/** ギャザーの構え: おなかの前で両手にボールを抱える（両肘を程よく曲げる）。
+ *  holdBallHands が両手をボールの両側に添える。リリースで shootArms が利き手の
+ *  シュートフォームへ引き継ぐ。charge 中に毎フレーム呼ぶ。 */
 Player.prototype.gatherHold = function(world: Vector3): void {
-    // 利き手ノードは numberSide を織り込む: setNumberSide は腕/目のZ(前後)のみ反転しX
-    // (左右)は不変。+X は numberSide=+1 の時だけ体の右(armR)、-1 では体の左になる。よって
-    // 右利き(hand="R")の実際の右手は numberSide>0 で armR、<0 で armL。
-    const R = (this.hand === "R") === (this.numberSide > 0);
-    const domP = R ? this.armPivotR : this.armPivotL;   // 利き手
-    const domE = R ? this.elbowR : this.elbowL;
-    const offP = R ? this.armPivotL : this.armPivotR;   // 添え手
-    const offE = R ? this.elbowL : this.elbowR;
-    const offside = R ? -1 : 1;                          // 添え手の外側
     this.armRateCap = MOVE_RATE.reach;
-    // 利き手: IKで手のひらをボールに乗せる(=必ず触れる)。ボールは懐(手前)にあるのでIKの極ベクトルが
-    // 肘を下へ収める。届かない時のみ下向きFKで構える。
-    if (!this.reachIK(domP, domE, world)) {
-      this.setArmDir(domP, (R ? 1 : -1) * 0.1, -0.8, -this.numberSide * 0.3);
-      this.bendElbow(domE, 1.2);
-    }
-    // 添え手: ボール正面でなく外側の脇へ回す（両手投げに見せない＝利き手主体）。
-    // upper を offside・やや上・前へ向け、深く曲げて手だけボール脇に添える。
-    this.setArmDir(offP, offside * 0.45, 0.35, -this.numberSide * 0.55);
-    this.bendElbow(offE, 0.95);
+    this.holdBallHands(world);   // 両手でボールをおなかの前に抱える（両肘を曲げて包む）
     this.armRateCap = 0;
 };
 

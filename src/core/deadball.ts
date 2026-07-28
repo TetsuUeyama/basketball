@@ -71,7 +71,7 @@ export function shotClockViolation(game: Game): void {
           partner.defWin("highfive"); partner.defWinToward.set(mx, 0, mz);
         }
       }
-      for (const d of defenders) { if (!used.has(d)) d.defWin("clap"); }   // 余り(ペア無し)は頭上で拍手
+      for (const d of defenders) { if (!used.has(d)) d.defWin("cheer"); }   // 余り(ペア無し)は跳ねて喜ぶ
       for (const d of defenders) d.defWinDur = d.defWinT = 2.6;            // ポーズ中ずっと続く長尺
     }
     game.setEvent("SHOT CLOCK VIOLATION", offTeam, 2.8);
