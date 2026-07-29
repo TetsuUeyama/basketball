@@ -40,6 +40,9 @@ const SHOT_PARAMS: Record<ShotType, {
   three:    { points: 3, liveLabel: null,     apex: (h, far) => 1.6 + rate(h.attr.bank) * 1.2 + far * 0.45, dur: (far) => 0.85 + far * 0.11 },
 };
 
+// 溜め中のボールに守備者の手が届く間合い。ここまで詰められると stripGather の対象。
+const STRIP_RANGE = 1.3;
+
 export function shoot(game: Game, h: Player, dHoop: number, dDef: number): void {
     const windup = shotWindupFor(h, dHoop);
     // ブザービーター: ギャザーの時間が無い — ホーンと同時に投げ上げる。準備は全く
@@ -94,6 +97,13 @@ export function updateCharge(game: Game, dt: number): void {
     const nd = game.nearestDefender(h);
     const ndGap = nd ? dist2D(nd.pos, h.pos) : 99;
     const beaten = h.beatenT > 0 || h.powerT > 0;       // 抜き去った担当 → クローズアウトが遅れる
+    // 目の前まで詰められたら溜めを打ち切って即リリース。はたかれる(stripGather)より、
+    // 準備不足ぶんの精度低下を受け入れる。見切る間合いは反応で決まり、鈍い選手は
+    // はたかれる間合い(STRIP_RANGE)まで詰められてから放つので隙が残る。
+    if (game.chargeT > 0 && ndGap < 1.05 + rate(h.attr.reaction) * 0.55) {
+      releaseShot(game, h, game.chargeDHoop, game.chargeDDef, game.shotWindup - game.chargeT);
+      return;
+    }
     const contesters: Player[] = [];
     if (man && !beaten) contesters.push(man);           // 担当: 抜かれていなければ閉じる
     if (nd && nd !== man) contesters.push(nd);          // 最寄りの助け: 担当が離れていても飛べる
@@ -115,7 +125,7 @@ export function updateCharge(game: Game, dt: number): void {
       }
       // ギャザー中のストリップ: 頭上に溜められたボールを守備者がはたく。長いギャザーほど
       // 弾かれやすく、高いボールに届く必要がある(空中だと有利)。背の高いシューターは遠ざける。
-      if (gap < 1.3) {
+      if (gap < STRIP_RANGE) {
         // 打つ前に手がボールに当たれば弾いて打たせない(はたき出し=ルーズへ)。
         const poke = defHands(c);
         const secure = rate(h.attr.handling) * 0.5 + clamp((h.height - c.height) * 0.6, -0.15, 0.35);
