@@ -4341,6 +4341,15 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - ui-pregame.ts（`refreshEditors`）: 戦力ボード上の topBar を廃し、同内容を `bottomBar` として editorHost の最後に追加（横並び/タブ表示の両分岐）。TIP OFF を厳密に中央へ置くため `grid-template-columns: 1fr auto 1fr` の中央列に配置し、戻るは左列 `justifySelf:end` + `marginRight:14px` で少し左に。単純な flex + `justifyContent:center` では2ボタンが一塊で中央寄せされ TIP OFF が中央からずれる。
 - 検証: tsc✓ / vite build✓(EXIT=0)。⚠️ **ブラウザ目視は未実施**（Chrome拡張が未導入のため実行不可）。旗の縦横比・一覧の収まり・狭い画面での TIP OFF と戻るの間隔は要目視。
 
+## 2026-07-30 (336) クラブ選択オーバーレイを上下中央寄せ / 選択シートを四辺の枠線に
+
+- 指摘「戦力バー・ユニフォーム帯と、リーグ/クラブ選択の間に画面縦によって隙間ができる」。原因は `openMatchupWizard` の縦並びが `[バー][ユニ帯][フィラー][シート]` で、**余りの縦スペースが全てユニ帯とシートの間の1枚のフィラーに入る**構造だったこと。
+- フィラーを `fillerTop` / `fillerBottom` の2枚にし `[フィラー][バー][ユニ帯][シート][フィラー]` へ。両方 `flex:1 1 auto` で余りが上下等分され、塊が画面中央に寄る。ユニ帯とシートは隣接＝隙間なし。フィラーは従来通り不透明タイルなので被覆（透明はユニ2窓のみ）は維持。
+- ⚠️ 副作用対応: 中央寄せにするとシート高さの変化（リーグ一覧=フッター有 / クラブ一覧=フッター無、行数差）でユニ帯の位置も動く。従来は上端固定で動かなかった。3Dプレビューの矩形がズレるため `ResizeObserver` で sheet を監視し `sendPreview()` を再送、`exitPreview` で `disconnect()`。
+- 指摘「シートのボーダーが上だけ」→ `borderTop` のみ + `borderRadius:16px 16px 0 0` を、四辺 `border` + `borderRadius:16px` に。影も上方向のみ `0 -8px 30px` → 全方向 `0 0 24px`。
+- ⚠️ 罠: オーバーレイ本体は透明で不透明タイルが画面を覆う設計のため、角を丸めると角から、幅>1200px では左右の帯から背後の3Dが覗く（左右の帯は変更前から潜在的にあった）。不透明な `sheetRow`（`padding:8px 10px 10px`）で包んで下地にすることで解消。
+- 検証: tsc✓ / vite build✓(EXIT=0)。⚠️ **ブラウザ目視は未実施**。特にシート高さ変化時の3Dプレビュー追従は実機でしか確認できない（リーグ一覧⇄クラブ一覧の往復で選手表示がズレないか）。
+
 ## 2026-07-25 (335) src直下に animation/ と move/ を新設する大規模再編＋ball.ts新設
 
 - ユーザー要望「src直下に animation と move を作り、両方とも直下は basic/action/reaction。animation には各moveで使うアニメ設定を置く。ball.ts は basic に」。確認の結果 run/jump/turn は move/basic へ。

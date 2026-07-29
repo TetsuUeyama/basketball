@@ -208,8 +208,10 @@ UI.prototype.openMatchupWizard = function(): void {
     Object.assign(band.style, { width: "100%", height: `${WIN_H + 24}px`, display: "flex", alignItems: "stretch", justifyContent: "center" } as Partial<CSSStyleDeclaration>);
     band.append(cover("1 1 auto"), inner, cover("1 1 auto"));
 
-    // 3) フィラー（不透明）がシートまでの残りのスペースを埋める
-    const filler = cover("1 1 auto");
+    // 3) フィラー（不透明）で余りを上下に等分し、戦力バー〜シートの塊を画面中央に寄せる。
+    //    シートの直上に置かないことで、背が高い画面でもユニフォーム帯とシートが離れない。
+    const fillerTop = cover("1 1 auto");
+    const fillerBottom = cover("1 1 auto");
 
     const refreshTop = () => {
       renderBar();
@@ -217,14 +219,14 @@ UI.prototype.openMatchupWizard = function(): void {
       awayCell.lab.textContent = `アウェイ　${teamAbbr(1)}`;
     };
 
-    // ボトムシート: パネルは 1200px で頭打ちにして中央寄せ、内容も中央寄せ。
+    // 選択シート: パネルは 1200px で頭打ち、内容も中央寄せ。四辺を枠線で囲む。
     const sheet = document.createElement("div");
     Object.assign(sheet.style, {
-      width: "100%", maxWidth: "1200px", alignSelf: "center", boxSizing: "border-box",
-      background: OPAQUE, borderTop: "1px solid rgba(255,255,255,0.14)",
-      borderRadius: "16px 16px 0 0", padding: "10px 12px",
+      width: "100%", maxWidth: "1200px", boxSizing: "border-box",
+      background: OPAQUE, border: "1px solid rgba(255,255,255,0.14)",
+      borderRadius: "16px", padding: "10px 12px",
       display: "flex", flexDirection: "column", alignItems: "center", gap: "8px",
-      boxShadow: "0 -8px 30px rgba(0,0,0,0.5)",
+      boxShadow: "0 0 24px rgba(0,0,0,0.5)",
     } as Partial<CSSStyleDeclaration>);
     const CAP = { width: "100%", maxWidth: "1200px", boxSizing: "border-box" } as Partial<CSSStyleDeclaration>;
     const header = document.createElement("div");
@@ -234,7 +236,14 @@ UI.prototype.openMatchupWizard = function(): void {
     const footer = document.createElement("div");
     Object.assign(footer.style, { ...CAP, display: "flex", gap: "10px", justifyContent: "center" } as Partial<CSSStyleDeclaration>);
     sheet.append(header, content, footer);
-    overlay.append(topCover, band, filler, sheet);
+    // シートを載せる不透明な行。角の丸みや左右の余白から背後の3Dが覗かないための下地。
+    const sheetRow = document.createElement("div");
+    Object.assign(sheetRow.style, {
+      width: "100%", boxSizing: "border-box", background: OPAQUE,
+      display: "flex", justifyContent: "center", padding: "8px 10px 10px",
+    } as Partial<CSSStyleDeclaration>);
+    sheetRow.appendChild(sheet);
+    overlay.append(fillerTop, topCover, band, sheetRow, fillerBottom);
     this.root.appendChild(overlay);
     this.chooser = overlay;
     refreshTop();
@@ -250,10 +259,16 @@ UI.prototype.openMatchupWizard = function(): void {
     };
     requestAnimationFrame(sendPreview);
     window.addEventListener("resize", sendPreview);
+    // 中央寄せなのでシートの高さが変わるとユニフォーム帯も動く。追従して矩形を送り直す。
+    const sheetResize = new ResizeObserver(() => sendPreview());
+    sheetResize.observe(sheet);
 
     let team = 0;
     const picked = [false, false];
-    const exitPreview = () => window.removeEventListener("resize", sendPreview);
+    const exitPreview = () => {
+      window.removeEventListener("resize", sendPreview);
+      sheetResize.disconnect();
+    };
     const exitToTitle = () => { this.onUniformPreview(null); exitPreview(); this.closeChooser(); this.titlePanel.style.display = "flex"; };
 
     // リーグの「フラッグ」: 国旗風のデザイン。グループ（他リーグA / 南米 / その他B）は中立 / 大陸風。
