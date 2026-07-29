@@ -8,6 +8,7 @@ import { laneVetoed, passRisk, evalInterception, longBallRead } from "../reactio
 import { runDefenseDuringDeadish } from "../../ai/defense";
 import { updateOffBallMotion, bestOpenSpot } from "../../ai/offball";
 import { backcourtViolation } from "../../core/deadball";
+import { flashBall } from "../../core/visuals";
 import { doubleTeamed } from "../../ai/reads";
 import type { Game } from "../../game";
 
@@ -248,6 +249,7 @@ export function updatePass(game: Game, dt: number): void {
   if (game.passSteal && k >= game.passSteal.at) {
     const d = game.passSteal.def;
     game.passSteal = null;
+    flashBall(game, "intercept");   // カットされた瞬間は赤（綺麗に奪う/弾くの両方）
     const offense = game.possession;
     const catchP = 0.4 + rate(d.attr.reaction) * 0.45 + (d.has("interceptor") ? 0.15 : 0);
     if (chance(clamp(catchP, 0.2, 0.95))) {
@@ -295,6 +297,7 @@ export function updatePass(game: Game, dt: number): void {
       return;
     }
     game.handler = receiver;
+    flashBall(game, "catch");   // パスキャッチは両チーム共通で青
     game.passTo = null;
     game.ballMode = "held";
     game.ball.pos.set(receiver.pos.x, 1.0, receiver.pos.z);   // 即受け手へ（held初フレームの取り残し防止）

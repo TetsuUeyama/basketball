@@ -4,6 +4,7 @@ import { COURT, SHOT_CLOCK, OOB_WALL } from "../config";
 import { rate, clamp, dist2DTo, moveToward2D, rand, nearestOf } from "../util";
 import { twoHandedCatch } from "../move/reaction/rebound";
 import { stepBallFlight } from "../move/basic/ball";
+import { flashBall } from "./visuals";
 import type { Game } from "../game";
 
 // 空中リバウンド確保をプットバックにするリムまでの距離(m)。ダンク/レイアップが打てる至近のみ。
@@ -193,6 +194,7 @@ export function secureLoose(game: Game, p: Player, label?: string): void {
     }
     game.looseStealBy = game.looseStealVictim = null;
     game.handler = p;
+    flashBall(game, "secure", p.team);   // 確保した側の色(ホーム=黄 / アウェイ=オレンジ)
     game.possession = p.team;
     game.ballMode = "held";
     // ショットクロック: ポゼッション交代は完全リセット、リム接触のオフェンスリバウンドは

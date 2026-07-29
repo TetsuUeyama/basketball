@@ -8,6 +8,7 @@ import { reachInFoulRate } from "../move/reaction/foul";
 import { tickScreenCoverage, defendScreen } from "../move/reaction/screen";
 import { pickDefScheme, runZoneDefense, runPress } from "./defense-schemes";
 import { defensiveFoul } from "../core/deadball";
+import { flashBall } from "../core/visuals";
 import type { Game } from "../game";
 
 // この守備者が今どれだけ守備で動くか(0..1)。
@@ -471,6 +472,7 @@ export function deflectCatch(game: Game, h: Player, d: Player): void {
     game.lastTouch = d;
     h.touchCool = 0.5;                             // キャッチをはじかれた — すぐには再確保できない
     d.digReach(new Vector3(game.ball.pos.x, 0.9, game.ball.pos.z));
+    flashBall(game, "intercept");                  // はじかれた瞬間は赤
     game.goLoose(h.team, 1.8, { stealBy: d, victim: h, grabAfter: 0.6 });
   }
 

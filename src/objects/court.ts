@@ -8,6 +8,11 @@ import { makeMat } from "./materials";
 export interface Hoops { nets: Mesh[]; rimMats: StandardMaterial[]; boardMats: StandardMaterial[]; }
 export const hoopIndex = (end: number): number => (end >= 0 ? 0 : 1);
 
+// ネットの寸法。得点演出をネット通過で打ち切るため下端の高さを共有する。
+const NET_H = 0.45;
+const NET_CY = RIM.height - 0.22;
+export const NET_BOTTOM_Y = NET_CY - NET_H / 2;
+
 export function buildCourt(scene: Scene): Hoops {
   buildFloor(scene);
   buildBenches(scene);
@@ -172,9 +177,9 @@ function buildHoop(scene: Scene, end: number): { net: Mesh; rimMat: StandardMate
 
   // 簡素なネット(不透明度の低い下向きの円錐)
   const net = MeshBuilder.CreateCylinder(`net_${end}`, {
-    height: 0.45, diameterTop: RIM.radius * 2, diameterBottom: RIM.radius * 1.2, tessellation: 12,
+    height: NET_H, diameterTop: RIM.radius * 2, diameterBottom: RIM.radius * 1.2, tessellation: 12,
   }, scene);
-  net.position.set(0, RIM.height - 0.22, rimZ);
+  net.position.set(0, NET_CY, rimZ);
   net.material = makeMat(scene, `netmat_${end}`, { diffuse: new Color3(1, 1, 1), alpha: 0.25, cull: false });
 
   return { net, rimMat, boardMat: white };

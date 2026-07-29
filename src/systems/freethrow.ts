@@ -3,7 +3,7 @@ import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
 import { COURT, RIM } from "../config";
 import { rate, clamp, chance, rand } from "../util";
-import { swishNet } from "../core/visuals";
+import { swishNet, flashScore } from "../core/visuals";
 import { benchCheer } from "../core/bench";
 import { withSubs } from "./subs";
 import type { Game } from "../game";
@@ -124,6 +124,7 @@ export class FreeThrowSystem {
       this.shooter.stats.ftm++;
       benchCheer(g, this.team, 1.2);   // FTは素早めのポップ
       swishNet(g, this.team);          // メイクでネットが弾ける
+      flashScore(g, 1);                // FTは1点ぶんの控えめな発光
     }
     this.remaining -= 1;
     if (!wasLast) { this.beginAttempt(); return; }

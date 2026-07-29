@@ -1,4 +1,4 @@
-import { Scene, Vector3, Mesh } from "@babylonjs/core";
+import { Scene, Vector3, Mesh, Color3 } from "@babylonjs/core";
 import { Player } from "./objects/player/player";
 import { Ball } from "./objects/ball";
 import "./move/basic/run";   // Player.prototype に走る/ジャンプ/方向転換を注入
@@ -41,7 +41,7 @@ import { updateCharge, updateShot } from "./move/action/shooting";
 import { updateLoose, stepBallFreeFlight } from "./core/looseball";
 import { updateLive } from "./move/action/liveball";
 import { endQuarter, updateFinale } from "./core/gameflow";
-import { syncAll, updateFacing, tickSwish } from "./core/visuals";
+import { syncAll, updateFacing, tickSwish, tickBallFx, flashBall } from "./core/visuals";
 import { shotClockViolation } from "./core/deadball";
 import { resolveCollisions } from "./core/collision";
 import { seatOnBench, updateBenchCheer } from "./core/bench";
@@ -188,6 +188,14 @@ export class Game {
   hoops: Hoops | null = null;     // 成功時にスウィッシュさせるネット/リムのメッシュ
   netSwish: [number, number] = [0, 0];   // フープ別のスウィッシュタイマー(>0 でアニメ中)
   swishTeam: [number, number] = [0, 0];  // 誰が決めたか(フラッシュ色)
+  ballFxT = 0;                           // ボール発光の残り秒(>0 で演出中)
+  ballFxDur = 0;                         // その演出の長さ(減衰の基準)
+  ballFxPunch = 0;                       // 膨らみの最大量(scaling への加算)
+  ballFxHalo = 5;                        // 光の殻の最終倍率
+  ballFxKind = "";                       // 演出の種類("score" はネット通過で打ち切る)
+  ballFxY0 = 0;                          // 得点演出の開始時のボール高さ(減衰の基準)
+  readonly ballFxColor = new Color3();   // 発光色
+  ballLooseT = 0;                        // ルーズボール中の白い明滅の位相
 
   constructor(scene: Scene) {
     for (let t = 0; t < 2; t++) {
@@ -605,6 +613,7 @@ export class Game {
     updateFacing(this, dt);
     if (this.longShotHoldT > 0) this.longShotHoldT = Math.max(0, this.longShotHoldT - dt);
     tickSwish(this, dt);   // 成功時のネットスウィッシュ/リムフラッシュ
+    tickBallFx(this, dt);  // キャッチ/奪取時のボール発光
     this.referees.update(dt);   // 審判2人: ボールを追って移動・シグナル
     syncAll(this);
   }
@@ -968,6 +977,7 @@ export class Game {
       rand(-0.2, 0.6),                             // 低く — ディグであってロブではない
       uz * power * grip + rand(-2.2, 2.2) * (1 - grip),
     );
+    flashBall(this, "intercept");                  // はたかれた瞬間は赤
     // 自由な一拍で、確保前にはたき出しの争奪が見えるようにする
     this.goLoose(h.team, 1.6, { stealBy: d, victim: h, grabAfter: 0.55 });
     d.digReach(new Vector3(this.ball.pos.x, 0.9, this.ball.pos.z));   // ランジ

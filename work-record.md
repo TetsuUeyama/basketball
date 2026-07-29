@@ -4350,6 +4350,26 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - ⚠️ 罠: オーバーレイ本体は透明で不透明タイルが画面を覆う設計のため、角を丸めると角から、幅>1200px では左右の帯から背後の3Dが覗く（左右の帯は変更前から潜在的にあった）。不透明な `sheetRow`（`padding:8px 10px 10px`）で包んで下地にすることで解消。
 - 検証: tsc✓ / vite build✓(EXIT=0)。⚠️ **ブラウザ目視は未実施**。特にシート高さ変化時の3Dプレビュー追従は実機でしか確認できない（リーグ一覧⇄クラブ一覧の往復で選手表示がズレないか）。
 
+## 2026-07-30 (337) ボール発光エフェクト（所有が動く瞬間を色で示す）
+
+- 要望「パスキャッチやスティールが分かりにくいのでボールにエフェクトを」。`tickSwish`（得点時のリムフラッシュ）と同じ「タイマー＋毎フレーム減衰＋マテリアル操作」の型を踏襲。**描画専用で試合ロジックには一切触れない**。
+- 実装: `Ball` にマテリアル `mat` と光の殻 `halo`(+`haloMat`, unlit/両面/半透明)を保持。`Game` に `ballFxT/Dur/Punch/Halo/Kind/Y0/Color` と `ballLooseT`。`visuals.ts` に `flashBall` / `flashScore` / `renderFlash` / `tickBallFx`（`game.ts:612` の `tickSwish` 直後で呼ぶ）。
+- 色の割り当てとフック:
+  | 種類 | 色 | 発生箇所 |
+  |---|---|---|
+  | catch | 青(共通) | `passing.ts` キャッチ成立 |
+  | score | 青・得点量で強弱 | `shooting.ts` メイク / `freethrow.ts` FT成功 |
+  | secure | ホーム=黄 / アウェイ=橙 | `looseball.ts` `secureLoose` |
+  | intercept | 赤(共通) | `passing.ts` パスカット / `game.ts` `steal()` / `defense.ts` `deflectCatch` |
+  | block | 赤(intercept と同一) | `shooting.ts` `swatShot` |
+  | (状態) ルーズ中 | 白の緩い明滅 | `ballMode === "loose"` の間ずっと |
+- 得点発光は**時間でなくボールの高さで減衰**させ、ネット下端(`court.ts` の `NET_BOTTOM_Y`=2.605、ネットのメッシュ生成と同じ定数から導出)を抜けた時点でゼロになる。実測 7フレーム=0.117秒で終了。ユーザー選択（「通過後を切る」）に基づく仕様。得点量の強さは色の明度比 1点0.5 / 2点0.75 / 3点1.0、膨らみと殻サイズも連動。
+- ⚠️ 罠（重要）: 初版は「動いていないように見えた」が、実際は**動いていて弱すぎた**だけ。ヘッドレス計測で発光中フレームが全体の4.5%・1回0.32秒・`k²`で1フレーム目から即減衰と判明。強化（持続延長・前半35%は最大輝度を保持・膨らみ増・光の殻の追加）で12.5%まで改善。**推測で原因を探さずヘッドレスで実測したのが正解だった**。
+- ⚠️ `main.ts:141` は `for (let i = 0; i < ui.speed; i++) game.update(dt)` で速度倍率ぶんサブステップを回す＝**早送り中は演出も実時間で 1/speed の長さになる**。見え方を確認するときは等速で。
+- 検証手法（再現用）: プロジェクト直下に一時 `fxcheck.ts` を置き、`NullEngine`+`Scene` で Game を構築 → `npx esbuild fxcheck.ts --bundle --platform=node --format=cjs` → node 実行。**Node には `OffscreenCanvas` が無く `Player` の `DynamicTexture` が落ちるので最小スタブが必要**。確認後にファイルは削除した。
+- 検証結果: 5種すべての色・長さ・殻の値を直接呼び出しで実測。300秒シミュで catch40 / score8 / secure5 / intercept4 / block2 が発火。tsc✓ / vite build✓(EXIT=0)。
+- ⚠️ **ブラウザ目視は未実施**（Chrome拡張が未導入）。強さの数値は当たりを付けた初期値。調整は `visuals.ts` の `flashBall` / `flashScore` / `HALO_MAX` / `FX_HOLD` / `LOOSE_GLOW` で完結する。アウェイの橙はボール地色(橙)と近く本体では見分けにくい可能性があり、殻の色で判別する想定。
+
 ## 2026-07-25 (335) src直下に animation/ と move/ を新設する大規模再編＋ball.ts新設
 
 - ユーザー要望「src直下に animation と move を作り、両方とも直下は basic/action/reaction。animation には各moveで使うアニメ設定を置く。ball.ts は basic に」。確認の結果 run/jump/turn は move/basic へ。

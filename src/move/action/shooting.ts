@@ -10,7 +10,7 @@ import { jumpShotMakeProbability, rimFinishOutcome } from "../reaction/shot-outc
 import { bestBlocker, evadeBlockProbability } from "../reaction/contest-block";
 import { shootingFoulChance } from "../reaction/foul";
 import { endQuarter } from "../../core/gameflow";
-import { swishNet } from "../../core/visuals";
+import { swishNet, flashScore, flashBall } from "../../core/visuals";
 import { benchCheer } from "../../core/bench";
 import { withSubs } from "../../systems/subs";
 import type { Game } from "../../game";
@@ -354,6 +354,7 @@ export function swatShot(game: Game, shooter: Player, blocker: Player): void {
     // ブロッカーは跳び上がり手をボールへ合わせる — 既に跳んでいれば再ジャンプしない
     if (!blocker.airborne) game.contestLeap(blocker, shooter.pos, 0.95, 0.6);
     game.setEvent("BLOCK!", blocker.team);
+    flashBall(game, "block");        // ブロックはスティールと同じ赤
     game.handler = null;
 
     // 手がボールを飛翔からはたく: ブロック点から横へ飛散して弾き返される。
@@ -505,6 +506,7 @@ export function resolveShot(game: Game, ): void {
       game.ball.vel.set(rand(-0.5, 0.5), -2.4, -Math.sign(rim.z || 1) * rand(0.2, 0.8));
       game.ballFalling = true;
       swishNet(game, shooter);   // 成功時にネットが弾け、リムが光る
+      flashScore(game, game.shotPoints);   // ボールはネットを抜けるまで青く光る
       // 決まったバスケットで間を置き、交代、インバウンド。ブザーが鳴っていればピリオド終了。
       // AND-1 はラインで続く(バスケット有効 + フリースロー1本)。
       game.handler = null;

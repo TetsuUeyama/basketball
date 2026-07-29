@@ -2,7 +2,7 @@
 // ネット演出（tickSwish/swishNet）を反映する描画寄り処理。syncAll が全選手の sync を回す。
 import { TEAM_COLORS } from "../config";
 import { rate, dist2D, dist2DTo } from "../util";
-import { hoopIndex } from "../objects/court";
+import { hoopIndex, NET_BOTTOM_Y } from "../objects/court";
 import { poseHands } from "./poses";
 import type { Game } from "../game";
 
@@ -45,6 +45,106 @@ export function tickSwish(game: Game, dt: number): void {
       }
     }
   }
+
+  // ---- ボールの発光演出 ---------------------------------------------------
+  // ボール自体を一瞬光らせて膨らませ、所有が動いた瞬間を目立たせる。描画専用で
+  // 試合ロジックには触れない（tickSwish と同じ扱い）。色の割り当ては下記。
+  //   catch     パスキャッチ            青（両チーム共通）
+  //   secure    リバウンド/ルーズ確保   ホーム=黄 / アウェイ=オレンジ
+  //   intercept インターセプト/はたき   赤（両チーム共通）
+  //   block     ブロック                赤（intercept と同じ）
+  //   score     ゴール                  青。flashScore で得点量ごとに強さを変える
+  //   （演出なしでルーズボール中のときは、白く光らせ続ける）
+const FX_HOLD = 0.35;        // 最初の35%は最大輝度を保ってから減衰させる
+const HALO_MAX = 5.0;        // 光の殻の最終倍率(ボール径 0.24m → 約1.2m)
+const LOOSE_GLOW = 0.85;     // ルーズボール中の白の強さ
+
+export type BallFxKind = "catch" | "secure" | "intercept" | "block";
+
+  // 殻はボール本体と同じ色。半透明合成なので 1 で頭打ちにする。
+function syncHalo(game: Game): void {
+    const c = game.ballFxColor;
+    game.ball.haloMat.emissiveColor.set(Math.min(1, c.r), Math.min(1, c.g), Math.min(1, c.b));
+}
+
+export function flashBall(game: Game, kind: BallFxKind, team = -1): void {
+    const c = game.ballFxColor;
+    switch (kind) {
+      case "catch":
+        game.ballFxDur = 0.55; game.ballFxPunch = 0.35; c.set(0.35, 0.8, 1.9); break;
+      case "secure":
+        game.ballFxDur = 0.6;  game.ballFxPunch = 0.45;
+        if (team === 0) c.set(1.85, 1.6, 0.35);   // ホーム = 黄
+        else c.set(1.9, 0.85, 0.2);               // アウェイ = オレンジ
+        break;
+      case "intercept":
+      case "block":
+        game.ballFxDur = 0.85; game.ballFxPunch = 0.7;  c.set(1.95, 0.25, 0.18); break;
+    }
+    game.ballFxKind = kind;
+    game.ballFxHalo = HALO_MAX;
+    game.ballFxT = game.ballFxDur;
+    syncHalo(game);
+}
+
+  // ゴールの発光。ボールがネットを抜けた時点で消えるよう、高さで減衰させる（tickBallFx 参照）。
+  // 強さは得点量で変える: フリースロー1点 < 2点 < 3点。
+export function flashScore(game: Game, points: number): void {
+    const s = points >= 3 ? 1 : points === 2 ? 0.75 : 0.5;
+    game.ballFxKind = "score";
+    game.ballFxDur = game.ballFxT = 0.6;   // 上限。通常はネット通過で先に切れる
+    game.ballFxPunch = 0.25 + 0.5 * s;
+    game.ballFxHalo = 2.6 + 3.2 * s;
+    game.ballFxColor.set(0.35 * s, 0.8 * s, 1.9 * s);
+    game.ballFxY0 = Math.max(game.ball.pos.y, NET_BOTTOM_Y + 0.01);
+    syncHalo(game);
+}
+
+  // 発光の1フレームを描く。damp=輝度と膨らみ(1→0)、pr=殻の広がり具合(0→1)。
+function renderFlash(game: Game, damp: number, pr: number): void {
+    const ball = game.ball;
+    const c = game.ballFxColor;
+    ball.mat.emissiveColor.set(c.r * damp, c.g * damp, c.b * damp);
+    const s = 1 + game.ballFxPunch * damp;
+    ball.mesh.scaling.set(s, s, s);
+    // 光の殻は経過とともに膨らみ、薄くなって消える
+    const hs = 1.6 + pr * (game.ballFxHalo - 1.6);
+    ball.halo.isVisible = true;
+    ball.halo.position.copyFrom(ball.pos);
+    ball.halo.scaling.set(hs, hs, hs);
+    ball.haloMat.alpha = 0.55 * (1 - pr) * (1 - pr);
+}
+
+  // 発光の1フレーム。前半は最大輝度、後半は二乗で減衰。ゴールだけはネット通過で打ち切る。
+  // 演出が無い間は、ルーズボール中なら白く光らせ続け、それ以外は素の見た目へ戻す。
+export function tickBallFx(game: Game, dt: number): void {
+    const ball = game.ball;
+    if (game.ballFxT > 0) {
+      game.ballFxT = Math.max(0, game.ballFxT - dt);
+      // ゴールの発光は時間でなくボールの高さで引く: ネット下端を抜けた時点で消える
+      if (game.ballFxKind === "score") {
+        const span = game.ballFxY0 - NET_BOTTOM_Y;
+        const prog = span > 0 ? Math.min(1, (ball.pos.y - NET_BOTTOM_Y) / span) : 0;
+        if (prog > 0 && game.ballFxT > 0) { renderFlash(game, prog, 1 - prog); return; }
+        game.ballFxT = 0;
+      } else if (game.ballFxT > 0) {
+        const k = game.ballFxT / game.ballFxDur;   // 1 → 0
+        renderFlash(game, k > 1 - FX_HOLD ? 1 : (k / (1 - FX_HOLD)) ** 2, 1 - k);
+        return;
+      }
+    }
+    ball.mesh.scaling.set(1, 1, 1);
+    ball.halo.isVisible = false;
+    ball.haloMat.alpha = 0;
+    if (game.ballMode === "loose") {             // ルーズボール中は白く光り続ける
+      game.ballLooseT += dt;
+      const p = LOOSE_GLOW * (0.82 + 0.18 * Math.sin(game.ballLooseT * 7));
+      ball.mat.emissiveColor.set(p, p, p * 1.06);
+    } else {
+      ball.mat.emissiveColor.set(0, 0, 0);
+      game.ballLooseT = 0;
+    }
+}
 
   // コート上の選手はプレイの方を向く: ハンドラーとシューターは攻めるバスケットへ、
   // それ以外はボールへ。イージングで体が追従する。交代／フィナーレ中はスキップ。
