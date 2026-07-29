@@ -2,7 +2,8 @@
 import { TEAM_NAMES, TEAM_CLUB, teamAbbr } from "../config";
 import { CLUB_ABBR } from "../data/club/clubabbr";
 import { CLUB_FLAGS } from "../data/club/clubflags";
-import { clubTeam } from "../roster";
+import { clubTeam, ROSTER, STARTERS } from "../roster";
+import type { PlayerDef } from "../attributes";
 import { CLUBS } from "../data/club/clubdb";
 import { UI, colorOf, BTN_BG, INK, ELLIPSIS } from "./ui";
 
@@ -341,16 +342,171 @@ UI.prototype.openMatchupWizard = function(): void {
       content.appendChild(scrollArea);
       centerGrid(scrollArea, grid);
       footer.replaceChildren();
+      footer.style.display = "flex";
       const back = this.button(team === 0 ? "タイトルへ戻る" : "ホームを選び直す");
       Object.assign(back.style, { fontSize: "12px", padding: "7px 20px" } as Partial<CSSStyleDeclaration>);
       back.onclick = team === 0 ? exitToTitle : () => { team = 0; showLeagues(); };
       footer.append(back);
     };
 
+    // 選んだクラブを確定させる（ホームならアウェイ選択へ、アウェイなら試合前へ）。
+    const commitTeam = (): void => {
+      if (!picked[team]) return;
+      if (team === 0) {
+        team = 1;
+        showLeagues();
+      } else {
+        this.onUniformPreview(null);  // 3D二画面プレビューを解体
+        exitPreview();
+        this.closeChooser();          // オーバーレイを除去 → コート/選手が再び表示される
+        this.onSetupLineups();        // 相手を考慮した DEFAULT の5人（エディタ表示前）
+        this.refreshEditors();
+        this.setPhase("pregame");
+      }
+    };
+
+    // フラッグを押したときに立ち上がる確認モーダル。決定はここに置く。
+    const openClubModal = (name: string, league: string): void => {
+      const back = document.createElement("div");
+      Object.assign(back.style, {
+        position: "fixed", inset: "0", zIndex: "90", background: "rgba(0,0,0,0.55)",
+        display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "auto",
+      } as Partial<CSSStyleDeclaration>);
+      const panel = document.createElement("div");
+      Object.assign(panel.style, {
+        background: "rgba(12,15,22,0.98)", border: `1px solid ${colorOf(team)}`, borderRadius: "14px",
+        padding: "16px 18px", boxShadow: "0 16px 48px rgba(0,0,0,0.65)", boxSizing: "border-box",
+        display: "flex", flexDirection: "column", alignItems: "center", gap: "10px",
+      } as Partial<CSSStyleDeclaration>);
+      let onRoster = false;   // 選手一覧を開いているか（Escape / 背景クリックの戻り先が変わる）
+      const close = () => { back.remove(); window.removeEventListener("keydown", onKey); };
+      const dismiss = () => { if (onRoster) showConfirm(); else close(); };
+      const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
+
+      // クラブ名 + 略称を載せたフラッグ。
+      const makeBanner = (w: number, h: number, fs: number): HTMLDivElement => {
+        const flag = document.createElement("div");
+        Object.assign(flag.style, {
+          position: "relative", width: `${w}px`, height: `${h}px`, flexShrink: "0",
+          borderRadius: "6px", overflow: "hidden",
+          background: UI.flagCss(CLUB_FLAGS[name]), boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.35)",
+        } as Partial<CSSStyleDeclaration>);
+        const abbr = document.createElement("span");
+        Object.assign(abbr.style, {
+          position: "absolute", inset: "0", display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: `${fs}px`, fontWeight: "800", color: "#fff", textShadow: "0 1px 3px rgba(0,0,0,0.95)",
+        } as Partial<CSSStyleDeclaration>);
+        abbr.textContent = CLUB_ABBR[name] ?? "";
+        flag.appendChild(abbr);
+        return flag;
+      };
+      const makeName = (): HTMLDivElement => {
+        const nm = document.createElement("div");
+        Object.assign(nm.style, {
+          fontSize: "16px", fontWeight: "800", color: colorOf(team), maxWidth: "100%", minWidth: "0", ...ELLIPSIS,
+        } as Partial<CSSStyleDeclaration>);
+        nm.textContent = name;
+        return nm;
+      };
+
+      // 確認ビュー: 決定 / 選手一覧 / 選び直す。
+      const showConfirm = (): void => {
+        onRoster = false;
+        panel.style.width = "min(340px,90vw)";
+        panel.style.gap = "10px";
+        const sub = document.createElement("div");
+        Object.assign(sub.style, { fontSize: "11px", opacity: "0.6" } as Partial<CSSStyleDeclaration>);
+        sub.textContent = `${league}　${team === 0 ? "ホーム" : "アウェイ"}`;
+        const row = document.createElement("div");
+        Object.assign(row.style, { display: "flex", gap: "8px", marginTop: "2px" } as Partial<CSSStyleDeclaration>);
+        const confirm = this.button("決定");
+        Object.assign(confirm.style, {
+          fontSize: "13px", fontWeight: "800", padding: "7px 20px",
+          background: colorOf(team), color: INK, border: `1px solid ${colorOf(team)}`,
+        } as Partial<CSSStyleDeclaration>);
+        confirm.onclick = () => { close(); commitTeam(); };
+        const list = this.button("選手一覧");
+        Object.assign(list.style, { fontSize: "12px", padding: "7px 14px" } as Partial<CSSStyleDeclaration>);
+        list.onclick = () => showRoster();
+        const cancel = this.button("選び直す");
+        Object.assign(cancel.style, { fontSize: "12px", padding: "7px 14px" } as Partial<CSSStyleDeclaration>);
+        cancel.onclick = close;
+        row.append(confirm, list, cancel);
+        panel.replaceChildren(makeBanner(140, 40, 16), makeName(), sub, row);
+      };
+
+      // 選手一覧ビュー: 先発5人 + ベンチを読み取り専用で並べる。
+      const playerRow = (d: PlayerDef, i: number): HTMLDivElement => {
+        const r = document.createElement("div");
+        Object.assign(r.style, {
+          display: "flex", alignItems: "center", gap: "6px", padding: "2px 8px", borderRadius: "5px",
+          fontSize: "11px", lineHeight: "1.5",
+          background: i < STARTERS ? "rgba(255,255,255,0.07)" : "transparent",
+        } as Partial<CSSStyleDeclaration>);
+        const pos = document.createElement("span");
+        Object.assign(pos.style, {
+          flex: "0 0 26px", textAlign: "center", fontSize: "10px", fontWeight: "800",
+          color: i < STARTERS ? colorOf(team) : "rgba(255,255,255,0.5)",
+        } as Partial<CSSStyleDeclaration>);
+        pos.textContent = d.role;
+        const nm = document.createElement("span");
+        Object.assign(nm.style, { flex: "1 1 auto", minWidth: "0", ...ELLIPSIS } as Partial<CSSStyleDeclaration>);
+        nm.textContent = d.name;
+        const ht = document.createElement("span");
+        Object.assign(ht.style, { flex: "0 0 auto", fontSize: "10px", opacity: "0.6" } as Partial<CSSStyleDeclaration>);
+        ht.textContent = `${Math.round(d.height * 100)}cm ${d.hand === "L" ? "左" : "右"}`;
+        const ovr = document.createElement("span");
+        Object.assign(ovr.style, { flex: "0 0 24px", textAlign: "right", fontWeight: "800" } as Partial<CSSStyleDeclaration>);
+        ovr.textContent = String(this.ovrOf(d));
+        r.append(pos, nm, ht, ovr);
+        return r;
+      };
+      const showRoster = (): void => {
+        onRoster = true;
+        panel.style.width = "min(420px,92vw)";
+        panel.style.gap = "8px";
+        const head = document.createElement("div");
+        Object.assign(head.style, {
+          display: "flex", alignItems: "center", gap: "8px", width: "100%",
+        } as Partial<CSSStyleDeclaration>);
+        head.append(makeBanner(70, 22, 11), makeName());
+        // 13人をスクロールなしで収める（行を詰めて1画面に収まる高さにする）。
+        const listBox = document.createElement("div");
+        Object.assign(listBox.style, {
+          width: "100%", display: "flex", flexDirection: "column", gap: "1px",
+        } as Partial<CSSStyleDeclaration>);
+        ROSTER[team].forEach((d, i) => {
+          if (i === STARTERS) {
+            const div = document.createElement("div");
+            Object.assign(div.style, {
+              fontSize: "9px", fontWeight: "800", opacity: "0.45", letterSpacing: "1px",
+              padding: "4px 8px 1px", borderTop: "1px solid rgba(255,255,255,0.12)", marginTop: "3px",
+            } as Partial<CSSStyleDeclaration>);
+            div.textContent = "ベンチ";
+            listBox.appendChild(div);
+          }
+          listBox.appendChild(playerRow(d, i));
+        });
+        const backBtn = this.button("戻る");
+        Object.assign(backBtn.style, { fontSize: "12px", padding: "7px 20px" } as Partial<CSSStyleDeclaration>);
+        backBtn.onclick = () => showConfirm();
+        panel.replaceChildren(head, listBox, backBtn);
+      };
+
+      showConfirm();
+      back.appendChild(panel);
+      back.onclick = (e) => { if (e.target === back) dismiss(); };
+      window.addEventListener("keydown", onKey);
+      overlay.appendChild(back);
+    };
+
     const showClubs = (group: { label: string; leagues: string[] }): void => {
-      header.textContent = team === 0
-        ? `${group.label} — ホームをフラッグで選択`
-        : `${group.label} — アウェイをフラッグで選択　［ホーム: ${TEAM_NAMES[0]}］`;
+      // 見出しの文言は置かず、リーグ選択へ戻るボタンを上に置く。
+      header.replaceChildren();
+      const back = this.button("リーグ選択");
+      Object.assign(back.style, { fontSize: "12px", padding: "7px 20px" } as Partial<CSSStyleDeclaration>);
+      back.onclick = () => showLeagues();
+      header.appendChild(back);
       content.replaceChildren();
       resetContent();
       const { scrollArea, grid } = makeScroll();
@@ -365,8 +521,7 @@ UI.prototype.openMatchupWizard = function(): void {
           picked[team] = true;
           this.assignClub(team, idx);   // ロスター + 名前 + ユニフォーム
           refreshTop();                 // 戦力バー + ユニフォームプレビューがそれに切り替わる
-          confirm.style.opacity = "1";
-          confirm.style.pointerEvents = "auto";
+          openClubModal(c[0], c[1]);
         };
         grid.appendChild(btn);
       });
@@ -374,30 +529,7 @@ UI.prototype.openMatchupWizard = function(): void {
       centerGrid(scrollArea, grid);
 
       footer.replaceChildren();
-      const back = this.button("リーグ選択");
-      Object.assign(back.style, { fontSize: "12px", padding: "7px 20px" } as Partial<CSSStyleDeclaration>);
-      back.onclick = () => showLeagues();
-      const confirm = this.button("決定");
-      Object.assign(confirm.style, {
-        fontSize: "13px", fontWeight: "800", padding: "7px 22px",
-        background: colorOf(team), color: INK, border: `1px solid ${colorOf(team)}`,
-        opacity: picked[team] ? "1" : "0.4", pointerEvents: picked[team] ? "auto" : "none",
-      } as Partial<CSSStyleDeclaration>);
-      confirm.onclick = () => {
-        if (!picked[team]) return;
-        if (team === 0) {
-          team = 1;
-          showLeagues();
-        } else {
-          this.onUniformPreview(null);  // 3D二画面プレビューを解体
-          exitPreview();
-          this.closeChooser();          // オーバーレイを除去 → コート/選手が再び表示される
-          this.onSetupLineups();        // 相手を考慮した DEFAULT の5人（エディタ表示前）
-          this.refreshEditors();
-          this.setPhase("pregame");
-        }
-      };
-      footer.append(back, confirm);
+      footer.style.display = "none";
     };
 
     showLeagues();

@@ -117,17 +117,19 @@ UI.prototype.refreshEditors = function(): void {
     this.editorHost.style.width = sideBySide ? "auto" : "min(560px, 96vw)";
     this.editorHost.replaceChildren();
 
-    // 戦力ボードの上のトップバー: 戻る（タイトルへ戻る） + TIP OFF（開始）。
-    const topBar = document.createElement("div");
-    Object.assign(topBar.style, {
-      display: "flex", gap: "10px", justifyContent: "center", alignItems: "center",
-      width: "100%", boxSizing: "border-box", padding: "10px 10px 8px",
+    // 最下部のバー: TIP OFF を画面中央に、戻る（タイトルへ戻る）はその少し左。
+    // 3列グリッド（1fr auto 1fr）の中央列に TIP OFF を置くことで、戻るの幅に影響されず中央に揃う。
+    const bottomBar = document.createElement("div");
+    Object.assign(bottomBar.style, {
+      display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center",
+      width: "100%", boxSizing: "border-box", padding: "10px 10px 12px",
     } as Partial<CSSStyleDeclaration>);
     const backBtn = this.button("戻る");
-    Object.assign(backBtn.style, { fontSize: "12px", padding: "8px 20px" } as Partial<CSSStyleDeclaration>);
+    Object.assign(backBtn.style, {
+      fontSize: "12px", padding: "8px 20px", justifySelf: "end", marginRight: "14px",
+    } as Partial<CSSStyleDeclaration>);
     backBtn.onclick = () => this.setPhase("title");
-    topBar.append(backBtn, this.tipOffButton());
-    this.editorHost.appendChild(topBar);
+    bottomBar.append(backBtn, this.tipOffButton());
 
     this.vsBoard = this.buildVsBoard();
     if (sideBySide) {
@@ -154,11 +156,12 @@ UI.prototype.refreshEditors = function(): void {
         b.onclick = () => { this.rosterTab = t; this.refreshEditors(); };
         return b;
       };
-      tabs.append(teamTab(0), teamTab(1));   // TIP OFF は今はトップバーにある
+      tabs.append(teamTab(0), teamTab(1));   // TIP OFF は最下部のバーにある
       this.editorHost.appendChild(tabs);
       const card = this.rosterCard(this.rosterTab);
       card.style.width = "100%";   // モーダルの幅を満たす
       this.editorHost.appendChild(card);
+      this.editorHost.appendChild(bottomBar);
       return;
     }
 
@@ -168,8 +171,9 @@ UI.prototype.refreshEditors = function(): void {
       display: "flex", gap: "12px", flexWrap: "nowrap", justifyContent: "center",
       alignItems: "stretch", width: "100%",
     } as Partial<CSSStyleDeclaration>);
-    cols.append(this.rosterCard(0), this.rosterCard(1));   // TIP OFF は今はトップバーにある
+    cols.append(this.rosterCard(0), this.rosterCard(1));   // TIP OFF は最下部のバーにある
     this.editorHost.appendChild(cols);
+    this.editorHost.appendChild(bottomBar);
 };
 
   // VS ボードを構築する。`preview` があれば、その交代でのチーム戦力の変化（±N・色付き）を示す。

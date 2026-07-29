@@ -4328,6 +4328,19 @@ bannerWorthy 更新)。ミドル/ゴール下ジャンプもS技術でブロッ�
 - ⚠️ **見た目の改善効果はブラウザ目視でしか確認できない**（headless非対象）。イーズ速度 MOVE_RATE.arm=10 は初期値であり、実機で速すぎ/遅すぎなら調整要。
 - ⚠️ 未コミット(6485887 の上に 334)。
 
+## 2026-07-30 (335) クラブ選択の決定モーダル化 / 試合前の TIP OFF・戻るを最下部へ
+
+- 起点: `dfbb35b` が main 未マージだったため fast-forward マージして push（作業内容の消失ではなくマージ漏れ）。
+- ui-title.ts（クラブ選択ウィザード `showClubs`）:
+  - 見出し「〇〇 — ホーム/アウェイをフラッグで選択［ホーム: …］」を撤去。
+  - 「リーグ選択」戻るボタンを footer → header（フラッグ一覧の上）へ移動。クラブ一覧中は footer を `display:none`、リーグ一覧に戻る際に `flex` へ復帰。
+  - フラッグ押下で確認モーダル `openClubModal` を新設し、決定をここへ移動。ボタン並びは 決定 / 選手一覧 / 選び直す。Escape・背景クリックは、一覧表示中なら確認ビューへ戻り、確認ビューなら閉じる。
+  - 選手一覧は同一モーダル内のビュー切替。`ROSTER[team]` 13人を ポジション/名前/身長・利き手/OVR で表示、先発5人は背景とポジション色で区別、6人目手前に「ベンチ」区切り。**スクロールなしで1画面に収める**ため行を圧縮（padding 2px・fontSize 11px・gap 1px）。
+  - 既存 `openDetailModal`（全能力値）へは繋がない。内部で `refreshEditors()` → `editorHost` を触るため、pregame 前のウィザード段階では例外の恐れがある。
+  - ⚠️ 罠: `makeBanner` に `flex: 0 0 ${w}px` を入れると、パネルが `flexDirection:column` のため flex-basis が**高さ**として効き旗が縦長になる。`flexShrink:"0"` + width/height で指定すること。
+- ui-pregame.ts（`refreshEditors`）: 戦力ボード上の topBar を廃し、同内容を `bottomBar` として editorHost の最後に追加（横並び/タブ表示の両分岐）。TIP OFF を厳密に中央へ置くため `grid-template-columns: 1fr auto 1fr` の中央列に配置し、戻るは左列 `justifySelf:end` + `marginRight:14px` で少し左に。単純な flex + `justifyContent:center` では2ボタンが一塊で中央寄せされ TIP OFF が中央からずれる。
+- 検証: tsc✓ / vite build✓(EXIT=0)。⚠️ **ブラウザ目視は未実施**（Chrome拡張が未導入のため実行不可）。旗の縦横比・一覧の収まり・狭い画面での TIP OFF と戻るの間隔は要目視。
+
 ## 2026-07-25 (335) src直下に animation/ と move/ を新設する大規模再編＋ball.ts新設
 
 - ユーザー要望「src直下に animation と move を作り、両方とも直下は basic/action/reaction。animation には各moveで使うアニメ設定を置く。ball.ts は basic に」。確認の結果 run/jump/turn は move/basic へ。
