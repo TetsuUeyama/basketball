@@ -310,7 +310,6 @@ export class RefereeSystem {
   get onBallRef(): Referee | null { return this.ballRef; }
 
   // モデル切替(人型⇄どんぐり)を審判にも反映し、審判色に再着色し直す。
-  applyModel(): void { for (const r of this.refs) { r.body.applyModel(); r.recolor(); } }
 }
 
 function clamp(v: number, lo: number, hi: number): number { return v < lo ? lo : v > hi ? hi : v; }

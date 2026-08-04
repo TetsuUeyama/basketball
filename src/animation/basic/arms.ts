@@ -21,6 +21,9 @@ declare module "../../objects/player/player" {
   // （armRateCap > 0 ならその速度、未指定は MOVE_RATE.arm）。初期化時
   // （現在の向きが無い）だけ直接セットする。
 Player.prototype.easeArm = function(pivot: TransformNode, target: Quaternion): void {
+    // 手続きポーズで書いた腕はIK印を落とす（reachIK が書いた直後に立て直す）
+    if (pivot === this.armPivotL) this.ikL = false;
+    else if (pivot === this.armPivotR) this.ikR = false;
     const cur = pivot.rotationQuaternion;
     if (!cur) { pivot.rotationQuaternion = target; return; }
     const cap = this.armRateCap > 0 ? this.armRateCap : MOVE_RATE.arm;

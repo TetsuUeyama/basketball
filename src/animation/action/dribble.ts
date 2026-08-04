@@ -11,6 +11,7 @@ declare module "../../objects/player/player" {
 /** ボールがある側と同じ側の手でドリブル/保持する — 左腰へ運んだボールは右腕を
  *  体を横切って（越えて）伸ばすのではなく左手で持つ、そしてその逆も。 */
 Player.prototype.reachDribble = function(world: Vector3, useRight: boolean, rate = 0): void {
+    this.dribbleArm = useRight ? "R" : "L";
     const near = useRight ? this.armPivotR : this.armPivotL;
     const nearElbow = useRight ? this.elbowR : this.elbowL;
     const far = useRight ? this.armPivotL : this.armPivotR;

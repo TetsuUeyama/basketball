@@ -30,7 +30,7 @@ function rotQ(q: Quaternion, x: number, y: number, z: number): { x: number; y: n
 // 手先を world に一致させる肩(root ローカル)・肘(pivot ローカル)のクォータニオンを解く。
 // 届かない/近すぎは null。単体検証しやすいよう Player から独立。
 export function armIKQuats(sx: number, sy: number, sz: number, th: number, world: Vector3,
-    UP: number, FORE: number): { qUp: Quaternion; qElbow: Quaternion } | null {
+    UP: number, FORE: number, outward = 0): { qUp: Quaternion; qElbow: Quaternion } | null {
     const c = Math.cos(th), s = Math.sin(th);
     // ワールド→root ローカルの reach ベクトル
     const wx = world.x - sx, wy = world.y - sy, wz = world.z - sz;
@@ -40,9 +40,13 @@ export function armIKQuats(sx: number, sy: number, sz: number, th: number, world
     const ux = rx / d, uy = ry / d, uz = rz / d;
     // 肩角 α（上腕と reach 線の間）
     const alpha = Math.acos(Math.min(1, Math.max(-1, (UP * UP + d * d - FORE * FORE) / (2 * UP * d))));
-    // 極ベクトル n：下(0,-1,0)を reach に直交射影 → 肘が下へ落ちる自然な曲げ
-    const dDotU = -uy;                                     // (0,-1,0)·û
-    let nx = 0 - dDotU * ux, ny = -1 - dDotU * uy, nz = 0 - dDotU * uz;
+    // 極ベクトル n：肘をどちらへ張り出すか。下(0,-1,0)＋外向き(outward·X)を reach に
+    // 直交射影する。⚠️ 真下だけにすると胸の前でボールを持つとき肘が胴の中へ落ちる
+    // （実測: 手先が狙いから 0.15m ずれ、表示側の逃がし補正と喧嘩した）。
+    // 肘の振り分けは**手先の位置に影響しない**ので、外へ寄せても精度は落ちない。
+    const px = outward, py = -1;
+    const dDotU = px * ux + py * uy;                       // (outward,-1,0)·û
+    let nx = px - dDotU * ux, ny = py - dDotU * uy, nz = 0 - dDotU * uz;
     let nl = Math.hypot(nx, ny, nz);
     if (nl < 1e-4) { nx = 1; ny = 0; nz = 0; nl = 1; }     // û が垂直 → 横へ逃がす
     nx /= nl; ny /= nl; nz /= nl;
@@ -75,10 +79,16 @@ Player.prototype.reachIK = function(pivot: TransformNode, elbow: TransformNode, 
     let tgt = world;
     const rz = s * (world.x - sx) + c * (world.z - sz);
     if (rz * this.numberSide > 0) tgt = new Vector3(world.x - s * rz, world.y, world.z - c * rz);
-    const r = armIKQuats(sx, sy, sz, th, tgt, Player.UPPER_ARM, Player.FOREARM);
+    // 肘は外へ張り出す（ローカル +X = armPivotR 側）。tan(35°) ぶん外へ寄せると、
+    // 胸の前でボールを持っても肘が胴に入らない。
+    const outward = (pivot === this.armPivotR ? 1 : -1) * 0.70;
+    const r = armIKQuats(sx, sy, sz, th, tgt, this.upperArmLen, this.foreArmLen, outward);
     if (!r) return false;
     this.easeArm(pivot, r.qUp);
     this.easeArm(elbow, r.qElbow);
+    // 表示側の「胴から逃がす」補正を掛けない印（IKが既に胴を外しているので、
+    // 後から押されると手先が狙いからずれる）。easeArm が毎回クリアする。
+    if (pivot === this.armPivotR) this.ikR = true; else this.ikL = true;
     return true;
 };
 

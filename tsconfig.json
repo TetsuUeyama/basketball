@@ -12,7 +12,12 @@
     "strict": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@objcts/*": ["../objcts/*"],
+      "@babylonjs/core": ["./node_modules/@babylonjs/core"],
+      "@babylonjs/core/*": ["./node_modules/@babylonjs/core/*"]
+    }
   },
   "include": ["src"]
 }

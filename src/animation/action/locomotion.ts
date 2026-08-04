@@ -1,8 +1,6 @@
-// 歩く/走るアクションのアニメ: 腕振り(runArms)と脚・足の運び(updateLegs/
-// updateAcornFeet)。basic/ の部位ルール（JOINT・setJoint・腕ムーバ）の中で動く。
+// 歩く/走るアクションのアニメ: 腕振り(runArms)と脚の運び(updateLegs)。
+// basic/ の部位ルール（JOINT・setJoint・腕ムーバ）の中で動く。
 import { Vector3, Quaternion } from "@babylonjs/core";
-import { HUD_OPTS } from "../../config";
-import { rate } from "../../util";
 import { Player } from "../../objects/player/player";
 import { JOINT } from "../basic/joints";
 import { setJoint } from "../basic/rotate";
@@ -11,13 +9,15 @@ declare module "../../objects/player/player" {
   interface Player {
     runArms(): void;
     updateLegs(dt: number): void;
-    updateAcornFeet(dt: number): void;
   }
 }
 
+/** 歩調（1秒あたりの位相の進み / 移動速度）。1周期 = 2π = 一歩の往復。
+ *  腕の振りとモーションクリップの脚が同じ値を見るので、ここだけで速さが決まる。 */
+export const CADENCE = 1.7;
+
 // ボールをハンドリングしていない選手の腕。前へ走るとストライドに合わせて前後に
-// 振る（同じ側の脚と逆位相、肘は曲げたまま） — どんぐりのボディも振るが、
-// 半分ほどの振り幅（ずんぐりしたペンギンの腕）。バックペダル（胸の向きに逆らって
+// 振る（同じ側の脚と逆位相、肘は曲げたまま）。バックペダル（胸の向きに逆らって
 // 動く — 後退する守備者）ではバランスポーズに切り替わる: 両腕を低く少し前へ出し、
 // 足に合わせてはためく。歩行/静止では休める。poseHands()が全員にこれを呼び、
 // その後でボールの腕を上書きする。
@@ -41,13 +41,12 @@ Player.prototype.runArms = function(): void {
       this.bendElbow(this.elbowR, 0.2);
       return;
     }
-    const human = HUD_OPTS.model === "human";
-    const amp = (0.3 + frac * 0.55) * (human ? 1 : 0.5);
+    const amp = 0.3 + frac * 0.55;
     const aL = Math.sin(this.stridePhase + Math.PI) * amp * ns;   // 左腕 ↔ 右脚
     const aR = Math.sin(this.stridePhase) * amp * ns;
     this.easeArm(this.armPivotL, Quaternion.RotationAxis(new Vector3(1, 0, 0), aL));
     this.easeArm(this.armPivotR, Quaternion.RotationAxis(new Vector3(1, 0, 0), aR));
-    const carry = (0.6 + frac * 0.5) * (human ? 1 : 0.6);   // ランナーのように肘を曲げて保つ
+    const carry = 0.6 + frac * 0.5;   // ランナーのように肘を曲げて保つ
     this.bendElbow(this.elbowL, carry);
     this.bendElbow(this.elbowR, carry);
 };
@@ -58,7 +57,6 @@ Player.prototype.runArms = function(): void {
   // (ポーズは sit() が管理)。
 Player.prototype.updateLegs = function(dt: number): void {
     if (this.seated) return;
-    if (HUD_OPTS.model !== "human") { this.updateAcornFeet(dt); return; }
     const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
     if (frac < 0.04) {
       this.stridePhase = 0;
@@ -69,7 +67,9 @@ Player.prototype.updateLegs = function(dt: number): void {
       this.kneeR.rotation.x += -this.kneeR.rotation.x * ease;
       return;
     }
-    this.stridePhase += this.curSpd * dt * 3.4;   // 距離ベース → 速度がケイデンスを決める
+    // 距離ベース → 速度がケイデンスを決める。腕の振り(runArms)とクリップの脚
+    // (voxel-motion)の両方がこの位相を見るので、歩調はここ1か所で決まる。
+    this.stridePhase += this.curSpd * dt * CADENCE;
     const amp = 0.32 + frac * 0.5;                // スプリントではストライドが長い
     // 前方はローカル -numberSide·Z（腕/つま先と同じ）なので、振りと膝の曲げは
     // numberSide に紐づく——両チームともどちらの端を攻めても前に歩き、膝を後ろへ
@@ -83,44 +83,4 @@ Player.prototype.updateLegs = function(dt: number): void {
     const bend = 0.5 + frac * 0.6;
     setJoint(this.kneeL, JOINT.knee, -Math.max(0, sL * (this.postT > 0 ? -1 : 1)) * bend * ns);   // 振り脚で脛が流れる
     setJoint(this.kneeR, JOINT.knee, -Math.max(0, sR * (this.postT > 0 ? -1 : 1)) * bend * ns);
-};
-
-  // どんぐりの靴のペンギン歩き: 移動中は足が素早いつま先上げのパタパタを交互に
-  // 行う（靴底でピボットするので踵は接地したまま——ケイデンスと持ち上げが速度と
-  // ともに増すパタパタ歩き）。空中では両つま先がぶら下がるように下を向く。静止時は
-  // フラットへイーズで戻る。stridePhase を共有するので、走行中のモード切り替えでも
-  // 歩調が揃う。
-Player.prototype.updateAcornFeet = function(dt: number): void {
-    const frac = this.runSpeed > 0 ? Math.min(1, this.curSpd / this.runSpeed) : 0;
-    let tL = 0, tR = 0, tw = 0;
-    if (this.airborne) {
-      tL = tR = -0.55;                              // つま先が床から離れ下を向く
-    } else if (frac >= 0.04) {
-      // スプリントでケイデンス ~3 歩/s——これより速いと下のイージングで2つの足が
-      // 交互ではなく一緒にパタつくようにぼやける
-      this.stridePhase += this.curSpd * dt * 3.0;
-      const amp = 0.35 + frac * 0.4;
-      tL = Math.max(0, Math.sin(this.stridePhase)) * amp;
-      tR = Math.max(0, Math.sin(this.stridePhase + Math.PI)) * amp;
-      // 体は接地した足へ傾く——持ち上げたつま先から離れる方へ——これがペンギン
-      // 歩きそのもの。揺れはペースとともに少し広がる。
-      // クイックネス(敏捷性) がこれを安定させる: 機敏な選手はほとんど揺れない
-      // (99 ≈ 肩が水平)、足の重い選手は最大限に揺れる。
-      // 純粋に見た目だけ——速度やバランスへの影響はない。
-      const wobble = 1 - rate(this.attr.agility);
-      tw = -Math.sin(this.stridePhase) * (0.07 + frac * 0.06) * wobble;
-    } else {
-      this.stridePhase = 0;
-    }
-    const ease = Math.min(1, dt * 22);
-    setJoint(this.acornFootL, JOINT.acornFoot, this.acornFootL.rotation.x + (tL - this.acornFootL.rotation.x) * ease);
-    setJoint(this.acornFootR, JOINT.acornFoot, this.acornFootR.rotation.x + (tR - this.acornFootR.rotation.x) * ease);
-    this.acornWaddle += (tw - this.acornWaddle) * ease;
-    // ノード原点ではなく踵を軸にパタつかせる: つま先上げのピッチだけだと踵の後端
-    // （ローカル z = heelBotZ 0.18）が床を突き抜けて下がるので、ノードをその沈んだ
-    // 深さだけ持ち上げる——つま先が叩き、踵は接地したまま。つま先下げ（空中）は
-    // 持ち上げ不要: root が空中にある。
-    this.acornFootL.position.y = Math.max(0, Math.sin(this.acornFootL.rotation.x)) * 0.18;
-    this.acornFootR.position.y = Math.max(0, Math.sin(this.acornFootR.rotation.x)) * 0.18;
-    this.syncAcornLegs();
 };

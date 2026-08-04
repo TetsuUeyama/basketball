@@ -7,6 +7,11 @@ import { clamp, rand, dist2DTo, moveToward2D, nearestOf } from "../util";
 import { runDefenseDuringDeadish } from "../ai/defense";
 import type { Game } from "../game";
 
+// ボールを持って待つ位置: 胸の前。⚠️ 投げ手自身の座標に置くと、腕のIKが「上腕を真横へ
+// 水平に張り出し前腕だけ折り返す」退化した解になり、袖が肩から突き出したまま止まる
+// (実測: 肩からの距離0.217m → 上腕が静止姿勢から90°)。胸の前へ出すと37°の自然な抱え。
+export const BALL_HOLD = 0.32;
+
 export class InboundSystem {
   t = 0;                            // 投げ入れまでの残り時間(審判不在時のフォールバック)
   private threw = false;             // 審判がスローワーへ投げ始めたか
@@ -170,7 +175,8 @@ export class InboundSystem {
     // 受け取った後は少し持ってから投げ入れる(審判から受けて即投げるのを防ぐ)。この間はボールを
     // 手元に保持し、スローワーはコート(リム方向)へ向き直る(onBallRef は inboundDone で消えている)。
     if (this.caught) {
-      g.ball.pos.set(inb.pos.x, 1.3, inb.pos.z);
+      const cf = inb.chestFront(BALL_HOLD);
+      g.ball.pos.set(cf.x, 1.3, cf.z);
       this.holdT -= dt;
       if (this.holdT <= 0) g.throwIn(inb);
       return;
@@ -189,12 +195,14 @@ export class InboundSystem {
       this.throwT -= dt;
       const k = clamp(1 - this.throwT / this.throwDur, 0, 1);
       const h = ref.ballHold();
-      const tx = inb.pos.x + this.passOffX, tz = inb.pos.z + this.passOffZ;
+      const cf = inb.chestFront(BALL_HOLD);
+      const tx = cf.x + this.passOffX, tz = cf.z + this.passOffZ;
       g.ball.pos.set(h.x + (tx - h.x) * k, h.y + (1.3 - h.y) * k + 0.9 * Math.sin(k * Math.PI), h.z + (tz - h.z) * k);
       // 投げ渡し完了 → すぐには投げ入れず、受け取りの間(holdT)を置いてから投げ入れる。
       if (this.throwT <= 0) { refs.inboundDone(); this.caught = true; this.holdT = rand(0.6, 0.9); }
     } else {
-      g.ball.pos.set(inb.pos.x, 1.3, inb.pos.z);  // 審判不在時はスローワーの手に
+      const cf = inb.chestFront(BALL_HOLD);       // 審判不在時はスローワーの手に
+      g.ball.pos.set(cf.x, 1.3, cf.z);
       this.t -= dt;
       if (this.t <= 0) g.throwIn(inb);
     }

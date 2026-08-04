@@ -35,18 +35,9 @@ Player.prototype.chestFront = function(dist: number): { x: number; z: number } {
   return { x: this.pos.x - s * Math.sin(th) * dist, z: this.pos.z - s * Math.cos(th) * dist };
 };
 
-/** 体の中心から顔を通る水平の単位ベクトル — 目メッシュの実際の描画位置（両目の
- *  中点）から取るので、顔を撮らねばならないカメラにとっての真値であり、あらゆる
- *  numberSide/ヨー規約に対して頑健。ワールド行列がまだ計算されていない間
- *  （最初のフレーム、ヘッドレス）は胸のフレームにフォールバックする。 */
+/** 体の中心から顔を通る水平の単位ベクトル。ボクセルの前方は胸のフレームそのもの
+ *  （骨組みごと numberSide でヨーするので、見た目と必ず一致する）。 */
 Player.prototype.faceDirWorld = function(): { x: number; z: number } {
-  if (this.eyeL && this.eyeR && typeof this.eyeL.getAbsolutePosition === "function") {
-    const a = this.eyeL.getAbsolutePosition(), b = this.eyeR.getAbsolutePosition();
-    const ex = (a.x + b.x) / 2 - this.root.position.x;
-    const ez = (a.z + b.z) / 2 - this.root.position.z;
-    const l = Math.hypot(ex, ez);
-    if (l > 1e-3) return { x: ex / l, z: ez / l };
-  }
   const th = this.root.rotation.y + this.torsoTwist;
   const s = this.numberSide;
   return { x: -s * Math.sin(th), z: -s * Math.cos(th) };

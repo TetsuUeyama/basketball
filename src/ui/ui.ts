@@ -75,7 +75,6 @@ export class UI {
   iconRole = new Map<import("../objects/player/player").Player, HTMLDivElement>();   // 選手 → オフェンス/守備ロールのピル
   staminaBtn: HTMLButtonElement | null = null;   // HUD トグル: ゲージを名前タグ上 ⇄ 顔アイコン
   namesBtn: HTMLButtonElement | null = null;     // HUD トグル: コート上の名前タグ 表示 ⇄ 非表示
-  modelBtn: HTMLButtonElement | null = null;     // HUD トグル: 人型 ⇄ どんぐり体形
   statSnap = new Map<import("../objects/player/player").Player, number[]>();     // 最後に確認した POP_STATS の値
   controls!: HTMLDivElement;      // 速度 / RESTART の行
   menuBtn!: HTMLButtonElement;    // ☰ ハンバーガー — スコアボードが届くまでは上端に乗る
@@ -115,7 +114,6 @@ export class UI {
   onStart: () => void = () => {};
   onBack: () => void = () => {};
   onSetupLineups: () => void = () => {};   // マッチアップが最初に決まったときの、相手を考慮した DEFAULT の5人
-  onModelToggle: () => void = () => {};   // HUD_OPTS.model を全選手に適用
   onUniformToggle: () => void = () => {};  // TEAM_UNIFORM（ホーム/アウェイ）を全選手に適用
   // クラブ選択中に3Dコート上の1チームだけをフレーミング（null = 全景に戻す）
   onShowcaseTeam: (team: number | null) => void = () => {};
@@ -272,17 +270,6 @@ export class UI {
       this.refreshNamesBtn();
     };
     controls.appendChild(namesBtn);
-
-    // 選手モデルの切替: 人型（関節脚つき） ⇄ どんぐり体形（カプセル）
-    const modelBtn = this.button("");
-    this.modelBtn = modelBtn;
-    this.refreshModelBtn();
-    modelBtn.onclick = () => {
-      HUD_OPTS.model = HUD_OPTS.model === "human" ? "acorn" : "human";
-      this.onModelToggle();
-      this.refreshModelBtn();
-    };
-    controls.appendChild(modelBtn);
 
     const restart = this.button("RESTART");
     restart.onclick = () => { this.onRestart(); controls.style.display = "none"; };

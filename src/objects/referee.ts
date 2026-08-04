@@ -19,9 +19,11 @@ export class Referee {
     const base = ROSTER[0][0];
     const attr = { ...base.attr };
     for (const k in attr) (attr as Record<string, number>)[k] = 50;   // 能力オール50
-    // 髪型: 審判1はロング(肩まで=10)、審判2はミディアム(センター分け=9)。肌/髪色は共通。
+    // 髪型: 審判1はロング(肩まで)、審判2はミディアム(センター分け)。肌/髪色は共通。
+    // 2Dアイコンのカテゴリ(style)と3Dの髪型No(hairNo)を審判だけは一致させておく。
     const style = idx === 0 ? 10 : 9;
-    const def = { ...base, name: "審判", height: 1.9, look: resolveLook([2, 0, style]), attr };
+    const hairNo = idx === 0 ? 113 : 42;
+    const def = { ...base, name: "審判", height: 1.9, look: resolveLook([2, 0, style, hairNo]), attr };
     this.body = new Player(scene, 0, 90 + idx, def as typeof base);
     this.body.setNameTagVisible(false);
     this.recolor();
@@ -34,11 +36,14 @@ export class Referee {
   // 受球: 両手キャッチ + 敏捷(=50)由来の硬直。
   catch(): void { this.catchT = this.body.recoveryMult() * 0.4; this.signal("hold", 99); }
 
-  // 審判ユニフォーム: 明るいグレーのシャツ、黒のパンツ/袖/靴。
+  // 審判ユニフォーム: 明るいグレーのシャツ、黒のパンツ/靴。チームキットの代わりに使う。
   recolor(): void {
-    this.body.topMat.diffuseColor = new Color3(0.86, 0.86, 0.9);   // グレーシャツ
-    this.body.bottomMat.diffuseColor = new Color3(0.1, 0.1, 0.12); // 黒パンツ
-    this.body.sleeveMat.diffuseColor = new Color3(0.1, 0.1, 0.12); // 黒袖
+    this.body.kitOverride = {
+      top: { r: 0.86, g: 0.86, b: 0.9 },      // グレーシャツ
+      bottom: { r: 0.1, g: 0.1, b: 0.12 },    // 黒パンツ
+      shoes: { r: 0.1, g: 0.1, b: 0.12 },     // 黒シューズ
+    };
+    this.body.applyUniform();
   }
 
   get pos(): Vector3 { return this.body.pos; }

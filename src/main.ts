@@ -41,7 +41,6 @@ const ui = new UI();
 ui.onRestart = () => game.reset();                       // 現在の試合を再スタート
 ui.onBack = () => game.reset();                          // 結果 → きれいな試合前へ戻る
 ui.onSetupLineups = () => optimizeLineups(game);         // マッチアップ確定時、相手を考慮したデフォルト5人
-ui.onModelToggle = () => game.applyModelAll();           // 人型 ⇄ どんぐり体形を全員へ即時反映
 ui.onUniformToggle = () => {                             // ホーム ⇄ アウェイのユニフォームを全員へ即時反映
   game.applyUniforms();
   if (previewPlayers) { previewPlayers[0].applyUniform(); previewPlayers[1].applyUniform(); }

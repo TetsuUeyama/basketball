@@ -89,10 +89,9 @@ Player.prototype.resetTwist = function(): void {
     this.torsoNode.rotation.y = 0;
     this.headYaw = 0;                                   // 頭も真っ直ぐにする
     if (this.headNode) this.headNode.rotation.y = 0;
-    if (this.head) this.head.rotation.x = 0;            // シュート溜めの顔向き補正をクリア
+    this.headPitch = 0;                                 // シュート溜めの顔向き補正をクリア
     this.torsoNode.rotation.x = 0;   // 落胆で前かがみになった分をクリア
     this.torsoNode.position.set(0, 0, 0);   // 落胆の腰ヒンジオフセットも
-    if (!this.seated) this.acornWaistPivot.rotation.x = 0;   // 腰を垂直に戻す
 };
 
 /** 姿全体をヨーさせて、胸（番号の反対側）がワールド点を向くようにする —

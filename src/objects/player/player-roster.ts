@@ -5,6 +5,7 @@ import { type PlayerDef } from "../../attributes";
 import { computeOffPriority, roleOffense, offActionOf, ROLE_BEHAVIOR, DEF_ROLE_BEHAVIOR } from "../../roles";
 import { rate, clamp } from "../../util";
 import { playerLook } from "./player-look";
+import { variantFor } from "@objcts/player/voxel/voxelBody";
 import { Player, runSpeedForSpeed } from "./player";
 
 declare module "./player" {
@@ -16,6 +17,7 @@ declare module "./player" {
 /** （編集されたかもしれない）ロースターdefから名前/身長/ロール/優先度/派生値を
  *  読み直す。`attr` はライブ参照なので、能力値の編集は既に反映されている。 */
 Player.prototype.applyDef = function(def: PlayerDef): void {
+    const prevVariant = this.vox ? variantFor(this.attr.balance) : "";
     this.role = def.role;
     this.attr = def.attr;   // 再バインド: 試合前のスワップはdefオブジェクトを差し替えうる
     this.abilities = new Set(def.abilities ?? []);
@@ -54,7 +56,8 @@ Player.prototype.applyDef = function(def: PlayerDef): void {
     }
     if (def.height !== this.height) {
       this.height = def.height;
-      this.refreshScale();   // 姿を新しい身長へ再スケール（着席の潰しを保つ）
+      this.rebuildVoxel();   // ボクセルは骨組みごと身長で組むので作り直す
+    } else if (this.vox && prevVariant !== variantFor(def.attr.balance)) {
+      this.rebuildVoxel();   // 体型（skinny/normal/muscle）が変わった
     }
-    this.refreshBodyDepth();   // 交代で入った選手のボディバランスが胴の奥行きを決める
 };

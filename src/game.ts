@@ -10,7 +10,6 @@ import "./objects/player/player-visual";
 import "./objects/player/player-roster";
 import "./animation/basic/arms";    // 部位の基本ムーバを注入（腕/胴・頭/脚）
 import "./animation/basic/torso";
-import "./animation/basic/legs";
 import "./animation/action/locomotion";    // アクション毎のアニメを注入
 import "./animation/action/dribble";
 import "./animation/action/hold";
@@ -31,12 +30,13 @@ import { rate, clamp, dist2D, moveToward2D, towardPoint, chance, rand } from "./
 import { reactionLag } from "./eval";
 import { FreeThrowSystem } from "./systems/freethrow";
 import { TipoffSystem } from "./systems/tipoff";
-import { InboundSystem } from "./systems/inbound";
+import { InboundSystem, BALL_HOLD } from "./systems/inbound";
 import { RefereeSystem } from "./systems/referees";
 import { ScreenState } from "./move/reaction/screen";
 import { updateSubs } from "./systems/subs";
 import { refreshChoiceRanks } from "./ai/lineups";
 import { updatePass } from "./move/action/passing";
+import { updateSaveRecover } from "./move/action/save";
 import { updateCharge, updateShot } from "./move/action/shooting";
 import { updateLoose, stepBallFreeFlight } from "./core/looseball";
 import { updateLive } from "./move/action/liveball";
@@ -125,6 +125,10 @@ export class Game {
   turnReleased = false;
   passer: Player | null = null;                         // 現在のパスを放った選手
   passSteal: { def: Player; at: number } | null = null; // パス時に一度だけ決定
+  // ライン外へ逸れたパスを追う選手（move/action/save.ts）。この選手だけ clampCourt を
+  // 素通しし、コートの外へ出られる。復帰しきる/時間切れで null に戻る。
+  saveBy: Player | null = null;
+  saveT = 0;
 
   // シュートのアニメ
   shotFrom = new Vector3();
@@ -220,12 +224,6 @@ export class Game {
     return (this.ballMode === "shot" && this.longShot) || this.longShotHoldT > 0;
   }
 
-  /** モデル切替（人型 ⇄ どんぐり, HUD_OPTS.model）を全26人へ即時適用する。 */
-  applyModelAll(): void {
-    for (let t = 0; t < 2; t++) for (const p of this.roster[t]) p.applyModel();
-    this.referees?.applyModel();   // 審判も同じモデルへ切替(審判色は維持)
-  }
-
   /** ユニフォーム（ホーム/アウェイ, TEAM_UNIFORM）を全26人へ即時適用する。 */
   applyUniforms(): void {
     for (let t = 0; t < 2; t++) for (const p of this.roster[t]) p.applyUniform();
@@ -308,6 +306,7 @@ export class Game {
   }
 
   clampCourt(p: Vector3): void {
+    if (this.saveBy && p === this.saveBy.pos) return;   // セーブ中はライン外へ出てよい
     const mw = COURT.halfW - COURT.margin;
     const ml = COURT.halfL - COURT.margin;
     p.x = clamp(p.x, -mw, mw);
@@ -590,6 +589,7 @@ export class Game {
     const resting = this.ballMode === "pause" || this.ballMode === "freethrow"
       || this.ballMode === "tipoff" || this.ballMode === "subs"
       || this.ballMode === "finale";
+    updateSaveRecover(this, dt);   // セーブでライン外へ出た選手をコートへ戻す
     for (const p of this.players) {
       p.updateJump(dt);
       p.tickCooldown(dt);
@@ -895,7 +895,8 @@ export class Game {
   // スローイン役が受け手へボールを入れる。捕球でプレーがライブになる。
   throwIn(inb: Player): void {
     const r = this.inbound.receiver ?? this.inbound.pickReceiver(inb);
-    this.passFrom.set(inb.pos.x, 1.3, inb.pos.z);
+    const from = inb.chestFront(BALL_HOLD);      // 体の中からでなく手元(胸の前)から放つ
+    this.passFrom.set(from.x, 1.3, from.z);
     this.passCatch.set(r.pos.x, 1.3, r.pos.z);   // 固定の目標
     this.passMiss = 0; this.passMissY = 0; // 散らばりなし
     this.passStyle = "chest";              // スローインはバウンド/ジャンプのスタイルを継がない

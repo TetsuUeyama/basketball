@@ -12,7 +12,6 @@ declare module "./ui" {
     positionMenu(): void;
     refreshStaminaBtn(): void;
     refreshNamesBtn(): void;
-    refreshModelBtn(): void;
     buildPlayerBars(): void;
     makeFaceIcon(player: import("../objects/player/player").Player, posText: string): HTMLDivElement;
     updateIconRoles(game: Game): void;
@@ -61,11 +60,6 @@ UI.prototype.refreshNamesBtn = function(): void {
     this.namesBtn.textContent = HUD_OPTS.showNames ? "選手名: 表示" : "選手名: 非表示";
 };
 
-  // 現在の選手モデルのスタイルをトグルボタンに反映する。
-UI.prototype.refreshModelBtn = function(): void {
-    if (!this.modelBtn) return;
-    this.modelBtn.textContent = HUD_OPTS.model === "human" ? "モデル: 人型" : "モデル: どんぐり";
-};
 
 UI.prototype.buildPlayerBars = function(): void {
     // team 0 のアイコンは中央のすぐ左から左へ、team 1 は中央のすぐ右から右へ伸ばし、

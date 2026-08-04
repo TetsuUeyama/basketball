@@ -18,13 +18,14 @@ npm run dev
 ブラウザで `http://localhost:5173` を開く。
 
 - 画面上部：スコアボード（チーム名・得点・クォーター・残り時間・ショットクロック）
-- 下部ボタン：`1x / 2x / 4x`（再生速度）、`RESTART`
+- 下部ボタン：`1x / 2x / 4x`（再生速度）、`モデル`（ボクセル / 人型 / どんぐり）、`RESTART`
 - マウスドラッグでカメラ回転、ホイールでズーム（自動でボールを追従）
 
 ## 設計の要点
 
 | 要素 | 方式 |
 |---|---|
+| 選手の見た目 | `objcts/player` のボクセル素体（既定）。骨組みは `bodyRestPose` から身長・体型ぶん組み、部位別の剛体メッシュを標準ボーンへ取り付ける |
 | ボール | 物理なし。保持・パス・シュート・リバウンドを軌道計算で再現 |
 | 選手 AI | 状態機械（オフェンス＝ドライブ/パス/シュート判断、ディフェンス＝マンツーマン＋スティール） |
 | シュート成否 | 距離とディフェンス密着度から成功確率を算出し事前抽選 → 軌道アニメーション |
@@ -59,3 +60,15 @@ src/
   ui.ts        DOM オーバーレイ（スコアボード・操作）
   main.ts      Babylon エンジン起動とループ配線
 ```
+
+## objcts への依存
+
+選手の見た目は `../objcts/player`（ボクセル素体）を直接 import している。
+`vite.config.ts` の alias（`@objcts`）と `tsconfig.json` の `paths` で解決する。
+`@babylonjs/core` は basketball-sim の `node_modules` へ明示エイリアスしている
+（objcts 配下は自前の node_modules を持たないため）。
+
+## 資料
+
+- [docs/voxel-player/README.md](docs/voxel-player/README.md) — 選手を `objcts/player` の
+  ボクセルモデルへ入れ替える手順と、実装後の実測値・残っている課題

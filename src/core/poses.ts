@@ -75,7 +75,11 @@ export function poseHands(game: Game, ): void {
         raiseAirborne(game, b, game.shooter);         // 早く跳んだ守備者は上がっている
         break;
       case "inbound":
-        game.handler?.reach(b, true);                // 審判からの投げ渡しを両手で受ける／保持する
+        // 飛んでくる間は両手を出して受け、手元に来たらチェストパスと同じ両手抱えで持つ
+        if (game.handler) {
+          if (dist2D(game.handler.pos, b) < 0.6) game.handler.holdBallHands(b);
+          else game.handler.reach(b, true);
+        }
         break;
       case "shot":
         // フィニッシャーはリムまで手をボールに乗せ続ける。ジャンパーは最初の一拍だけ
@@ -136,6 +140,7 @@ export function poseHands(game: Game, ): void {
       for (const p of game.players) {
         if (!p.airborne || p === game.shooter || p === game.handler) continue;
         if (p === game.passer) continue;   // ジャンプパサーはチェストパスの腕を保つ
+        if (p === game.saveBy) continue;   // ライン外へ横っ飛びした者はボールへ手を伸ばす
         if (p.foulReactT > 0) continue;    // AND-1 のフレックスホップは拳を上げたまま
         p.reach(new Vector3(p.pos.x, 6, p.pos.z), true);   // 真上のターゲット
       }

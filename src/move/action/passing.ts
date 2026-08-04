@@ -10,6 +10,7 @@ import { updateOffBallMotion, bestOpenSpot } from "../../ai/offball";
 import { backcourtViolation } from "../../core/deadball";
 import { flashBall } from "../../core/visuals";
 import { doubleTeamed } from "../../ai/reads";
+import { wantSave, beginSave, updateSaveChase, saveCatch } from "./save";
 import type { Game } from "../../game";
 
 // 投げるべき味方を選び、投げてよいか判定する。カバーされた受け手には投げない。
@@ -170,6 +171,8 @@ export function passToReceiver(
   }
   game.ballMode = "pass";
   game.handler = null;
+  // ライン外へ逸れた: 受け手がコートの外まで追ってセーブしにいく
+  if (wantSave(game, target)) beginSave(game, target);
   // フォロースルー硬直: P精度が高いほど速く復帰(~0.3s)、雑だと最大~2.5s。
   h.coolT = clamp((0.3 + (1 - rate(h.attr.passAcc)) * 2.2) * rand(0.9, 1.1), 0.3, 2.5);
   // 手放したばかり: ~1.6s は真っ直ぐ返さない(2人ピンポン防止)。本当のリムカットは解除。
@@ -213,13 +216,17 @@ export function updatePass(game: Game, dt: number): void {
   // スプリント上限)。オフターゲット配球だと体が流れる(=ズレて取る)。
   if (game.passTo) {
     const r = game.passTo;
-    const remain = Math.max(dt, game.passDur - game.passT);
-    const gap = dist2DTo(r.pos, game.passCatch.x, game.passCatch.z);
-    if (gap > 0.02) {
-      const need = gap / remain;                        // 間に合うm/s
-      const spd = Math.min(need, r.runSpeed * 1.35);    // ランジスプリントまで
-      moveToward2D(r.pos, game.passCatch.x, game.passCatch.z, spd * dt);
-      game.clampCourt(r.pos);
+    if (game.saveBy === r) {
+      updateSaveChase(game, dt, r);                     // ライン外まで追って横っ飛び
+    } else {
+      const remain = Math.max(dt, game.passDur - game.passT);
+      const gap = dist2DTo(r.pos, game.passCatch.x, game.passCatch.z);
+      if (gap > 0.02) {
+        const need = gap / remain;                        // 間に合うm/s
+        const spd = Math.min(need, r.runSpeed * 1.35);    // ランジスプリントまで
+        moveToward2D(r.pos, game.passCatch.x, game.passCatch.z, spd * dt);
+        game.clampCourt(r.pos);
+      }
     }
   }
 
@@ -280,6 +287,24 @@ export function updatePass(game: Game, dt: number): void {
     const receiver = game.passTo!;
     // スローアウェイ: 散った配球がコート外へ — ボールはそこで死ぬ(パサーのTO、逆のスローイン)
     if (Math.abs(game.passCatch.x) > COURT.halfW || Math.abs(game.passCatch.z) > COURT.halfL) {
+      // 追っていた受け手が掴めた: 着地する前に味方へ投げ返す(TOにしない)
+      if (game.saveBy === receiver) {
+        const s = saveCatch(game, receiver);
+        if (s.caught) {
+          game.passTo = null;
+          game.passSteal = null;
+          game.lastTouch = receiver;
+          flashBall(game, "secure", receiver.team);
+          game.setEvent("SAVE!", receiver.team);
+          if (s.mate && passToReceiver(game, receiver, s.mate, true)) return;
+          // 投げ先が無い/通らない → コート内へ放り込んでルーズ
+          game.ball.pos.set(receiver.pos.x, 1.3, receiver.pos.z);
+          game.ball.vel.set(-Math.sign(receiver.pos.x || 1) * rand(3, 5), 2.2,
+            -Math.sign(receiver.pos.z || 1) * rand(1, 3));
+          game.goLoose(receiver.team, 2.2, { grabAfter: 0.25 });
+          return;
+        }
+      }
       if (game.passer) { game.passer.stats.tov++; game.lastTouch = game.passer; }
       const to = 1 - game.possession;
       game.passTo = null;

@@ -256,6 +256,9 @@ export function updateFacing(game: Game, dt: number): void {
   }
 
 export function syncAll(game: Game, ): void {
+    // モーションクリップの選択に使う（ドリブル系 ⇄ 素の歩行/走行）
+    const carrying = game.ballMode === "held" || game.ballMode === "charge";
+    for (const p of game.players) p.holdingBall = carrying && p === game.handler;
     for (const p of game.players) p.sync();
     game.ball.sync();
     poseHands(game);

@@ -32,8 +32,8 @@ export const SHOT_GATHER_Y = 1.2; // ギャザーが始まる位置 — 胸元 /
 // スタミナゲージを表示する場所。"name": 各選手の頭上に浮かぶ3Dネームタグ上（デフォルト）。
 // "icon": 代わりに下部HUDの顔アイコンの下。`rev` はトグルが切り替わるたびに増分し、疲労値
 // 自体は変わっていなくてもネームタグを強制的に再描画させる。
-export const HUD_OPTS: { staminaOn: "name" | "icon"; showNames: boolean; model: "human" | "acorn"; rev: number } =
-  { staminaOn: "icon", showNames: true, model: "acorn", rev: 0 };
+export const HUD_OPTS: { staminaOn: "name" | "icon"; showNames: boolean; rev: number } =
+  { staminaOn: "icon", showNames: true, rev: 0 };
 
 export const PLAYER_SPEED = 6.2;  // オフェンス時の走行速度
 export const DEF_SPEED = 6.5;     // 守備がリカバーできるよう少しだけ速い

@@ -6,6 +6,7 @@ import { rate, clamp } from "../../util";
 import { playerLook, type PlayerLook } from "./player-look";
 import { makeMat } from "../materials";
 import type { Stats } from "./stats";
+import type { VoxelBody } from "./player-voxel";
 
 // 最高速度(m/s)を speed 能力値(0..100)から算出。3点(10→3.86 / 68→5.5 / 97→8.0)を通す
 // 2区間の折れ線。実在選手域(68-97)を 5.5-8.0m/s に広げ、68以下は 3.86 まで緩やかに下げる。
@@ -96,6 +97,8 @@ export class Player {
   // 設定、それ以外は0へ戻り「一気に伸び上がる」。sync が applyShootLoad で姿勢に反映。
   shootLoad = 0;
   shootLoadTarget = 0;
+  // このフレームに胴の腰ヒンジ（溜め・落胆）を当てたか。当てなかったら sync が 0 へ戻す。
+  hingePosed = false;
   // スローイン後の前進: 非PMビッグの投げ手はバックコートに残らず、フロントコートへ
   // 抜けてガードに組み立てを任せる。フロントコート確立(frontT)かこの秒数で解除。
   frontRunT = 0;
@@ -190,6 +193,8 @@ export class Player {
   carryZ = 0;
   // ドリブルのカデンツ位相（ハンドラー毎）。
   dribblePhase = 0;
+  // 直近のドリブルでボールを扱っている腕（仮想側）。反対の腕はクリップの腕を残す。
+  dribbleArm: "L" | "R" = "R";
   // ボールスクリーン（ピック）の状態 — ハンドラーを解放するためスクリーンをセット/保持
   screening = false;
   screenT = 0;      // ポップアウトする前にピックを確立・保持する残り時間
@@ -237,72 +242,46 @@ export class Player {
   // ═════════ 3Dメッシュ・ノード（実体） ═════════
   static readonly UPPER_ARM = 0.25;   // 上腕長（肩→肘）
   static readonly FOREARM = 0.25;     // 前腕長（肘→手）
+  // 実際に使う腕の長さ（IK）。ボクセルモデルでは素体の実測値へ差し替わる。
+  upperArmLen = Player.UPPER_ARM;
+  // このフレームの腕ポーズをIKで解いたか（表示側の胴逃がし補正を掛けない印）
+  ikL = false;
+  ikR = false;
+  foreArmLen = Player.FOREARM;
+  // ボクセルの見た目（objcts/player）。実体はここだけが持つ。
+  vox: VoxelBody | null = null;
+  scene!: Scene;
   readonly root: TransformNode;
-  // ボールを保持/ドリブル/パス/シュートするために手を伸ばす短い腕
-  readonly armPivotL: TransformNode;
+  // ── 以下は「仮想の骨組み」。メッシュを持たず、姿勢だけを決める。
+  //    毎フレーム player-voxel.ts の syncVoxelPose が標準ボーンへ転写する。
+  readonly armPivotL: TransformNode;   // 肩
   readonly armPivotR: TransformNode;
   elbowL!: TransformNode;   // 上腕 ↔ 前腕の関節（静止時は曲げ、伸ばして届かせる）
   elbowR!: TransformNode;
-  // 上半身のキャリア: 胴・頭・腕・背番号がこれに乗り、プレー方向へTWISTする
+  // 上半身のキャリア: 胴・頭・腕がこれに乗り、プレー方向へTWISTする
   // (twistToward)。root（脚/足）は進行方向を向く。
   torsoNode!: TransformNode;
   torsoTwist = 0;   // 平滑化したツイスト(rad)、±TWIST_MAXにクランプ
   headNode!: TransformNode;   // 頭のキャリア — 胴のツイストの上にヨーを重ねる
   headYaw = 0;      // 胴に対する平滑化した頭の回転(rad)、±HEAD_MAX
-  // 両方のボディスタイルは生成時から存在する。applyModel()が一方を表示し他方を
-  // 隠すので、HUDメニューからスタイルをライブに切り替えられる。
-  humanNode!: TransformNode;   // 矩形の胴（リボン+キャップ）
-  acornNode!: TransformNode;   // どんぐりの姿（胸+腰+シューズの足）
-  acornWaistPivot!: TransformNode; // 腰はこれに乗る。腰-胸の切断面の位置 —
-                                       // 着席時は90°前方へ折り畳む（膝の上）
-  acornFootL!: TransformNode;  // シューズ型の足 — 非対称なので、位置もヨーも
-  acornFootR!: TransformNode;  // numberSideと共に反転する
-  acornLegL!: TransformNode;   // 腰→シューズを繋ぐ素肌の脚シリンダー
-  acornLegR!: TransformNode;   // （どんぐりモデル専用。rootに固定）
-  eyeL!: Mesh;                  // 顔の目 — 前面に配置 (-numberSide·Z)
-  eyeR!: Mesh;
-  scene!: Scene;               // 後で髪メッシュを再構築できるよう保持
-  head!: Mesh;                 // 肌の球（髪/目がこれを親にする）
-  // 多関節の脚: 各サイドに股関節ピボット（腿）+膝ピボット（脛+足）。
-  // プレー中は歩行/走行サイクルで振れ、ベンチでは着席ポーズに折り畳む。
-  // updateLegs()が駆動、sit()/stand()がポーズ付け。
+  headPitch = 0;    // 顔のピッチ(rad)。シュートの溜めで前傾しても顔を水平へ戻す
+  // 多関節の脚: 各サイドに股関節ピボット + 膝ピボット。プレー中は歩行/走行
+  // サイクルで振れ、ベンチでは着席ポーズに折り畳む。
   seated = false;
   hipL!: TransformNode;
   hipR!: TransformNode;
   kneeL!: TransformNode;
   kneeR!: TransformNode;
-  footL!: Mesh;
-  footR!: Mesh;
   stridePhase = 0;   // 移動距離とともに累積 → 脚の振り
-  acornWaddle = 0;   // 平滑化したペンギンの体ロール(rad)、sync()でrootロールに加算
 
-  // ═════════ 見た目マテリアル・背番号・ネームタグ・髪 ═════════
+  // ═════════ ネームタグ・背番号 ═════════
   // 名前が変わると再描画される浮遊ネームタグ
   nameTex!: DynamicTexture;
   namePlane!: Mesh;   // 浮遊ネームタグ。HUD_OPTS.showNamesがオフのとき非表示
-  // ユニフォームキットのマテリアル — キット切替時にapplyUniform()でライブに再着色
-  topMat!: StandardMaterial;
-  bottomMat!: StandardMaterial;
-  sleeveMat!: StandardMaterial;
-  shoeMat!: StandardMaterial;
-  // 背番号のデカール。Zの各サイド・各ボディスタイルごとに1つ。表示されるのは
-  // 現在表示中のボディにおける選手の背中側
-  numHumanPlus!: Mesh;
-  numHumanMinus!: Mesh;
-  numAcornPlus!: Mesh;
-  numAcornMinus!: Mesh;
-  numTex!: DynamicTexture;   // 背番号デカールのテクスチャ（審判の丸囲みR差し替え用に保持）
-  numBothSides = false;      // true=前後両面に表示（審判のマーク）。既定は背中側のみ
+  jerseyText = "";    // 背番号に描く文字（審判は "R"）。ボクセルのデカールに焼く
+  kitOverride: { top: RGB; bottom: RGB; shoes: RGB } | null = null;  // 審判など、チームキットを使わない者
   numberSide = 1;   // 現在どちらのローカルZサイドに番号を表示しているか
-  sideApplied = false; // Gameがまだ背中側を選んでいない — シェルは非表示のまま
-  headMat!: StandardMaterial;  // 肌色（選手が変わると再着色）
-  hairMat!: StandardMaterial;  // 髪色（選手が変わると再着色）
-  hair: Mesh | null = null;    // 髪のクラウン — 後傾させて前と後頭部で差をつける
-  hairTilt = 0;                // 後傾の大きさ（numberSideで反転）
-  hairBun: Mesh | null = null; // 後頭部のマンバンの結び（numberSideで反転）
-  hairBack: Mesh | null = null;// ロング/ボブの後ろ髪パネル（numberSideで反転）
-  hairDreads: TransformNode | null = null; // ドレッドの房（クラスタ全体がnumberSideで反転）
-  headband: Mesh | null = null;// チームカラーのバンド（スタイル4）
+  sideApplied = false; // Gameがまだ背中側を選んでいない — 背番号は非表示のまま
   gaugeDrawn = 0;   // ネームタグのゲージに最後に描いた疲労値
   gaugeRev = -1;    // タグを最後に描いたときのHUD_OPTS.rev（トグル時に再描画を強制）
 
@@ -330,334 +309,16 @@ export class Player {
 
     this.root = new TransformNode(`p_${team}_${idx}`, scene);
 
-    // ツイストする上半身 — 腰より上のすべてがここを親にする
+    // ツイストする上半身 — 腰より上のすべてがここを親にする。
+    // メッシュは持たない（見た目はボクセルが担う）。ここは姿勢を決める仮想の骨組み。
     const torsoNode = new TransformNode(`torsoTwist_${team}_${idx}`, scene);
     torsoNode.parent = this.root;
     this.torsoNode = torsoNode;
 
-    // 人型専用の胴パーツすべてのキャリア。ボディスタイルが切り替わるとき矩形の胴
-    // 全体を一体で有効/無効にできる
-    const humanNode = new TransformNode(`human_${team}_${idx}`, scene);
-    humanNode.parent = torsoNode;
-    this.humanNode = humanNode;
-
-    // ユニフォーム: このチームのアクティブなキット（ホーム/アウェイ）由来の
-    // 独立して着色される4つのキットパーツ（top/bottom/sleeve/shoes）。キット切替時に
-    // applyUniform()がライブに再着色できるようPlayerに保持する。
-    const u = uniformOf(team);
-    const mkMat = (tag: string, rgb: RGB): StandardMaterial =>
-      makeMat(scene, `${tag}_${team}_${idx}`, {
-        diffuse: new Color3(rgb.r, rgb.g, rgb.b), spec: new Color3(0.1, 0.1, 0.1), cull: false,
-      });
-    const topMat = mkMat("topmat", u.top);        // 上半身（胸）
-    const bottomMat = mkMat("botmat", u.bottom);  // 下半身（ショーツ/腰）
-    const sleeveMat = mkMat("slvmat", u.sleeve);  // そで + 上腕
-    this.topMat = topMat; this.bottomMat = bottomMat; this.sleeveMat = sleeveMat;
-    // 付随パーツ（ヘッドバンド等）はTOPキットのマテリアルを流用する
-    const bodyMat = topMat;
-    // 胴 = 2つの角丸長方形プリズム（小さな角のフィレットRを持つ矩形断面を垂直に
-    // 押し出したもの）。Core Babylonには角丸ボックスがないので、角丸長方形の
-    // リングを手で構築し、側面は下と上のリングの間の閉じたリボンにする。
-    // 上半身は腰よりわずかに大きい。
-    const rrRing = (a: number, b: number, r: number, y: number): Vector3[] => {
-      const pts: Vector3[] = [];
-      const corner = (cx: number, cz: number, a0: number) => {
-        for (let i = 0; i <= 4; i++) {
-          const t = a0 + (Math.PI / 2) * (i / 4);
-          pts.push(new Vector3(cx + Math.cos(t) * r, y, cz + Math.sin(t) * r));
-        }
-      };
-      corner(a - r, -(b - r), -Math.PI / 2);   // 右下 → 右辺
-      corner(a - r, b - r, 0);                 // 右上 → 上辺
-      corner(-(a - r), b - r, Math.PI / 2);    // 左上 → 左辺
-      corner(-(a - r), -(b - r), Math.PI);     // 左下 → 下辺
-      return pts;
-    };
-    // 平らなキャップ（中心からリングへの三角形ファン）が端を閉じる
-    const makeCap = (name: string, ring: Vector3[], y: number, mat: StandardMaterial = bodyMat): void => {
-      const positions: number[] = [0, y, 0];
-      for (const p of ring) positions.push(p.x, p.y, p.z);
-      const indices: number[] = [];
-      const n = ring.length;
-      for (let i = 0; i < n; i++) indices.push(0, i + 1, ((i + 1) % n) + 1);
-      const normals: number[] = [];
-      VertexData.ComputeNormals(positions, indices, normals);
-      const vd = new VertexData();
-      vd.positions = positions; vd.indices = indices; vd.normals = normals;
-      const cap = new Mesh(name, scene);
-      vd.applyToMesh(cap);
-      cap.material = mat;
-      cap.parent = humanNode;
-    };
-    const roundedBox = (name: string, a: number, b: number, r: number, y0: number, y1: number,
-                        mat: StandardMaterial = bodyMat): Mesh => {
-      const bot = rrRing(a, b, r, y0), top = rrRing(a, b, r, y1);
-      const m = MeshBuilder.CreateRibbon(name, {
-        pathArray: [bot, top], closePath: true, sideOrientation: Mesh.DOUBLESIDE,
-      }, scene);
-      m.material = mat;
-      m.parent = humanNode;
-      makeCap(`${name}_top`, top, y1, mat);   // 上下を閉じて胴が中空にならないようにする
-      makeCap(`${name}_bot`, bot, y0, mat);
-      return m;
-    };
-    // 腰/骨盤（下半身 = bottomキット）とわずかに大きい胸（上半身 = topキット）
-    const lowerBody = roundedBox(`lower_${team}_${idx}`, 0.21, 0.15, 0.06, 0.79, 1.21, bottomMat);
-    // topは頭より下（頭の底 ≈ 1.61）に保ち、頭が埋もれないようにする
-    const upperBody = roundedBox(`upper_${team}_${idx}`, 0.25, 0.18, 0.07, 1.15, 1.58, topMat);
-    // 背番号が乗る平らな背中（上半身の奥行き）
-    const backZ = 0.18;
-
-    // 「どんぐり」の姿 — 代替スタイルとして保持し、HUDメニューから切り替える。
-    // 3つのパーツ、接合部はすべて平ら（輪切りのどんぐり）: 長い胸（平らな底、半球の肩）、
-    // より細い腰（平らな上面、半球の底）、ペンギンの足。Babylonに片端が平らなカプセルが
-    // ないので各パーツはプロファイルの旋盤（lathe）で作る。
-    const acornNode = new TransformNode(`acorn_${team}_${idx}`, scene);
-    acornNode.parent = torsoNode;   // 胸+腰はツイストする。足はrootに留まる
-    this.acornNode = acornNode;
-    const AR = 0.3, ACUT = Player.ACORN_CUT, ARC = 8; // 胸の半径 / 腰-胸の切断面の高さ
-    const WR = Player.ACORN_WAIST_R, WTIP = 0.22; // 腰の半径 / 腰の底の先端高さ
-    // 腰は切断面のピボットに乗るので、着席時に90°前方（膝の上）へ折り畳める
-    // — そのプロファイルは切断面基準（ACUTでy=0）で構築する
-    const waistPivot = new TransformNode(`acornWaist_${team}_${idx}`, scene);
-    waistPivot.parent = acornNode;
-    waistPivot.position.y = ACUT;
-    this.acornWaistPivot = waistPivot;
-    // 腰は円柱形: 丸い先端もフィレットもない真っ直ぐなシリンダー。切断面(y=0)から
-    // 先端高さまで、平らな上下キャップ、一定半径WR。
-    const WBOT = (WTIP - ACUT) * 0.66;            // 腰の底のy（上端はカット面のまま）
-    // scaling.y=-1反転の後、プロファイルのy=WBOT端が上（胸の下）へ、y=0端が見える底へ
-    // 対応する。y=WBOTのキャップは保持し、y=0端は開ける（軸点を落とす）ので、カスタムの
-    // 底キャップが平らな円盤を溝で置き換えられる。
-    const lowerShape: Vector3[] = [
-      new Vector3(0, WBOT, 0),                    // 軸 → 隠れた端（胸の下）を閉じる
-      new Vector3(WR, WBOT, 0),                   // その端の縁
-      new Vector3(WR, 0, 0),                      // 開いた端（見える底 — 軸点なし）
-    ];
-    const upperShape: Vector3[] = [
-      new Vector3(0, ACUT, 0),                   // 軸から外へ出る平らな切断面
-      new Vector3(AR, ACUT, 0),                  // 肩までまっすぐな側面
-    ];
-    for (let i = 0; i <= ARC; i++) {   // 上の半球: 軸の先端まで全半径 (1.675)
-      const t = (i / ARC) * Math.PI / 2;
-      upperShape.push(new Vector3(Math.cos(t) * AR, 1.375 + Math.sin(t) * AR, 0));
-    }
-    const makeAcornPiece = (name: string, shape: Vector3[], mat: StandardMaterial): Mesh => {
-      const m = MeshBuilder.CreateLathe(name, {
-        shape, tessellation: 12, sideOrientation: Mesh.DOUBLESIDE,
-      }, scene);
-      m.material = mat;
-      m.parent = acornNode;
-      return m;
-    };
-    const acornLower = makeAcornPiece(`acornLower_${team}_${idx}`, lowerShape, bottomMat);  // 下半身
-    acornLower.parent = waistPivot;              // 着席ピボットとともに折り畳む
-    // 上下反転: 同じ位置に保ったまま腰を上下反転する（広がりが今度は底に、
-    // 丸い先端が上に）。DOUBLESIDEの旋盤なので、反転した巻き方向でも両面が描画される。
-    acornLower.scaling.y = -1;
-    acornLower.position.y = WBOT;
-    // ズボン化: 底面に彫り込んだ溝でショーツを2本の脚に分ける。中心(x≈0)を体の内側へ
-    // 押し上げ、前↔後(Z)の中心線で最も深く、縁で面一へフェード。腰の半径にクリップした
-    // z方向スライスのグリッド。waistPivotに乗るのでショーツとともにツイスト&折り畳む。Xに対称。
-    const grooveMat = makeMat(scene, `groovemat_${team}_${idx}`, {
-      diffuse: bottomMat.diffuseColor.clone(),   // ショーツの色
-      spec: new Color3(0.05, 0.05, 0.05),
-      cull: false,                               // 溝の壁がどの角度からも見える
-    });
-    const GD = 0.09, GHW = 0.05;      // 溝の深さ（体の内側へ）/ 半幅
-    const NZ = 24, NX = 12;
-    const gpos: number[] = [];
-    for (let iz = 0; iz <= NZ; iz++) {
-      const z = -WR + (2 * WR) * (iz / NZ);
-      const xmax = Math.sqrt(Math.max(0, WR * WR - z * z));    // このzでの円のクリップ
-      for (let ix = 0; ix <= NX; ix++) {
-        const x = xmax === 0 ? 0 : -xmax + (2 * xmax) * (ix / NX);
-        const r = Math.hypot(x, z);
-        const valley = Math.max(0, 1 - Math.abs(x) / GHW);     // 0を中心としたX方向のV字
-        const edge = clamp((WR - r) / 0.06, 0, 1);             // 縁で面一へフェード
-        gpos.push(x, WBOT + GD * valley * edge, z);            // 中心を持ち上げる = 窪み
-      }
-    }
-    const gidx: number[] = [];
-    const gRow = NX + 1;
-    for (let iz = 0; iz < NZ; iz++) {
-      for (let ix = 0; ix < NX; ix++) {
-        const a = iz * gRow + ix, b = a + 1, c = a + gRow, d = c + 1;
-        gidx.push(a, c, b, b, c, d);
-      }
-    }
-    const gnorm: number[] = [];
-    VertexData.ComputeNormals(gpos, gidx, gnorm);
-    const gvd = new VertexData();
-    gvd.positions = gpos; gvd.indices = gidx; gvd.normals = gnorm;
-    const grooveCap = new Mesh(`acornWaistBottom_${team}_${idx}`, scene);
-    gvd.applyToMesh(grooveCap);
-    grooveCap.material = grooveMat;
-    grooveCap.parent = waistPivot;
-    const acornUpper = makeAcornPiece(`acornUpper_${team}_${idx}`, upperShape, topMat);     // 上半身
-
-    const head = MeshBuilder.CreateSphere(`head_${team}_${idx}`, { diameter: 0.34, segments: 10 }, scene);
-    head.position.y = 1.78;
-    this.head = head;
-    // 肌/髪のトーンはHUDの顔アイコンと一致（共有のplayerLook、NAMEをシード）。髪メッシュは
-    // buildHairMeshesが構築し、ロースター入替時はapplyLook()が再実行する。
-    const look = this.look;
-    const headMat = makeMat(scene, `hmat_${team}_${idx}`, {
-      diffuse: new Color3(look.skin.r, look.skin.g, look.skin.b), spec: new Color3(0.05, 0.05, 0.05),
-    });
-    head.material = headMat;
-    // 頭は胸のツイストの上にヨーを重ねるキャリアに乗るので、胸が別方向を向いた
-    // ままボール/マークを見るために回れる（lookToward参照）
+    // 頭のキャリア — 胸のツイストの上にヨーを重ねる
     const headNode = new TransformNode(`headYaw_${team}_${idx}`, scene);
     headNode.parent = torsoNode;
     this.headNode = headNode;
-    head.parent = headNode;
-    this.headMat = headMat;
-
-    const hairMat = makeMat(scene, `hair_${team}_${idx}`, {
-      diffuse: new Color3(look.hair.r, look.hair.g, look.hair.b), spec: new Color3(0.04, 0.04, 0.04),
-    });
-    this.hairMat = hairMat;
-    this.buildHairMeshes(look.style);
-    // 目 — 頭の前面にある2つの小さな暗い球。前面 = ローカル -numberSide·Z
-    // （腕/足と同じ規約）。ハーフタイムでチームがエンドを入れ替えると
-    // setNumberSideがZを向け直す。
-    const eyeMat = makeMat(scene, `eye_${team}_${idx}`, {
-      diffuse: new Color3(0.14, 0.1, 0.08), spec: new Color3(0, 0, 0),
-    });
-    const mkEye = (sx: number): Mesh => {
-      const e = MeshBuilder.CreateSphere(`eye_${team}_${idx}_${sx}`, { diameter: 0.05, segments: 6 }, scene);
-      e.material = eyeMat;
-      e.parent = head;
-      e.position.set(sx, -0.005, -0.15);   // 前の半球（numberSideの既定は+1）
-      return e;
-    };
-    this.eyeL = mkEye(-0.062);
-    this.eyeR = mkEye(0.062);
-
-    // どんぐりのペンギンの足、シューズ型。つま先がローカル -Z（numberSide = +1 のとき胸側）を
-    // 指すように作る。シューズは前後非対称なので、setNumberSideがz位置とヨーを反転する。
-    const shoeMat = makeMat(scene, `shoemat_${team}_${idx}`, {
-      diffuse: new Color3(u.shoes.r, u.shoes.g, u.shoes.b),   // シューズ（キットの色）
-      spec: new Color3(0.08, 0.08, 0.08),
-      cull: false,   // 手作りのくさびは巻き方向に関係なく表示される
-    });
-    this.shoeMat = shoeMat;
-    // 各シューズは1つのメッシュ: 側面図の輪郭 — ソール → 四分楕円のつま先カーブ →
-    // まっすぐな甲の対角 → 平らな履き口の上端 → 広がるかかとの背面 — を全幅にスイープし、
-    // 両側面を三角形ファンで閉じる。
-    const makeAcornFoot = (sx: number, tag: string): TransformNode => {
-      const node = new TransformNode(`acornFoot_${tag}_${team}_${idx}`, scene);
-      node.parent = this.root;   // 足はツイストする胴ではなく脚に属する
-      node.position.set(sx, 0, 0.07);            // z/ヨーはnumberSideごとに向け直す
-      const hw = 0.22 / 2;                            // 半幅
-      const capZ = -0.20, capR = 0.08, capH = 0.13;   // つま先カーブ: 開始/膨らみ/高さ
-      const topY = 0.25, slopeZ = -0.08;              // 履き口の上端 / 甲の端
-      const heelTopZ = 0.11, heelBotZ = 0.18;         // かかとの背面: 下外へ広がって長めのかかとになる
-      const TSEG = 6;
-      const prof: [number, number][] = [[heelBotZ, 0]]; // (z,y)の閉じた輪郭、かかと下端から
-      for (let i = 0; i <= TSEG; i++) {   // つま先: ソール先端から四分楕円を上へ乗り越える
-        const t = (1 - i / TSEG) * Math.PI / 2;
-        prof.push([capZ - capR * Math.sin(t), capH * Math.cos(t)]);
-      }
-      prof.push([slopeZ, topY]);          // 甲の対角を履き口まで上げる
-      prof.push([heelTopZ, topY]);        // 平らな履き口の上端。ループは広がったかかとを下って閉じる
-      const N = prof.length;
-      const spos: number[] = [];
-      for (const [z, y] of prof) spos.push(-hw, y, z, hw, y, z);  // ペア 2i / 2i+1
-      const sidx: number[] = [];
-      for (let i = 0; i < N; i++) {       // スイープした輪郭面（ソール&かかと背面を含む）
-        const j = (i + 1) % N;
-        const a = 2 * i, b = a + 1, c = 2 * j, d = c + 1;
-        sidx.push(a, c, b, b, c, d);
-      }
-      for (let i = 1; i < N - 1; i++) {   // 平らな側面キャップ、かかと下端の角からファン状に
-        sidx.push(0, 2 * i, 2 * (i + 1));
-        sidx.push(1, 2 * (i + 1) + 1, 2 * i + 1);
-      }
-      const snorm: number[] = [];
-      VertexData.ComputeNormals(spos, sidx, snorm);
-      const svd = new VertexData();
-      svd.positions = spos; svd.indices = sidx; svd.normals = snorm;
-      const shoe = new Mesh(`acornShoe_${tag}_${team}_${idx}`, scene);
-      svd.applyToMesh(shoe);
-      shoe.material = shoeMat;
-      shoe.parent = node;
-      return node;
-    };
-    this.acornFootL = makeAcornFoot(-0.12, "L");
-    this.acornFootR = makeAcornFoot(0.12, "R");
-
-    // 脚: 腰の底とシューズの履き口の隙間を素肌のシリンダーで埋める（色はheadMat）。
-    // root（シューズではない）に固定して垂直を保つ。syncAcornLegs()が足の持ち上げ/スタンスに
-    // 合わせて上下（とz）へスライドさせるので、上端は腰・底はシューズに収まる。
-    const makeAcornLeg = (sx: number, tag: string): TransformNode => {
-      const node = new TransformNode(`acornLeg_${tag}_${team}_${idx}`, scene);
-      node.parent = this.root;                     // 足と同様に固定（ツイストなし、傾きなし）
-      node.position.set(sx, 0, 0);
-      const legTop = ACUT + WBOT;                  // 腰の底 (~0.47)
-      const legBot = 0.16;                          // シューズの履き口の中まで下げる
-      const h = legTop - legBot + 0.08;             // 腰とシューズの両方に重なる
-      const leg = MeshBuilder.CreateCylinder(`acornShin_${tag}_${team}_${idx}`,
-        { height: h, diameter: 0.20, tessellation: 12 }, scene);
-      leg.parent = node;
-      leg.material = headMat;                        // 肌色 (顔・手と同じ)
-      leg.position.y = (legTop + legBot) / 2;
-      return node;
-    };
-    this.acornLegL = makeAcornLeg(-0.12, "L");
-    this.acornLegR = makeAcornLeg(0.12, "R");
-
-    // 背番号、ユニフォームの背面にプリント。ボディはヨーしないので「背面」とは攻める
-    // バスケットから遠い側 — 各Zサイドごとに1つ焼き込み、setNumberSide()が正しい方を表示する。
-    const numTex = new DynamicTexture(`numtex_${team}_${idx}`, { width: 128, height: 128 }, scene, false);
-    this.numTex = numTex;   // 保持（審判の丸囲みRなど後から差し替え可能に）
-    numTex.hasAlpha = true;
-    const ctx = numTex.getContext() as unknown as CanvasRenderingContext2D;
-    ctx.clearRect(0, 0, 128, 128);
-    ctx.fillStyle = "white";
-    ctx.font = "bold 84px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(String(idx + 1), 64, 68);
-    numTex.update();
-    const numMat = makeMat(scene, `nummat_${team}_${idx}`, {
-      emissive: new Color3(1, 1, 1), unlit: true, cull: false,
-    });
-    numMat.diffuseTexture = numTex;
-    numMat.opacityTexture = numTex;
-    // 番号はカプセル面のすぐ外側で胴に沿う薄い曲面シェル（リボン）が担うので、
-    // 数字はユニフォームのプリントのように体の曲面に沿う。頂点はここで明示的に
-    // 計算する — 投影/UVの内部実装に依存しない。アークのスイープ方向はサイド
-    // ごとに選び、そのサイドに立つ視点から数字が左から右へ読めるようにする
-    // （既定の左手系カメラ: +Zに沿って見ると+Xが画面右、-Zに沿って見ると-X）。
-    const makeNumberShell = (sign: number, tag: string, R: number,
-      yTop: number, yBot: number, span: number): Mesh => {
-      const SEG = 12;
-      const top: Vector3[] = [];
-      const bot: Vector3[] = [];
-      for (let i = 0; i <= SEG; i++) {
-        const a = (i / SEG - 0.5) * span * (sign > 0 ? -1 : 1);
-        const x = Math.sin(a) * R;
-        const z = Math.cos(a) * R * sign;
-        top.push(new Vector3(x, yTop, z));
-        bot.push(new Vector3(x, yBot, z));
-      }
-      // [bot, top]でテクスチャのvが正しく上向きになる
-      const shell = MeshBuilder.CreateRibbon(`numshell_${tag}_${sign}_${team}_${idx}`, {
-        pathArray: [bot, top], sideOrientation: Mesh.DOUBLESIDE,
-      }, scene);
-      shell.material = numMat;
-      shell.parent = torsoNode;   // 番号は（ツイストする）ユニフォームにプリントされる
-      shell.isVisible = false;            // Gameが各ハーフで背中側を選ぶ
-      return shell;
-    };
-    // 人型: 平らな矩形の背中のすぐ外側（~60°の緩やかな巻き、上背部）
-    this.numHumanPlus = makeNumberShell(1, "h", backZ + 0.012, 1.52, 1.08, Math.PI * 0.34);
-    this.numHumanMinus = makeNumberShell(-1, "h", backZ + 0.012, 1.52, 1.08, Math.PI * 0.34);
-    // どんぐり: 0.3のカプセル半径のすぐ外側（~100°の巻き）
-    this.numAcornPlus = makeNumberShell(1, "a", 0.315, 1.42, 0.88, Math.PI * 0.55);
-    this.numAcornMinus = makeNumberShell(-1, "a", 0.315, 1.42, 0.88, Math.PI * 0.55);
 
     // 常にカメラを向く浮遊ネームタグ。個性が読み取れるように。
     const namePlane = MeshBuilder.CreatePlane(`name_${team}_${idx}`, { width: 1.7, height: 0.42 }, scene);
@@ -676,101 +337,28 @@ export class Player {
     namePlane.material = nameMat;
     namePlane.parent = this.root;
 
-    // --- 腕: 上腕（ユニフォームのそで）→ 肘 → 前腕（肌）→ 手。肩のピボットが
-    // 腕全体をボールへ向ける（リーチ）。肘は静止/走行中は曲がり、手のひらをボールに
-    // 当てるために伸びる。全長 = UP + FORE。 ---
-    const UP = Player.UPPER_ARM, FORE = Player.FOREARM;
-    const makeArm = (sx: number, tag: string): { pivot: TransformNode; elbow: TransformNode } => {
-      const pivot = new TransformNode(`arm_${tag}_${team}_${idx}`, scene);
-      pivot.parent = torsoNode;   // 肩はツイストする胸に乗る
-      pivot.position.set(sx, 1.45, 0.06);          // 肩
-      // 肩のデルトイド1/4球: slice0.5(上半分)×arc0.5(経度半分)のクォーター。
-      // 平らな切断面の一方（赤道面）が上腕の断面に重なり、もう一方（垂直面）が
-      // 胴体側を向く=胴と上腕の角を丸いフィレットで埋めるイメージ。膨らみは
-      // 外側(±X)を向くよう左右で回転を反転。ピボット子なので腕の向きに追従し、
-      // 上腕の平行断面を常に覆う。
-      const delt = MeshBuilder.CreateSphere(`delt_${tag}_${team}_${idx}`,
-        { diameter: 0.155, segments: 8, slice: 0.5, arc: 0.5 }, scene);
-      delt.parent = pivot;
-      // 1/4楕円球: 長さは**上腕断面(半径0.0675)にぴったり被さる程度**。
-      // 切断面は内側へ0.068、膨らみ軸(ローカルZ=arc占有軸)は1.8倍 →
-      // 到達 -0.068+0.0775×1.8 ≈ +0.072。全長≈0.14で断面±0.0675を数mmだけ超える。
-      delt.position.set(sx > 0 ? -0.068 : 0.068, -0.005, 0);
-      delt.scaling.z = 1.8;
-      // arc0.5 の占有域は z≤0。RotationY(-π/2)で -Z→+X なので右腕(sx>0)は -π/2 で
-      // 膨らみが外側(+X)・切断面が胴体側(内側)を向く。
-      delt.rotation.y = sx > 0 ? -Math.PI / 2 : Math.PI / 2;   // 膨らみを外側へ
-
-      delt.material = sleeveMat;   // そで: 肩のキャップをそでの色で
-      // 上腕は肩側が太く肘側へ細くなるテーパー。
-      const upper = MeshBuilder.CreateCylinder(`upper_${tag}_${team}_${idx}`,
-        { height: UP, diameterTop: 0.135, diameterBottom: 0.105, tessellation: 10 }, scene);
-      upper.parent = pivot;
-      upper.position.set(0, -UP / 2, 0);           // 上腕、ユニフォームのそで
-      upper.material = sleeveMat;                   // そで+上腕: そでの色
-      const elbow = new TransformNode(`elbow_${tag}_${team}_${idx}`, scene);
-      elbow.parent = pivot;
-      elbow.position.set(0, -UP, 0);               // 上腕の端の肘
-      const fore = MeshBuilder.CreateCylinder(`fore_${tag}_${team}_${idx}`,
-        { height: FORE, diameter: 0.1, tessellation: 8 }, scene);
-      fore.parent = elbow;
-      fore.position.set(0, -FORE / 2, 0);          // 前腕、素肌
-      fore.material = headMat;
-      const hand = MeshBuilder.CreateSphere(`hand_${tag}_${team}_${idx}`,
-        { diameter: 0.16, segments: 8 }, scene);
-      hand.parent = elbow;
-      hand.position.set(0, -FORE, 0);              // 前腕の端の手のひら
-      hand.material = headMat;
-      return { pivot, elbow };
+    // --- 仮想の関節。肩・肘・股・膝。位置と回転だけを持ち、メッシュは付かない。
+    // ボクセルの標準ボーンへ毎フレーム転写する（player-voxel.ts の syncVoxelPose）。
+    // 位置は buildVoxelBody が素体の実測値で上書きする（applyVoxelRig）。 ---
+    const mkNode = (name: string, parent: TransformNode, x: number, y: number, z: number): TransformNode => {
+      const n = new TransformNode(`${name}_${team}_${idx}`, scene);
+      n.parent = parent;
+      n.position.set(x, y, z);
+      return n;
     };
-    const armL = makeArm(-0.28, "L");   // 肩をより細い胴の方へ引き寄せる
-    const armR = makeArm(0.28, "R");
-    this.armPivotL = armL.pivot; this.elbowL = armL.elbow;
-    this.armPivotR = armR.pivot; this.elbowR = armR.elbow;
+    this.armPivotL = mkNode("arm_L", torsoNode, -0.12, 1.42, 0);
+    this.armPivotR = mkNode("arm_R", torsoNode, 0.12, 1.42, 0);
+    this.elbowL = mkNode("elbow_L", this.armPivotL, 0, -Player.UPPER_ARM, 0);
+    this.elbowR = mkNode("elbow_R", this.armPivotR, 0, -Player.UPPER_ARM, 0);
+    this.hipL = mkNode("hip_L", this.root, -0.10, 0.97, 0);
+    this.hipR = mkNode("hip_R", this.root, 0.10, 0.97, 0);
+    this.kneeL = mkNode("knee_L", this.hipL, 0, -0.43, 0);
+    this.kneeR = mkNode("knee_R", this.hipR, 0, -0.43, 0);
+    this.jerseyText = String(idx + 1);
     this.handsRest();
 
-    // --- 多関節の脚: 股関節ピボット（腿、ユニフォームのショーツ）+膝ピボット
-    // （脛、肌+足）。静止時、脚は股関節のy≈0.9から床までまっすぐ垂れる。
-    // updateLegs()が歩行サイクルのために股関節を振り（膝を曲げ）、sit()が折り畳む。 ---
-    const HIP_Y = 0.92, THIGH = 0.46, SHIN = 0.44;
-    const makeLeg = (sx: number, tag: string): { hip: TransformNode; knee: TransformNode; foot: Mesh } => {
-      const hip = new TransformNode(`hip_${tag}_${team}_${idx}`, scene);
-      hip.parent = this.root;
-      hip.position.set(sx, HIP_Y, 0);
-      const thigh = MeshBuilder.CreateCylinder(`thigh_${tag}_${team}_${idx}`,
-        { height: THIGH, diameter: 0.21, tessellation: 8 }, scene);
-      thigh.parent = hip;
-      thigh.position.set(0, -THIGH / 2, 0);      // 股関節から下へ垂れる
-      thigh.material = bottomMat;                  // 下半身: bottomキットの色のショーツ
-      const knee = new TransformNode(`knee_${tag}_${team}_${idx}`, scene);
-      knee.parent = hip;
-      knee.position.set(0, -THIGH, 0);            // 腿の下端の膝
-      const shin = MeshBuilder.CreateCylinder(`shin_${tag}_${team}_${idx}`,
-        { height: SHIN, diameter: 0.16, tessellation: 8 }, scene);
-      shin.parent = knee;
-      shin.position.set(0, -SHIN / 2, 0);         // 膝から下へ垂れる（肌）
-      shin.material = headMat;
-      const foot = MeshBuilder.CreateBox(`foot_${tag}_${team}_${idx}`,
-        { width: 0.16, height: 0.1, depth: 0.28 }, scene);
-      foot.parent = knee;
-      foot.position.set(0, -SHIN, 0.06);          // つま先のオフセットはsetNumberSide内でnumberSideごとに設定
-      foot.material = headMat;
-      return { hip, knee, foot };
-    };
-    const legL = makeLeg(-0.13, "L");
-    const legR = makeLeg(0.13, "R");
-    this.hipL = legL.hip; this.kneeL = legL.knee; this.footL = legL.foot;
-    this.hipR = legR.hip; this.kneeR = legR.knee; this.footR = legR.foot;
-
-    // 姿全体を選手の身長に合わせて垂直方向にスケール（基準体格 ≈ 1.95 m）
-    this.root.scaling.y = def.height / 1.95;
-
-    this.meshes = [upperBody, lowerBody, head, acornUpper, acornLower];
-    this.refreshBodyDepth();   // ボディバランスに応じて胴を前後に細くする
-    this.applyModel();   // 現在選択中のボディスタイルを表示
+    this.ensureVoxel();   // ボクセルの見た目を組み、腕の長さ・肩の位置を実測値へ合わせる
   }
-
-  readonly meshes: Mesh[];
 
   // 胸ツイスト/頭ヨーの可動域・速度は animation/basic/joints.ts の JOINT が定義。
 
@@ -801,26 +389,11 @@ export class Player {
   tiltZ = 0;
 
   // 脚のジオメトリ/ポーズの定数。
-  static readonly HIP_Y = 0.92;      // 股関節ピボットの高さ（makeLegと一致）
+  static readonly HIP_Y = 0.92;      // 股関節の高さのフォールバック（ボクセルが無いとき）
   static readonly SEAT_HIP = 0.46;   // 着席時、腰はベンチ座面に置く
   static readonly SIT_HIP = 1.45;    // 腿が~水平（前方）まで振り上がる
   static readonly SIT_KNEE = -1.55;  // 脛が床へ折れ戻る
-  // どんぐりの着席: 腰が腰-胸の切断面で90°前方へ折れ（膝の上に見える）、
-  // シューズがその下に収まって床に立つ
-  static readonly ACORN_CUT = 0.72;     // 腰-胸の切断面の高さ（着席のヒンジ）
-  private static readonly ACORN_WAIST_R = 0.25; // 腰の半径（コンストラクタのWR）
-  static readonly SEAT_SURF = 0.42;     // 折り畳んだ腰が置かれるベンチ座面
-  static readonly SIT_FOLD = 1.15;      // 着席時の腰の折り（~66°、きつい90°より緩やか）
-  static readonly ACORN_WAIST_LEN = 0.50; // ピボット→腰先端の長さ（旋盤プロファイルから）
-  static readonly ACORN_FOOT_Z = 0.02;  // 立ちスタンス: 足は後ろ寄りに配置
-  static readonly ACORN_SPLAY = 0.30;   // 立ちスタンス: つま先を外へ開く（各~17°）
-
-  // rootより下の、折り畳んだ腰の最下点（座面に置かれる部分）。折り角度から導出するので
-  // SIT_FOLDが変わっても正しいまま。
-  static acornSeatDrop(): number {
-    const f = Player.SIT_FOLD;
-    return Player.ACORN_CUT - Player.ACORN_WAIST_R * (Math.cos(f) + Math.sin(f));
-  }
+  static readonly WAIST_HINGE = 0.72; // 前傾のヒンジ高さ（腰の切れ目。落胆・シュートの溜め）
 
   backArms = false;   // ヒステリシスで閾値付近でスタイルがちらつかないように
   lastDt = 1 / 60;    // 最後のフレーム長、レート制限された腕のスルー用

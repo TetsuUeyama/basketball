@@ -9,7 +9,6 @@ export const JOINT = {
   elbow:      { axis: "x", min: -2.8, max: 2.8, speed: 14 },     // 肘の曲げ
   hip:        { axis: "x", min: -1.6, max: 1.6, speed: 12 },     // 股関節の前後振り/畳み
   knee:       { axis: "x", min: -1.7, max: 1.7, speed: 14 },     // 膝の曲げ
-  acornFoot:  { axis: "x", min: -0.8, max: 0.8, speed: 22 },     // どんぐりのつま先ピッチ
 } satisfies Record<string, Joint>;
 
 // 部位を動かすのに必要な時間の規約: 瞬間切替（スナップ）は禁止。呼び出しが速度を
