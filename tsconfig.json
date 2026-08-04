@@ -14,7 +14,7 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@objcts/*": ["../objcts/*"],
+      "@objcts/*": ["./vendor/objcts/*"],
       "@babylonjs/core": ["./node_modules/@babylonjs/core"],
       "@babylonjs/core/*": ["./node_modules/@babylonjs/core/*"]
     }

@@ -63,10 +63,18 @@ src/
 
 ## objcts への依存
 
-選手の見た目は `../objcts/player`（ボクセル素体）を直接 import している。
-`vite.config.ts` の alias（`@objcts`）と `tsconfig.json` の `paths` で解決する。
+選手の見た目は objcts のボクセル素体を直接 import している。実体は**リポジトリ内の複製
+`vendor/objcts`**（ビルドに必要な .ts と .json だけ・約2.8MB）で、`vite.config.ts` の
+alias（`@objcts`）と `tsconfig.json` の `paths` がここを指す。リポジトリ単体でビルドできる
+（clone 直後・CI でもそのまま `npm run build` が通る）。
+
+オーサリング（ボクセル/モーションの焼き直し）は元の `../objcts` 側で行い、終わったら
+
+    node scripts/sync-objcts.mjs
+
+で `vendor/objcts` へ取り込む。⚠️ `vendor/objcts` を直接編集すると次回の同期で消える。
 `@babylonjs/core` は basketball-sim の `node_modules` へ明示エイリアスしている
-（objcts 配下は自前の node_modules を持たないため）。
+（二重ロードすると `instanceof` が壊れるため）。
 
 ## 資料
 

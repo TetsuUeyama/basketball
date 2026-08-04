@@ -6302,3 +6302,16 @@ Babylon の `Mesh.clone` は**元メッシュのシーン**に作られる。ボ
 うち23回は横っ飛びの空中で捕球、24回とも味方へのパスに繋がった（投げ捨て0）。
 セーブ中のライン外の深さ 中央値0.74m / 90%1.18m / 最大1.95m。復帰の時間切れは1フレームのみ。
 別シードでは成立53%。TOは 40試合で 24回ぶん減る（1試合あたり約0.6）。
+
+## 515. objcts をリポジトリへ取り込み（vendor/objcts）— 本番デプロイの前提
+
+`@objcts` が `../objcts`（リポジトリ外・git管理外）を指していたため、clone した環境や CI では
+`Could not resolve "@objcts/player/rig"` でビルドできなかった。
+
+- `scripts/sync-objcts.mjs`（新規）… ビルドに必要な .ts / .json だけを `vendor/objcts` へ複製。
+  40MB ある `player/player`（.vox の元素材）と各 tools は入れない。52ファイル / 2.77MB。
+- `vite.config.ts` / `tsconfig.json` … `@objcts` を `./vendor/objcts` へ。`server.fs.allow` は不要になり削除。
+
+実測: esbuild の metafile で依存を数えると **vendor/objcts から46ファイル・リポジトリ外の
+objcts 参照は0**。`npm run build` 成功（dist/assets/index-*.js 9.66MB / gzip 2.23MB）。
+オーサリングは従来どおり `../objcts` 側で行い、`node scripts/sync-objcts.mjs` で取り込む。
