@@ -28,6 +28,12 @@ Player.prototype.clipName = "";
 const MOVE_MIN = 0.06;
 // これ以上でダッシュ系のクリップへ。
 const DASH = 0.5;
+// 着地の前倒し: 滞空の終盤この割合はもう着地フレームへ入る（落ちながら脚を出す）
+const LAND_EARLY = 0.22;
+// そのとき着地フレームのどこまで進めるか（残りは接地後に再生）
+const LAND_LEAD = 0.35;
+// 接地後、着地フレームを振り切るまでの秒数（landT いっぱい引き伸ばさない）
+const LAND_PLAY = 0.45;
 
 const CACHE = new Map<string, MotionClip | null>();
 function clip(name: string): MotionClip | null {
@@ -122,8 +128,11 @@ export function applyClipPose(vb: VoxelBody, p: Player, dt: number): boolean {
   // 着地の立て直し: 滞空区間の終わり → クリップの最後（着地フレーム）を再生し、
   // 反った空中姿勢から下半身・脚を進行方向へ伸ばして立て直す形へ戻す。
   if (!air && win && p.landT > 0 && p.landDur > 0 && name.startsWith("jump")) {
-    const k = Math.min(1, Math.max(0, 1 - p.landT / p.landDur));
-    p.clipT = win[1] + (dur - win[1]) * k;
+    // ⚠️ 立て直しは landT（最大2.6秒）いっぱい使わず、LAND_PLAY 秒で振り切る。
+    //    引き伸ばすと脚が戻るのが遅れて、反ったまま突っ立って見える。
+    const played = Math.max(0, p.landDur - p.landT);
+    const k = Math.min(1, played / LAND_PLAY);
+    p.clipT = win[1] + (dur - win[1]) * (LAND_LEAD + (1 - LAND_LEAD) * k);
     applyMotion(vb.rig, c, p.clipT, { rootMotion: "vertical", leanDeg: 0 });
     syncVoxelHeadTorso(vb, p.numberSide, p.torsoNode.rotation.y, p.headNode.rotation.y, _spineQ, _headQ);
     syncVoxelArms(vb, p, null);
@@ -134,8 +143,15 @@ export function applyClipPose(vb: VoxelBody, p: Player, dt: number): boolean {
     // ⚠️ クリップの滞空区間をゲームの滞空へ重ねる（クリップ全体を割り当てると、
     //    もう上昇しているのに沈み込みの姿勢が出る）。腰の上下・接地合わせは切る
     //    （切らないと jumpY と二重に効いて跳ばない／足が床へ吸われる）。
+    // ⚠️ 接地してから脚を伸ばし始めると遅い。滞空の終盤 LAND_EARLY のぶんは
+    //    もう着地フレームへ入り、落ちながら脚を進行方向へ出す。
     const k = Math.min(1, Math.max(0, 1 - p.jumpRemaining / p.jumpDur));
-    p.clipT = air[0] + (air[1] - air[0]) * k;
+    if (k < 1 - LAND_EARLY) {
+      p.clipT = air[0] + (air[1] - air[0]) * (k / (1 - LAND_EARLY));
+    } else {
+      const j = (k - (1 - LAND_EARLY)) / LAND_EARLY;         // 0..1
+      p.clipT = air[1] + (dur - air[1]) * LAND_LEAD * j;     // 着地フレームの頭を空中で
+    }
   } else if (c.loop) {
     const frac = p.runSpeed > 0 ? Math.min(1, p.curSpd / p.runSpeed) : 0;
     if (frac < MOVE_MIN) p.clipT = (p.clipT + dt) % dur;          // その場のクリップは実時間
