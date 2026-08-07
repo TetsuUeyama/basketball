@@ -31,24 +31,34 @@ const { sun } = addLights(scene);
 
 const camera = new BroadcastCamera(scene, canvas);
 
-const hoops = buildCourt(scene);
-
-const game = new Game(scene);
-game.attachHoops(hoops);
-addShadows(sun, game);   // 影は選手/ボールのメッシュに依存するので game 生成後
+// ---- 3Dの実体はチーム決定後に組む -----------------------------------------
+// タイトル/クラブ選択の間はコートも選手も作らない。26人ぶんのボクセル生成と、その
+// 常時描画がボタンの反応を鈍らせるため。試合前画面へ入る直前に一度だけ組む。
+let game: Game | null = null;
+let intro: IntroTour | null = null;
+function buildWorld(): void {
+  if (game) return;
+  const hoops = buildCourt(scene);
+  const g = new Game(scene);
+  g.attachHoops(hoops);
+  addShadows(sun, g);   // 影は選手/ボールのメッシュに依存するので game 生成後
+  intro = new IntroTour(g, camera);
+  game = g;
+}
 
 const ui = new UI();
-ui.onRestart = () => game.reset();                       // 現在の試合を再スタート
-ui.onBack = () => game.reset();                          // 結果 → きれいな試合前へ戻る
-ui.onSetupLineups = () => optimizeLineups(game);         // マッチアップ確定時、相手を考慮したデフォルト5人
+ui.onNeedWorld = () => buildWorld();                     // タイトルを離れる＝チーム決定済み
+ui.onRestart = () => game?.reset();                      // 現在の試合を再スタート
+ui.onBack = () => game?.reset();                         // 結果 → きれいな試合前へ戻る
+ui.onSetupLineups = () => optimizeLineups();             // マッチアップ確定時、相手を考慮したデフォルト5人
 ui.onUniformToggle = () => {                             // ホーム ⇄ アウェイのユニフォームを全員へ即時反映
-  game.applyUniforms();
+  game?.applyUniforms();
   if (previewPlayers) { previewPlayers[0].applyUniform(); previewPlayers[1].applyUniform(); }
 };
 // クラブ選択中、選んでいるチームの先発5人をコート上で大写しにする（null=通常の広角へ戻す）
 ui.onShowcaseTeam = (team) => {
   if (team === null) camera.endShowcase();
-  else camera.showcaseTeam(game.allPlayers(team).slice(0, 5));
+  else if (game) camera.showcaseTeam(game.allPlayers(team).slice(0, 5));
 };
 
 // ---- 専用の3Dユニフォームプレビュー(クラブ選択) -------------------------
@@ -107,49 +117,66 @@ ui.onUniformPreview = (cfg) => {
   previewActive = true;
 };
 
-const intro = new IntroTour(game, camera);
-
 // ティップオフ後の放送アングル自動回転(一度きり)。camTipDone=済み / camTipArmT=ティップ終了後の経過
 let camTipDone = true;
 let camTipArmT = -1;
 
 ui.onStart = () => {
+  buildWorld();
+  if (!game) return;
   game.applyRoster();
   game.reset();            // 選手はティップオフの位置 / ベンチの座席につく
-  intro.begin();
+  intro?.begin();
   camera.cancelAutoAngle();
   camTipDone = false; camTipArmT = -1;   // 新しい試合 → ティップオフ後の自動アングルを予約
 };
 
 canvas.addEventListener("pointerdown", () => {
-  intro.skip();            // イントロ中はタップで即座に次のショットへ進む
+  intro?.skip();           // イントロ中はタップで即座に次のショットへ進む
   camera.cancelAutoAngle(); // ユーザーが触れたら自動アングル回転を止める(好みの角度を保持)
 });
 canvas.addEventListener("wheel", () => camera.cancelAutoAngle());
 
+// 試合中以外はシムが凍結していて動くものが無いので、描画を間引いて CPU をボタン操作へ回す。
+// コート/選手がまだ無いタイトル/クラブ選択はさらに粗く（プレビューの2体は固定カメラ）。
+const IDLE_STEP = 1 / 30, EMPTY_STEP = 1 / 20;
+let idleT = 0;
+
 engine.runRenderLoop(() => {
   // dt をクランプし、停止/再フォーカスされたタブがシムを飛躍させないようにする
   const dt = Math.min(engine.getDeltaTime() / 1000, 0.05);
-  // 試合がプレー中の間だけシムを進める(試合前/結果では凍結)
-  if (ui.playing) {
-    if (intro.active()) {
-      intro.step(dt);           // イントロツアー中はカメラ・字幕を進め、試合は止める
-    } else {
-      intro.clear();            // ツアーが終わった直後でなければ何もしない
-      // `speed` 個の整数サブステップを走らせ、早送りが数値的に安定するようにする
-      for (let i = 0; i < ui.speed; i++) game.update(dt);
+  const g = game;
+  if (!g || !ui.playing) {
+    idleT += dt;
+    if (idleT < (g ? IDLE_STEP : EMPTY_STEP)) return;
+    const acc = idleT;   // 間引いたぶんをまとめて渡す（カメラの寄りが遅れない）
+    idleT = 0;
+    if (g) {
+      if (intro!.active()) intro!.abort();   // ツアーの途中で試合前へ戻る: 中止してカメラを解放
+      ui.update(g);
+      camera.update(acc, g.ball.pos.x, g.ball.pos.z, g.ball.pos.y, g.camFollowBall);
     }
-  } else if (intro.active()) {
-    intro.abort();              // ツアーの途中で試合前へ戻る: 中止してカメラを解放
+    if (previewActive && previewScene) previewScene.render();
+    else scene.render();
+    return;
   }
-  ui.update(game);
+  idleT = 0;
+  // ここから先はプレー中のみ。シムを進める
+  if (intro!.active()) {
+    intro!.step(dt);            // イントロツアー中はカメラ・字幕を進め、試合は止める
+  } else {
+    intro!.clear();             // ツアーが終わった直後でなければ何もしない
+    // `speed` 個の整数サブステップを走らせ、早送りが数値的に安定するようにする
+    for (let i = 0; i < ui.speed; i++) g.update(dt);
+  }
+  ui.update(g);
   // ティップオフでボールが投げられ、しばらくしたら放送アングルを90°回す(ベンチを奥・やや見下ろし)。
   // ティップオフが終わってライブになってから一定時間で一度だけ発火。
-  if (ui.playing && !intro.active() && !camTipDone) {
-    if (camTipArmT < 0) { if (game.mode !== "tipoff") camTipArmT = 0; }
+  if (!intro!.active() && !camTipDone) {
+    if (camTipArmT < 0) { if (g.mode !== "tipoff") camTipArmT = 0; }
     else { camTipArmT += dt; if (camTipArmT >= 1.0) { camera.orientBroadcast(); camTipDone = true; } }
   }
-  camera.update(dt, game.ball.pos.x, game.ball.pos.z, game.ball.pos.y, game.camFollowBall);
+  camera.update(dt, g.ball.pos.x, g.ball.pos.z, g.ball.pos.y, g.camFollowBall);
   // クラブウィザードのユニフォームプレビューが出ている間は、専用のプレビューシーン
   // (孤立した選手、コートなし)だけをレンダリングする。それ以外はメインシーン。
   if (previewActive && previewScene) previewScene.render();

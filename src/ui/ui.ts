@@ -114,6 +114,8 @@ export class UI {
   onStart: () => void = () => {};
   onBack: () => void = () => {};
   onSetupLineups: () => void = () => {};   // マッチアップが最初に決まったときの、相手を考慮した DEFAULT の5人
+  // 3Dの実体（コート・選手）がまだ無ければ組ませる。タイトル/クラブ選択の間は作らせない。
+  onNeedWorld: () => void = () => {};
   onUniformToggle: () => void = () => {};  // TEAM_UNIFORM（ホーム/アウェイ）を全選手に適用
   // クラブ選択中に3Dコート上の1チームだけをフレーミング（null = 全景に戻す）
   onShowcaseTeam: (team: number | null) => void = () => {};
@@ -562,6 +564,8 @@ export class UI {
   static readonly USE_C = "rgb(198,202,212)";  // 順 プライマリ/使用率順 — 中立的なシルバー
 
   setPhase(phase: Phase): void {
+    // タイトルを離れる＝チーム決定済み。ここで初めてコート/選手を組む。
+    if (phase !== "title") this.onNeedWorld();
     this.phase = phase;
     this.hud.style.display = phase === "playing" ? "block" : "none";
     this.titlePanel.style.display = phase === "title" ? "flex" : "none";

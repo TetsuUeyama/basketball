@@ -446,7 +446,7 @@ UI.prototype.openMatchupWizard = function(): void {
         const cancel = this.button("選び直す");
         Object.assign(cancel.style, { fontSize: "12px", padding: "7px 14px" } as Partial<CSSStyleDeclaration>);
         cancel.onclick = close;
-        row.append(confirm, list, cancel);
+        row.append(list, confirm, cancel);   // 決定を真ん中に
         panel.replaceChildren(makeBanner(140, 40, 16), makeName(), sub, row);
       };
 

@@ -472,7 +472,7 @@ export function deflectCatch(game: Game, h: Player, d: Player): void {
     game.lastTouch = d;
     h.touchCool = 0.5;                             // キャッチをはじかれた — すぐには再確保できない
     d.digReach(new Vector3(game.ball.pos.x, 0.9, game.ball.pos.z));
-    flashBall(game, "intercept");                  // はじかれた瞬間は赤
+    flashBall(game, "intercept", d.team);          // はじいた側の色
     game.goLoose(h.team, 1.8, { stealBy: d, victim: h, grabAfter: 0.6 });
   }
 

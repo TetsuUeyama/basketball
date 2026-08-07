@@ -2,7 +2,7 @@
 // 得点/勝利時の歓声アニメ(benchCheer/updateBenchCheer)。
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
-import { COURT, INBOUNDS_INSET } from "../config";
+import { BENCH, COURT, INBOUNDS_INSET } from "../config";
 import { rand, chance } from "../util";
 import type { Game } from "../game";
 
@@ -17,10 +17,19 @@ export function benchGatherSpot(team: number, slot: number): { tx: number; tz: n
   }
 
 export function benchSeat(game: Game, p: Player): { x: number; z: number } {
-    const x = COURT.halfW + 2.3;                  // 遠い(+X)サイドライン、コートから後方に下げて
+    // 座面の中心よりわずかに前(コート側)に座る。背もたれに背中を密着させると、
+    // 腕を振るジェスチャーが板を通ってしまう。
+    const x = BENCH.x - 0.08;
     const zEnd = COURT.halfL - INBOUNDS_INSET;    // 最初の席はベースラインのすぐ内側
     const z = benchSideSign(p.team) * (zEnd - p.idx * 0.8);
     return { x, z };
+  }
+
+  // 自席の手前(コート側)に立つ位置。歩いて戻る選手はここで止まってから座る
+  // — 座席のXへ立ったまま入るとベンチの板を突き抜ける。
+export function benchStandSpot(game: Game, p: Player): { x: number; z: number } {
+    const s = benchSeat(game, p);
+    return { x: s.x - (BENCH.seatD / 2 + 0.35), z: s.z };
   }
 
 export function seatOnBench(game: Game, p: Player): void {
@@ -28,6 +37,7 @@ export function seatOnBench(game: Game, p: Player): void {
     p.pos.set(s.x, 0, s.z);
     p.cutting = false;
     p.screening = false;
+    p.faceToward(s.x - 1, s.z);   // コートを向いて座る(脚がベンチの列に沿わないように)
     p.sit();          // 座った見た目にする
     p.sync();
   }
@@ -56,7 +66,10 @@ export function updateBenchCheer(game: Game, dt: number): void {
         const windOff = ((p.idx * 37) % 10) * 0.08;   // 0 .. 約0.72秒
         const winding = game.cheerT[t] <= -windOff;
         if (!winding) {
-          if (p.seated) p.jump(rand(0.15, 0.35) + amp * 0.3, rand(0.35, 0.5));   // 立ち上がりの小ジャンプ
+          if (p.seated) {
+            p.jump(rand(0.15, 0.35) + amp * 0.3, rand(0.35, 0.5));   // 立ち上がりの小ジャンプ
+            p.pos.x = benchStandSpot(game, p).x;   // 立つのはベンチの前(板の中に立たない)
+          }
           p.stand();   // 席から立ち上がって祝う
           // ベンチの前へ踏み出す
           p.pos.x += (frontX - p.pos.x) * Math.min(1, dt * 5);
@@ -74,12 +87,19 @@ export function updateBenchCheer(game: Game, dt: number): void {
           } else if (variant === 2) {
             p.reach(new Vector3(p.pos.x + 0.7, 1.7 + oy, p.pos.z + benchSideSign(t) * 0.4)); // 片手を前へ突き出す
           } else {
-            p.reach(new Vector3(p.pos.x + ox, 2.9 + oy + amp * 0.5, p.pos.z), true);         // 両手を頭上へ
+            // 両手を頭上へ。⚠️ `reach(点, true)` は頭上の点に手が届かないので片手の
+            //    最大リーチへ落ちる（両手上げに見えない）。FKで両腕を上げる。
+            p.handsUp(0, 0.10 + Math.abs(ox), 0.06 + oy * 0.3);
           }
-        } else {
-          // 収束: 席へ歩いて戻り、着いたら座る
-          p.pos.x += (seat.x - p.pos.x) * Math.min(1, dt * 5);
-          if (!p.airborne && Math.abs(p.pos.x - seat.x) < 0.12) p.sit();
+        } else if (!p.seated) {
+          // 収束: 席の手前まで歩いて戻り、着いたら座る(座席のXへ立ったまま入らない)
+          const stand = benchStandSpot(game, p);
+          p.pos.x += (stand.x - p.pos.x) * Math.min(1, dt * 5);
+          if (!p.airborne && Math.abs(p.pos.x - stand.x) < 0.12) {
+            p.pos.set(seat.x, 0, seat.z);
+            p.faceToward(seat.x - 1, seat.z);
+            p.sit();
+          }
         }
         p.sync();
       }

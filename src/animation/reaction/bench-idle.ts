@@ -30,23 +30,36 @@ Player.prototype.benchIdle = function(dt: number, ballX: number, ballZ: number):
       this.benchGazeT = rand(0.8, 2.5);
       this.benchGazeOff = rand(-0.22, 0.22);
     }
-    this.faceToward(ballX, ballZ, this.benchGazeOff);
+    // ⚠️ 体ごとボールを向けない。座ったまま腰を回すと腿がベンチの列に沿って伸び、
+    //    座面や隣の選手を突き抜ける（実測で最多の貫通）。体はコート向きで固定し、
+    //    ボールは胴のツイスト＋頭のヨーで追う。
+    if (this.seated) {
+      this.faceToward(this.pos.x - 1, this.pos.z);   // コート側(-X)へ正対
+      this.twistToward(ballX, ballZ, dt, undefined, 5);
+      this.lookToward(ballX, ballZ, dt, 6);
+      this.headNode.rotation.y = this.headYaw + this.benchGazeOff;   // 視線が少し漂う
+      this.foldSeatedLegs();                          // 向きが決まった脚を毎フレーム保つ
+    } else {
+      this.faceToward(ballX, ballZ, this.benchGazeOff);
+    }
 
     this.updateJump(dt);
     // ベンチは tickCooldown 対象外なので着地硬直を自前で減算（残ると次のホップが跳べない）。
     if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
     // 拍手中: 毎フレーム手を叩く（他のジェスチャは出さない）
+    // ジェスチャーの合間は手を腿の上へ戻す（座位で垂らすとベンチへ埋まる）
+    const rest = (): void => { if (this.seated) this.seatedHands(); else this.handsRest(); };
     if (this.benchClapT > 0) {
       this.benchClapT -= dt;
       this.clapHands();
-      if (this.benchClapT <= 0) this.handsRest();
+      if (this.benchClapT <= 0) rest();
       this.sync();
       return;
     }
     if (this.benchArmT > 0) {
       this.benchArmT -= dt;
-      if (this.benchArmT <= 0) this.handsRest();  // ジェスチャー終了——落ち着く
-    }
+      if (this.benchArmT <= 0) rest();  // ジェスチャー終了——落ち着く
+    } else rest();
     this.benchActT -= dt;
     if (this.benchActT <= 0) {
       this.benchActT = rand(2.0, 7.0);
@@ -54,15 +67,24 @@ Player.prototype.benchIdle = function(dt: number, ballX: number, ballZ: number):
       if (roll < 0.28) {
         this.jump(rand(0.06, 0.16), rand(0.25, 0.4));      // 小さなホップ
       } else if (roll < 0.48) {
-        this.reach(new Vector3(this.pos.x + rand(-0.4, 0.4), rand(2.1, 2.9),
-          this.pos.z + rand(-0.4, 0.4)));                   // 片手が上がる
+        // 片手が上がる。⚠️ 座位で背中側(+X)を狙うと、腕が背もたれを通って上がる。
+        const bx = this.seated ? -rand(0.05, 0.45) : rand(-0.4, 0.4);
+        this.reach(new Vector3(this.pos.x + bx, rand(2.1, 2.9),
+          this.pos.z + rand(-0.4, 0.4)));
         this.benchArmT = rand(0.4, 1.0);
       } else if (roll < 0.62) {
-        this.armsWide();                                    // 腕を大きく広げる
+        // 腕を広げる。⚠️ 座位で armsWide を使うと、ボールへツイストしたぶん腕が後ろへ
+        //    回って背もたれに埋まる。座っている間は前方へ広げる。
+        if (this.seated) {
+          const f = this.faceDirWorld();
+          this.reach(new Vector3(this.pos.x + f.x * 0.85, 1.30, this.pos.z + f.z * 0.85), true);
+        } else {
+          this.armsWide();
+        }
         this.benchArmT = rand(0.4, 0.9);
       } else if (roll < 0.76) {
-        this.reach(new Vector3(this.pos.x, rand(2.6, 3.2), this.pos.z), true);
-        this.benchArmT = rand(0.35, 0.8);                   // 両手を、短く
+        this.handsUp(0, rand(0.10, 0.22), rand(0.02, 0.12));   // 両手を上げる、短く
+        this.benchArmT = rand(0.35, 0.8);
       } else {
         this.benchClapT = rand(0.7, 1.5);                   // 手を叩く
       }

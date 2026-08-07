@@ -165,6 +165,7 @@ export function stripGather(game: Game, h: Player, d: Player): void {
     game.ball.vel.set((ax / len) * power * grip + rand(-1, 1) * (1 - grip), rand(-0.4, 0.9),
                       (az / len) * power * grip + rand(-1, 1) * (1 - grip));
     game.setEvent("STRIP!", d.team);
+    flashBall(game, "intercept", d.team);   // はたいた側の色
     game.lastTouch = d;   // はたいた者が最後に触れた
     h.touchCool = 0.4;
     game.goLoose(h.team, 1.6, { stealBy: d, victim: h, grabAfter: 0.35 });
@@ -252,7 +253,11 @@ export function finishAtRim(game: Game, h: Player, dDef: number): void {
     if (blocker) { swatShot(game, h, blocker); return; }
     if (tryShootingFoul(game, h, dDef, true)) return;
 
-    game.shotFrom.set(h.pos.x, dunk ? 2.6 : 1.7, h.pos.z);
+    // リリース高さ。確保したボールがまだ手元へ収まっていない(空中/pickup中)プットバックは
+    // 今ボールがある高さから運ぶ — 掴んだ球を踏み切り高さへ落とさない。
+    const fromY = dunk ? 2.6 : 1.7;
+    const inHands = h.airborne || h.pickupT > 0;
+    game.shotFrom.set(h.pos.x, inHands ? Math.max(fromY, game.ball.pos.y) : fromY, h.pos.z);
     game.shotT = 0;
     // かわしたブロックはダブルクラッチに見える — 一拍長く滞空してから決める
     game.shotDur = SHOT_PARAMS[shotType].dur(0, game.evadedFinish);
@@ -287,8 +292,15 @@ export function finishAtRim(game: Game, h: Player, dDef: number): void {
     // 「バックダンク」に見える。今のうちに胸をゴールへ向ける。
     { const rf = game.attackFloor(h.team); h.faceChestToward(rf.x, rf.z); }
     // 跳躍の高さは ジャンプ に比例
-    h.jump(dunk ? 0.85 + rate(h.attr.jump) * 0.3 : 0.55 + rate(h.attr.jump) * 0.2,
-      dunk ? 0.7 : 0.6);
+    if (h.airborne) {
+      // 空中プットバック: 踏み切り直さない。ボールがリムへ届くまで滞空を伸ばす。
+      // 伸ばしすぎは浮いて見えるので今の残り滞空の2倍まで(足りなければ飛翔中に着地する)。
+      h.stretchAir(Math.min(game.shotDur + 0.12, h.jumpRemaining * 2));
+    } else {
+      h.jump(dunk ? 0.85 + rate(h.attr.jump) * 0.3 : 0.55 + rate(h.attr.jump) * 0.2,
+        dunk ? 0.7 : 0.6);
+      h.stretchAir(game.shotDur + 0.12);   // ボールがリムへ届く前に着地しない
+    }
     contestJump(game, h);
     // フィニッシャーはシュート中に切り込み、その後短い復帰時間
     h.coolT = game.shotDur + rand(0.25, 0.45) * h.recoveryMult();
@@ -364,7 +376,7 @@ export function swatShot(game: Game, shooter: Player, blocker: Player): void {
     // ブロッカーは跳び上がり手をボールへ合わせる — 既に跳んでいれば再ジャンプしない
     if (!blocker.airborne) game.contestLeap(blocker, shooter.pos, 0.95, 0.6);
     game.setEvent("BLOCK!", blocker.team);
-    flashBall(game, "block");        // ブロックはスティールと同じ赤
+    flashBall(game, "block", blocker.team);   // ブロックした側の色
     game.handler = null;
 
     // 手がボールを飛翔からはたく: ブロック点から横へ飛散して弾き返される。
@@ -516,7 +528,7 @@ export function resolveShot(game: Game, ): void {
       game.ball.vel.set(rand(-0.5, 0.5), -2.4, -Math.sign(rim.z || 1) * rand(0.2, 0.8));
       game.ballFalling = true;
       swishNet(game, shooter);   // 成功時にネットが弾け、リムが光る
-      flashScore(game, game.shotPoints);   // ボールはネットを抜けるまで青く光る
+      flashScore(game, game.shotPoints, shooter);   // ネットを抜けるまで決めた側の色で光る
       // 決まったバスケットで間を置き、交代、インバウンド。ブザーが鳴っていればピリオド終了。
       // AND-1 はラインで続く(バスケット有効 + フリースロー1本)。
       game.handler = null;

@@ -8,7 +8,7 @@ declare module "../../objects/player/player" {
     armsWide(rate?: number): void;
     guardDrive(world: Vector3, useRight: boolean, rate?: number): void;
     denyLane(useRight: boolean, rate?: number): void;
-    handsUp(rate?: number): void;
+    handsUp(rate?: number, spread?: number, lean?: number): void;
   }
 }
 
@@ -57,11 +57,14 @@ Player.prototype.denyLane = function(useRight: boolean, rate = 0): void {
 };
 
 /** 垂直の（ジャンプしない）シュートコンテスト: 両手を垂直にし、床を離れずに
- *  挑む（空中のコンテストは代わりにボールへ手を伸ばす）。 */
-Player.prototype.handsUp = function(rate = 0): void {
+ *  挑む（空中のコンテストは代わりにボールへ手を伸ばす）。歓声の「両手を上げる」も
+ *  これを使う（`reach(点, true)` は届かない高さだと片手の最大リーチへ落ちるため）。
+ *  spread=左右への開き / lean=前後の傾き（+ が前）。 */
+Player.prototype.handsUp = function(rate = 0, spread = 0.14, lean = 0.06): void {
     this.armRateCap = rate;
-    this.setArmDir(this.armPivotL, -0.14, 1, 0.06);
-    this.setArmDir(this.armPivotR, 0.14, 1, 0.06);
+    const fz = -this.numberSide * lean;   // 前 = -numberSide·Z
+    this.setArmDir(this.armPivotL, -spread, 1, fz);
+    this.setArmDir(this.armPivotR, spread, 1, fz);
     this.bendElbow(this.elbowL, 0);   // 前腕が上へ伸びる、イーズ
     this.bendElbow(this.elbowR, 0);
     this.armRateCap = 0;

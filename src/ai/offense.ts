@@ -8,7 +8,7 @@ import { COURT, THREE_DIST, SHOT_CLOCK, PALM_HITBOX, MAX_PASS, BUZZER_WINDOW } f
 import { rate, clamp, dist2D, dist2DTo, moveToward2D, chance, rand, dirTo2D, segPerp } from "../util";
 import { twWeight, gatherFor, effShootRange, wontLoadUp, reactionLag, palmRadius, jukeDeception, jukeDiscipline, shotThreat, burstTime } from "../eval";
 import { denySmother } from "./defense";
-import { pass, passToReceiver } from "../move/action/passing";
+import { pass, passToReceiver, chooseReceiver } from "../move/action/passing";
 import { updateOffBallMotion } from "./offball";
 import { shoot, finishAtRim } from "../move/action/shooting";
 import { laneVetoed, passRisk } from "../move/reaction/pass-risk";
@@ -59,6 +59,8 @@ export function runOffense(game: Game, dt: number, h: Player): void {
     // 移動: 仕掛けた1対1の move の展開。D速度 が最高速の保持率を決め、
     // 前に押し出したボールは少し加える。
     let mult = 0.84 + rate(h.attr.dribbleSpd) * 0.18;
+    // 床のボールをすくい上げている間は屈んでいる — 滑って移動しない
+    if (h.scoopLoad > 0.05) mult *= clamp(1 - h.scoopLoad * 1.3, 0, 1);
     if (dHoop > 0.5) {
       const frontness = (h.carryX * (rimFloor.x - h.pos.x) + h.carryZ * (rimFloor.z - h.pos.z)) / dHoop;
       mult *= 1 + clamp(frontness, 0, 0.6) * 0.1;
@@ -85,11 +87,13 @@ export function runOffense(game: Game, dt: number, h: Player): void {
       }
       moveToward2D(h.pos, btx, btz, h.accelToward(dt, btx, btz, mult) * dt);
     } else if (h.powerT > 0) {
-      // POWER ドライブ: 守備者に向かってリムへ真っ直ぐ押し込む。前進は遅いが、
+      // POWER ドライブ: 逆側の肩を守備者に当て、力比べで押し込む。前進は遅いが、
       // 衝突ステップが弱い相手を押し戻す。
       h.powerT = Math.max(0, h.powerT - dt);
       mult *= 0.5 + rate(h.attr.balance) * 0.35;         // 強い = 接触を通しても押し進み続ける
       moveToward2D(h.pos, h.driveTarget.x, h.driveTarget.z, h.accelToward(dt, h.driveTarget.x, h.driveTarget.z, mult) * dt);
+      powerShove(game, h, dt);                           // 肩で押し戻す / 空いた手のボールを狙われる
+      if (game.ballMode !== "held") return;              // はたき出された
       // 物理的な壁: ボディアップした守備者が力比べに勝つと、ドライブを完全に止める。
       const dm = game.onBallDefender(h);
       // 押し戻しゾーン: ドライブを壁で止められる距離 = 手のひらヒットゾーン
@@ -150,6 +154,32 @@ export function runOffense(game: Game, dt: number, h: Player): void {
     }
   }
 
+  // 押し込むドリブルの1フレーム。
+  // (1) ボディバランスの差ぶんだけ担当守備者をリム方向へ押し戻す（差が大きいほど深く）。
+  // (2) ボールは押している肩と反対＝空いた手にあるので、担当**以外**の寄せに晒される。
+  //     はたかれるかは技術(handling)で決まる。
+export function powerShove(game: Game, h: Player, dt: number): void {
+    const dm = game.onBallDefender(h);
+    const { ux, uz } = dirTo2D(h.pos.x, h.pos.z, h.driveTarget.x, h.driveTarget.z);
+    if (dm && dist2D(h.pos, dm.pos) < 1.15) {
+      const edge = rate(h.attr.balance) - rate(dm.attr.balance) + (h.has("post") ? 0.12 : 0);
+      if (edge > 0) {
+        const push = (0.3 + edge * 2.4) * dt;            // パワー差が大きいほど速く押し戻す
+        dm.pos.x += ux * push; dm.pos.z += uz * push;
+        game.clampCourt(dm.pos);
+        dm.lean = clamp(dm.lean - edge * 0.6 * dt * 6, -1, 1);   // 体勢を起こされる
+      }
+    }
+    // 空いた手のボールへ、担当以外が寄って突く
+    for (const dd of game.teamPlayers(1 - h.team)) {
+      if (dd === dm || dd.airborne || dd.landT > 0) continue;
+      if (dist2D(dd.pos, h.pos) > 1.3) continue;
+      const swipe = 0.30 + rate(dd.attr.defense) * 0.75 + rate(dd.attr.reaction) * 0.55
+        - rate(h.attr.handling) * 1.35;                  // 技術が高いほどかわす
+      if (chance(clamp(swipe, 0.05, 1.2) * dt)) { game.steal(dd); return; }
+    }
+  }
+
   // 空中で確保したリバウンドを、着地を待たずに処理する。プットバック(リムへフィニッシュ)
   // か、アウトレット/キック(良い相手が居れば即リリース)。どちらも不成立なら held のまま
   // 着地し、通常オフェンスへ委ねる。reboundPutback は secureLoose が判定済み。
@@ -158,7 +188,9 @@ function reboundAirAction(game: Game, h: Player): void {
       finishAtRim(game, h, game.nearestDefenderDist(h));
       return;
     }
-    pass(game, h);   // 良いアウトレット/キックがあれば ballMode=pass、無ければ着地
+    // 空中からのアウトレットはジャンプパス(頭上リリース)。通常のジャンプパスと同じ経路。
+    const target = chooseReceiver(game, h);
+    if (target) passToReceiver(game, h, target, false, "jump");   // 通らなければ着地
   }
 
   // ボールハンドラーの選択 — シュート/ドライブ/パス/リセット — 選手自身の
@@ -750,14 +782,19 @@ export function driveDecision(game: Game, h: Player): void {
     // 速くハンドルの高い選手はクロスオーバー。その後マッチアップが微調整する。
     const ownPower = rate(h.attr.balance) + rate(h.attr.aggression) * 0.5 + (h.has("post") ? 0.4 : 0);
     const ownSpeed = rate(h.attr.agility) + rate(h.attr.handling) * 0.7 + (h.has("driver") ? 0.4 : 0);
-    const usePower = h.comboN === 0 && chance(clamp(0.5 + (ownPower - ownSpeed) * 0.6
+    // 押し込む間はボールが空いた手に出るので、担当以外が寄っていると狙われる。
+    // 技術が低い選手は、目の前の相手しか居ない場面でしか選ばない。
+    const helpers = game.defendersWithin(h, 2.4) - 1;
+    const powerSafe = helpers <= 0
+      || chance(clamp(rate(h.attr.handling) * 1.2 - helpers * 0.4, 0, 0.95));
+    const usePower = powerSafe && h.comboN === 0 && chance(clamp(0.62 + (ownPower - ownSpeed) * 0.6
       + (powerEdge - speedEdge) * 0.5, 0.08, 0.92));   // コンボ途中はドリブルを続ける
 
     if (usePower) {
       // POWER: 守備者に肩を入れる。力比べに勝てば相手をリムまで押し戻し、
       // 負ければ壁で止められてリセットするしかない。
       h.driveSide = d.shadeSide !== 0 ? -d.shadeSide : game.pickSide(h);
-      const pPower = clamp(0.53 + powerEdge * 1.25, 0.03, 0.9);
+      const pPower = clamp(0.72 + powerEdge * 1.0, 0.18, 0.94);   // 選んだら大抵は押し込みへ(止まるかは接触側で判定)
       if (chance(pPower)) {
         h.powerT = rand(0.55, 0.9) * (1 + Math.max(0, powerEdge) * 0.4);
         d.lean = clamp(d.lean * 0.4, -1, 1);             // 土台を崩された

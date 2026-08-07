@@ -70,6 +70,9 @@ export class Referee {
     this.prevX = b.pos.x; this.prevZ = b.pos.z;
     // ボール(や対象)の方を向く — 選手と同じイージング
     b.faceSmooth(this.tx, this.tz, dt * 4);
+    // ⚠️ 上半身のひねりを毎フレーム戻す。片手リーチ(stretchOne)は torsoTwist を書くが、
+    //    審判は updateFacing の対象外なので、投げ渡しの後もひねったまま固まっていた。
+    b.twistToward(this.tx, this.tz, dt);
     b.updateLegs(dt);   // 選手と同じ脚サイクル(速度で歩調)
 
     if (this.sigT > 0) {
@@ -100,8 +103,10 @@ export class Referee {
         break;
       case "pass": {
         // 投げ渡し: 両手を前へ押し出すチェストパスのモーション。
-        const cf = b.chestFront(1.4);
-        b.reach(new Vector3(cf.x, 1.4, cf.z), true);
+        // ⚠️ 遠い点への reach(両手) は届かず片手＋上体のひねりへ落ちるので、FKで両腕を前へ出す。
+        const f = -b.numberSide;   // 前 = -numberSide·Z
+        b.setArmDir(b.armPivotR, 0.16, 0.02, f * 0.95);  b.bendElbow(b.elbowR, 0.22);
+        b.setArmDir(b.armPivotL, -0.16, 0.02, f * 0.95); b.bendElbow(b.elbowL, 0.22);
         break;
       }
       case "hold":

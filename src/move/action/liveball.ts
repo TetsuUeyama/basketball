@@ -4,6 +4,7 @@ import { rate, clamp, dist2D, chance, dirTo2D } from "../../util";
 import { runOffense } from "../../ai/offense";
 import { runDefense, catchStrips, swarmStrips } from "../../ai/defense";
 import { passToReceiver } from "./passing";
+import { flashBall } from "../../core/visuals";
 import type { Game } from "../../game";
 
 export function updateLive(game: Game, dt: number): void {
@@ -38,6 +39,7 @@ export function updateLive(game: Game, dt: number): void {
   }
   if (game.pushT > 0) game.pushT = Math.max(0, game.pushT - dt);
   // 先にドリブルのケイデンスを進め、このフレームでボールが手にあるかを最新化する。
+  const prevPhase = h.dribblePhase;
   h.dribblePhase += dt * (1.6 + rate(h.attr.dribbleAcc) * 1.4);   // 1.6 .. 3.0 Hz
   // ボールが明確にハーフを越えた → このポゼッションのフロントコートが確立
   if (!game.frontT && game.attackSign(h.team) * h.pos.z > 0.6) game.frontT = true;
@@ -83,18 +85,31 @@ export function updateLive(game: Game, dt: number): void {
   if (h.pickupT > 0) {
     const prog = h.pickupDur > 0 ? clamp(1 - h.pickupT / h.pickupDur, 0, 1) : 1;
     const pocket = h.chestFront(0.24);                         // 収める先(手元・胸前ポケット)
+    const low = clamp((0.95 - h.grabFromY) / 0.75, 0, 1);      // 床際ほど1
+    // 床から拾う: 前半は**ボールを置いたまま屈んで手を下ろし**、後半でボールと一緒に
+    // 立ち上がる。高い位置で確保した球はそのまま手元へ降ろす(線形)。
+    const hold = 0.45 * low;
+    const k = prog <= hold ? 0 : (prog - hold) / (1 - hold);
+    const e = low > 0.3 ? k * k * (3 - 2 * k) : prog;
     // 記録した確保地点 → 手元ポケットへ地続きに補間(高い球=降ろす/横=引き寄せる/床=すくい上げ)。
     // ワープさせず実位置から手に収まって見える。
     game.ball.pos.set(
-      h.grabFromX + (pocket.x - h.grabFromX) * prog,
-      h.grabFromY + (0.95 - h.grabFromY) * prog,
-      h.grabFromZ + (pocket.z - h.grabFromZ) * prog,
+      h.grabFromX + (pocket.x - h.grabFromX) * e,
+      h.grabFromY + (0.95 - h.grabFromY) * e,
+      h.grabFromZ + (pocket.z - h.grabFromZ) * e,
     );
+    // 床際のボールへは膝を沈めて腰を折る(applyScoopLoad)。持ち上げるにつれて立ち上がる。
+    h.scoopLoadTarget = low * (1 - e);
   } else {
     // 運ぶボールは手の高さと床の間で弾む（ダムダム）
     const bounce = Math.abs(Math.cos(Math.PI * h.dribblePhase)); // 1 = 手の位置、0 = 床
     const y = 0.18 + (1.0 - 0.18) * bounce;
     game.ball.pos.set(h.pos.x + h.carryX, y, h.pos.z + h.carryZ);
+    // ボールが手に戻った拍（位相が整数を跨ぐ）でチーム色の小さな発光。
+    // キャッチを収めている最中(gatherT)は突いていないので出さない。
+    if (h.gatherT <= 0 && Math.floor(h.dribblePhase) !== Math.floor(prevPhase)) {
+      flashBall(game, "dribble", h.team);
+    }
   }
   // まだ収まっていない: キャッチ直後、ボールは胸の前・両手のひらの間に保持される。
   // 揺れは gatherT に位相を合わせた低周波の揺らぎで、硬直が減るにつれ減衰する。

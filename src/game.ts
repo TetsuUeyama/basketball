@@ -44,7 +44,7 @@ import { endQuarter, updateFinale } from "./core/gameflow";
 import { syncAll, updateFacing, tickSwish, tickBallFx, flashBall } from "./core/visuals";
 import { shotClockViolation } from "./core/deadball";
 import { resolveCollisions } from "./core/collision";
-import { seatOnBench, updateBenchCheer } from "./core/bench";
+import { benchSeat, seatOnBench, updateBenchCheer } from "./core/bench";
 import { ROSTER, ROSTER_SIZE, STARTERS } from "./roster";
 import { TACTICS, AbilityKey } from "./attributes";
 
@@ -114,6 +114,8 @@ export class Game {
   passDur = 0;
   // パスの種類: chest=通常 / bounce=バウンドパス / jump=ジャンプパス
   passStyle: "chest" | "bounce" | "jump" = "chest";
+  // 片手で投げるパス(片手で確保したボールをそのまま放る)。ポーズが両手/片手を切り替える。
+  passOneHand = false;
   // ジャンプパスのウィンドアップ: 滞空でこの時間だけ保持する
   pendingPassTo: Player | null = null;
   pendingPassT = 0;
@@ -418,6 +420,7 @@ export class Game {
         if (i < STARTERS) {
           p.slot = i;
           p.spotIdx = i;
+          p.stand();         // 前の試合でベンチだった選手の着席状態を解く
           p.resetFacing();   // 前の試合のベンチでの視線をクリア
           this.players[t * 5 + i] = p;
         } else {
@@ -605,6 +608,8 @@ export class Game {
           p.benchRecover(dt);
           // (ベンチへ/から)歩行者は updateSubs でアニメ。それ以外はアイドル
           if (!this.subWalkers.some((w) => w.p === p) && !cheering) {
+            // 座っている選手は必ず自席の上に居る(引き上げ/歓声で動かされた体を戻す)
+            if (p.seated) { const s = benchSeat(this, p); p.pos.set(s.x, 0, s.z); }
             p.benchIdle(dt, this.ball.pos.x, this.ball.pos.z);
           }
         }
@@ -900,6 +905,7 @@ export class Game {
     this.passCatch.set(r.pos.x, 1.3, r.pos.z);   // 固定の目標
     this.passMiss = 0; this.passMissY = 0; // 散らばりなし
     this.passStyle = "chest";              // スローインはバウンド/ジャンプのスタイルを継がない
+    this.passOneHand = false;              // 前のパスの片手投げを継がない
     this.passTo = r;
     this.passer = inb;
     this.passT = 0;
@@ -978,7 +984,7 @@ export class Game {
       rand(-0.2, 0.6),                             // 低く — ディグであってロブではない
       uz * power * grip + rand(-2.2, 2.2) * (1 - grip),
     );
-    flashBall(this, "intercept");                  // はたかれた瞬間は赤
+    flashBall(this, "intercept", d.team);          // はたいた側の色
     // 自由な一拍で、確保前にはたき出しの争奪が見えるようにする
     this.goLoose(h.team, 1.6, { stealBy: d, victim: h, grabAfter: 0.55 });
     d.digReach(new Vector3(this.ball.pos.x, 0.9, this.ball.pos.z));   // ランジ

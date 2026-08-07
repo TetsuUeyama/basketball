@@ -8,7 +8,7 @@
 import { Quaternion, Vector3 } from "@babylonjs/core";
 import { applyMotion, motionClip, motionDuration, type MotionClip } from "@objcts/player/motion/clip";
 import { Player } from "../objects/player/player";
-import { syncVoxelArms, syncVoxelHeadTorso, type VoxelBody } from "../objects/player/player-voxel";
+import { splayLegs, syncVoxelArms, syncVoxelHeadTorso, type VoxelBody } from "../objects/player/player-voxel";
 
 declare module "../objects/player/player" {
   interface Player {
@@ -34,6 +34,10 @@ const LAND_EARLY = 0.22;
 const LAND_LEAD = 0.35;
 // 接地後、着地フレームを振り切るまでの秒数（landT いっぱい引き伸ばさない）
 const LAND_PLAY = 0.45;
+// ジャンプ/着地で腿を左右へ開く量(rad)。焼き込みのジャンプは両脚が揃いすぎるので少し広げる。
+const JUMP_SPLAY = 0.10;
+// 左右の開きの差。完全な鏡像だと揃って見えるので、選手ごとに開き方をずらす。
+const splayBias = (p: Player): number => ((p.idx % 5) - 2) * 0.16;
 
 const CACHE = new Map<string, MotionClip | null>();
 function clip(name: string): MotionClip | null {
@@ -83,11 +87,15 @@ function pickClip(p: Player): string {
   if (p.landT > 0 && p.clipName.startsWith("jump")) return p.clipName;
   // 演出中（ファウル反応・守備成功・落胆）はクリップを当てない
   if (p.foulReactT > 0 || p.defWinT > 0) return "";
+  // 床のルーズボールを拾う: objcts の "pickup" クリップ（沈み込み〜立ち上がり）を当てる。
+  if (p.scoopLoad > 0.003) return "pickup";
   // シュートの溜め: 手続き側が屈んだぶん root を下げているので、クリップで脚を
   // 伸ばし直すと足が床にめり込む。溜めている間は手続きポーズに任せる。
   if (p.shootLoad > 0.003) return "";
   const frac = p.runSpeed > 0 ? Math.min(1, p.curSpd / p.runSpeed) : 0;
   const ball = p.holdingBall;
+  // 押し込むドリブル: 逆肩を当てて体ごと運ぶ（速さに依らず専用クリップ）
+  if (ball && p.powerT > 0) return "dribblePower";
   if (frac < MOVE_MIN) return ball ? "dribbleIdle" : "idle";
   // 胸の向き（前 = -numberSide·Z）に対する速度成分で、前進 / 後退 / 横滑りを見分ける
   const ns = p.numberSide;
@@ -134,6 +142,7 @@ export function applyClipPose(vb: VoxelBody, p: Player, dt: number): boolean {
     const k = Math.min(1, played / LAND_PLAY);
     p.clipT = win[1] + (dur - win[1]) * (LAND_LEAD + (1 - LAND_LEAD) * k);
     applyMotion(vb.rig, c, p.clipT, { rootMotion: "vertical", leanDeg: 0 });
+    splayLegs(vb, JUMP_SPLAY * (1 - k * 0.5), splayBias(p));   // 立て直しにつれて開きを戻す
     syncVoxelHeadTorso(vb, p.numberSide, p.torsoNode.rotation.y, p.headNode.rotation.y, _spineQ, _headQ);
     syncVoxelArms(vb, p, null);
     return true;
@@ -152,6 +161,9 @@ export function applyClipPose(vb: VoxelBody, p: Player, dt: number): boolean {
       const j = (k - (1 - LAND_EARLY)) / LAND_EARLY;         // 0..1
       p.clipT = air[1] + (dur - air[1]) * LAND_LEAD * j;     // 着地フレームの頭を空中で
     }
+  } else if (name === "pickup") {
+    // 拾う: クリップの位相＝拾い進捗（所要時間は技術で伸縮するのでクリップを引き伸ばす）
+    p.clipT = dur * (p.pickupDur > 0 ? Math.min(1, Math.max(0, 1 - p.pickupT / p.pickupDur)) : 1);
   } else if (c.loop) {
     const frac = p.runSpeed > 0 ? Math.min(1, p.curSpd / p.runSpeed) : 0;
     if (frac < MOVE_MIN) p.clipT = (p.clipT + dt) % dur;          // その場のクリップは実時間
@@ -165,6 +177,7 @@ export function applyClipPose(vb: VoxelBody, p: Player, dt: number): boolean {
   applyMotion(vb.rig, c, p.clipT, air
     ? { rootMotion: "none", groundFeet: false }
     : { rootMotion: "vertical", leanDeg: lean });
+  if (air) splayLegs(vb, JUMP_SPLAY, splayBias(p));   // 滞空はスタンスを広げる
 
   // 胸・頭の向き（プレーを追う）はゲーム側の値をクリップの上に重ねる
   syncVoxelHeadTorso(vb, p.numberSide, p.torsoNode.rotation.y, p.headNode.rotation.y,

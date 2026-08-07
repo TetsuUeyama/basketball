@@ -1,5 +1,5 @@
 import { Scene, MeshBuilder, StandardMaterial, Color3, DynamicTexture, Mesh } from "@babylonjs/core";
-import { COURT, RIM, THREE_DIST } from "../config";
+import { BENCH, COURT, RIM, THREE_DIST } from "../config";
 import { makeMat } from "./materials";
 
 // フロア（ライン付き）、周囲のエプロン、両フープを構築する。
@@ -44,28 +44,29 @@ function buildBenches(scene: Scene): void {
   const seatMat = makeMat(scene, "benchseat", { diffuse: new Color3(0.14, 0.16, 0.2), spec: new Color3(0.05, 0.05, 0.05) });
   const legMat = makeMat(scene, "benchleg", { diffuse: new Color3(0.08, 0.09, 0.11), spec: new Color3(0, 0, 0) });
 
-  const x = COURT.halfW + 2.3;            // 控えが座るのと同じサイドライン(コートから後方へ下げる)
+  // 寸法は config の BENCH（ボール/選手の衝突判定と同じ値）
+  const x = BENCH.x;
   for (const end of [-1, 1]) {            // team 0 は -Z、team 1 は +Z に座る
     // 座席はロスターインデックス 0..12 に対応 → z は ±3.4 (idx12) から ±13 (idx0)。
     // 交代でOUTした先発(idx 0..4)はベースライン寄りに座るので、板は8人の控えだけでなく
     // 13席分のフルレンジをカバーしなければならない。
-    const zMid = end * 8.2;               // 13席の列の中心
-    const len = 10.6;                     // z ≒ ±2.9 .. ±13.5 をカバー
-    // 座面の板(選手は天面 ≒ y 0.42 に乗る) — ソファではなくベンチらしい浅い座面。
-    // 選手の着席位置は板の中心(x)のまま
-    const SEAT_D = 0.45;
-    const seat = MeshBuilder.CreateBox(`benchseat_${end}`, { width: SEAT_D, height: 0.12, depth: len }, scene);
-    seat.position.set(x, 0.36, zMid);
+    const zMid = end * BENCH.zMid;
+    const len = BENCH.len;                // z ≒ ±2.9 .. ±13.5 をカバー
+    // 座面の板 — ソファではなくベンチらしい浅い座面。選手の着席位置は板の中心(x)。
+    const seatH = BENCH.seatTop - BENCH.seatBottom;
+    const seat = MeshBuilder.CreateBox(`benchseat_${end}`, { width: BENCH.seatD, height: seatH, depth: len }, scene);
+    seat.position.set(x, (BENCH.seatTop + BENCH.seatBottom) / 2, zMid);
     seat.material = seatMat;
     seat.receiveShadows = true;
     // 座面の後端(コートから離れる側、+X)に置く背もたれ
-    const back = MeshBuilder.CreateBox(`benchback_${end}`, { width: 0.1, height: 0.55, depth: len }, scene);
-    back.position.set(x + SEAT_D / 2 + 0.05, 0.6, zMid);
+    const backH = BENCH.backTop - BENCH.backBottom;
+    const back = MeshBuilder.CreateBox(`benchback_${end}`, { width: BENCH.backT, height: backH, depth: len }, scene);
+    back.position.set(x + BENCH.seatD / 2 + BENCH.backT / 2, (BENCH.backTop + BENCH.backBottom) / 2, zMid);
     back.material = seatMat;
     // 両端の脚2本
     for (const s of [-1, 1]) {
-      const leg = MeshBuilder.CreateBox(`benchleg_${end}_${s}`, { width: SEAT_D - 0.07, height: 0.36, depth: 0.12 }, scene);
-      leg.position.set(x, 0.18, zMid + s * (len / 2 - 0.2));
+      const leg = MeshBuilder.CreateBox(`benchleg_${end}_${s}`, { width: BENCH.seatD - 0.07, height: BENCH.seatBottom, depth: 0.12 }, scene);
+      leg.position.set(x, BENCH.seatBottom / 2, zMid + s * (len / 2 - 0.2));
       leg.material = legMat;
     }
   }

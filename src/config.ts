@@ -15,6 +15,20 @@ export const COURT = {
   margin: 0.5, // 選手はラインからこの距離だけ内側に保たれる
 };
 
+// 控えが座る長椅子。objects/court.ts が実体を建て、ボール/選手の衝突判定も同じ値を使う。
+// 遠い(+X)サイドラインの外、両ハーフに1脚ずつ(z の符号がチーム)。
+export const BENCH = {
+  x: COURT.halfW + 2.3,   // 座面の中心X(＝選手が座るX)
+  seatD: 0.45,            // 座面の奥行き(X方向)
+  seatTop: 0.42,          // 座面の天面Y
+  seatBottom: 0.30,
+  backT: 0.10,            // 背もたれの厚み(X)。座面の後端(+X側)に立つ
+  backTop: 0.875,
+  backBottom: 0.325,
+  zMid: 8.2,              // 13席の列の中心|Z|
+  len: 10.6,              // 列の長さ(Z)
+};
+
 export const RIM = {
   height: 3.05,
   radius: 0.23,
@@ -54,7 +68,7 @@ export const MAX_PASS = 13;
 // クォーター圧縮とペースに合わせたショットクロック。部分リセット(ファウル/オフェンスリバウンド後)は短縮。
 export const SHOT_CLOCK = 12;
 export const SHOT_CLOCK_PARTIAL = 8;
-export const QUARTER_TIME = 60;   // 1クォーターあたりのゲーム内秒数(クロックに表示)
+export const QUARTER_TIME = 72;   // 1クォーターあたりのゲーム内秒数(1:12)。NBA48分の1/10=4.8分を4Qで割った値
 export const QUARTERS = 4;
 export const BUZZER_WINDOW = 0.9; // 残りこの秒数を切ったらブザービーター扱い
 

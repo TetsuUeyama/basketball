@@ -109,7 +109,7 @@ Player.prototype.reachIK = function(pivot: TransformNode, elbow: TransformNode, 
 const LEAD_TWIST = 0.30;
 // 反対の腕: 上腕の前後の振り / 肘の曲げ / 前腕を体の内側へ振る量
 const BACK_ARM_SWING = 0.30;
-const BACK_ARM_BEND = 1.05;
+const BACK_ARM_BEND = 1.40;   // 片手を伸ばす間、逆腕は深く畳んで胸元へ(伸ばし気味だと棒に見える)
 const BACK_ARM_IN = 0.40;
 
 function stretchOne(p: Player, world: Vector3): void {

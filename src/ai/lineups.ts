@@ -2,7 +2,7 @@
 // 実際の入れ替えは Game 側、交代の要否判断は systems/subs.ts。
 import { Player } from "../objects/player/player";
 import { ROSTER, EXTRA_POSITIONS } from "../roster";
-import { type PlayerDef } from "../attributes";
+import { TACTICS, type PlayerDef } from "../attributes";
 import { scoringPower, usageFromRank } from "../roles";
 import { rate, clamp } from "../util";
 import type { Game } from "../game";
@@ -24,14 +24,15 @@ export function roleFit(p: { role: string; name: string }, slot: string): number
 // ---- 相手を考慮した先発ラインナップ（コーチング） -------------------------
 // 各チームの13人からベスト5を相手の脅威で重み付けして選ぶ。ROSTER[t] をインプレースで
 // 並べ替える（ベスト5を先頭、PG-SG-SF-PF-C 順）。
-export function optimizeLineups(game: Game): void {
+// ROSTER と TACTICS だけを見る（Game 生成前=チーム決定直後にも呼べる）。
+export function optimizeLineups(): void {
   const oppInfo = (opp: number) => {
     let bigThreat = 0;
     for (const d of ROSTER[opp]) {
       if (d.role !== "PF" && d.role !== "C" && d.height < 1.98) continue;
       bigThreat = Math.max(bigThreat, scoringPower(d.attr) + (d.height - 1.9) * 0.6);
     }
-    const press = game.tactics[opp].defense.pressure + game.tactics[opp].defense.press * 0.5;
+    const press = TACTICS[opp].defense.pressure + TACTICS[opp].defense.press * 0.5;
     return { bigThreat, press };
   };
   const overall = (d: PlayerDef) =>

@@ -42,13 +42,16 @@ Player.prototype.holdBallHands = function(world: Vector3, sep = 0.13): void {
     if (!okL) this.aimArm(this.armPivotL, tL);
     // 抱え込み: ボールが体に近いほど肘を曲げ、胸へ抱え込む。前方に出たボール
     // （来るパスへ手を伸ばす）は腕を伸ばしたまま、頭上保持は抱え込まずほぼ真っ直ぐ。
+    // ⚠️ 床際のボール(すくい上げ)は抱え込まない。肘を曲げると手が届かず、体の前で
+    //    止まって見える。頭上保持と同じく腕を伸ばして下ろす。
     const overhead = world.y > 1.5;
-    const bend = overhead ? 0.1 : clamp(1.2 - l * 1.5, 0, 0.55);
+    const low = world.y < 0.55;
+    const bend = overhead || low ? 0.1 : clamp(1.2 - l * 1.5, 0, 0.55);
     // 内側へ: 2つの手が両側からボールを包むよう、各前腕を中央（ボール）へ振る。
     // 前腕は肘のローカル −Y に沿って垂れるので、左右の振りは rotation.Z。左右(X)は
     // numberSide で反転しない（前後(Z)だけが反転する）ので腕ごとに一定の符号。
     // +rot.z は −Y を +X へ振るので、右腕(+X 側)は内側へ来るのに −、左腕は +。
-    const inward = overhead ? 0 : bend * 0.7;
+    const inward = overhead || low ? 0 : bend * 0.7;
     if (!okR) { this.bendElbow(this.elbowR, bend); this.elbowR.rotation.z = -inward; }
     if (!okL) { this.bendElbow(this.elbowL, bend); this.elbowL.rotation.z = inward; }
 };

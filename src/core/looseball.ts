@@ -5,6 +5,7 @@ import { rate, clamp, chance, dist2DTo, moveToward2D, rand, nearestOf } from "..
 import { twoHandedCatch } from "../move/reaction/rebound";
 import { stepBallFlight } from "../move/basic/ball";
 import { flashBall } from "./visuals";
+import { twoHandGrab } from "./poses";
 import type { Game } from "../game";
 
 // 空中リバウンド確保をプットバックにするリムまでの距離(m)。ダンク/レイアップが打てる至近のみ。
@@ -177,6 +178,7 @@ export function contactLooseBall(game: Game, p: Player, contested: boolean): voi
     }
     if (game.looseTips >= 3) { secureLoose(game, p); return; }   // ピンボール化させない
     game.looseTips++;
+    flashBall(game, "tip", p.team);   // はたいた側の色（消えたらルーズの白へ戻る）
     // 自分の真上へ上げ直す（タップ・トゥ・セルフ）。競り合いで弾かれ続けて
     // ボールがすぐ場外へ流れるのを防ぐ。バランスと反応が高いほど成功しやすい。
     const ctl = 0.20 + rate(p.attr.balance) * 0.40 + rate(p.attr.reaction) * 0.25
@@ -203,6 +205,9 @@ export function contactLooseBall(game: Game, p: Player, contested: boolean): voi
   // 選手がルーズボールを確保して着地し、プレイが再開する。
 export function secureLoose(game: Game, p: Player, label?: string): void {
     game.lastTouch = p;
+    // 掴んだ手の数を確定させる(画面に出ていた形と同じ判定)。この後の保持ポーズと
+    // アウトレットの投げ方をここへ揃える。
+    p.grabTwoHand = twoHandGrab(game, p, game.ball.pos);
     const offensive = p.team === game.looseOff;
     if (game.looseIsRebound) p.stats.reb++;   // ミスショットからのリバウンドだけを数える
     if (!offensive && game.looseStealBy) {    // 守備がはたき落としたボールを確保した
@@ -211,7 +216,7 @@ export function secureLoose(game: Game, p: Player, label?: string): void {
     }
     game.looseStealBy = game.looseStealVictim = null;
     game.handler = p;
-    flashBall(game, "secure", p.team);   // 確保した側の色(ホーム=黄 / アウェイ=オレンジ)
+    flashBall(game, "secure", p.team);   // 確保した側の色
     game.possession = p.team;
     game.ballMode = "held";
     // ショットクロック: ポゼッション交代は完全リセット、リム接触のオフェンスリバウンドは
@@ -228,7 +233,9 @@ export function secureLoose(game: Game, p: Player, label?: string): void {
     if (game.looseIsRebound && p.airborne && game.ball.pos.y >= 1.2) {
       const rimF = game.attackFloor(p.team);
       p.reboundGo = true;
-      p.reboundPutback = offensive && dist2DTo(p.pos, rimF.x, rimF.z) < PUTBACK_RANGE;
+      // 落ち際で掴んだ球は押し込めない(滞空が残っていないと一瞬で放り上げる形になる)
+      p.reboundPutback = offensive && dist2DTo(p.pos, rimF.x, rimF.z) < PUTBACK_RANGE
+        && p.jumpRemaining > 0.25;
     }
     // 確保: ボールを瞬間移動させず、今ある位置を起点に手元へ地続きで収める。
     // 起点を記録し、liveball の pickup が実位置→手元へ補間する(高い球=降ろす/横=引き寄せる/
@@ -240,7 +247,13 @@ export function secureLoose(game: Game, p: Player, label?: string): void {
     {
       const gdx = game.ball.pos.x - p.pos.x, gdz = game.ball.pos.z - p.pos.z;
       const gd3 = Math.hypot(gdx, gdz, game.ball.pos.y - 0.95);
-      p.pickupT = p.pickupDur = clamp(0.18 + gd3 * 0.12, 0.2, 0.42);
+      // 床際のボールはしゃがんですくい上げるぶん時間がかかる(low=1 が床、0 が手元の高さ)。
+      const low = clamp((0.95 - game.ball.pos.y) / 0.75, 0, 1);
+      // 技術(handling)で短縮。10 → 約1.3倍、99 → 約0.7倍。
+      const tech = 1.32 - rate(p.attr.handling) * 0.66;
+      p.pickupT = p.pickupDur = clamp((0.18 + gd3 * 0.12 + low * 0.34) * tech, 0.14, 0.9);
     }
+    // 拾い終わるまでは次の判断へ行かない(すくい上げ中に撃たない)
+    p.decisionT = Math.max(p.decisionT, p.pickupDur);
     game.setEvent(label ?? (offensive ? "OFF. REBOUND" : "REBOUND"), p.team);
   }

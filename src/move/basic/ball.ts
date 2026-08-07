@@ -2,7 +2,7 @@
 // 自由飛行の1ステップ（積分・床バウンド・境界反射・速度クランプ）をここで行う。
 // シュート/パスの弾道はアクション側（move/action）がこのベースの上に定義する。
 import { Ball } from "../../objects/ball";
-import { COURT, OOB_WALL, RIM } from "../../config";
+import { BENCH, COURT, OOB_WALL, RIM } from "../../config";
 
 export const BALL = {
   gravity: 9.0,     // 自由飛行の重力(m/s²)
@@ -39,6 +39,40 @@ function bounceOffBoard(b: Ball): void {
   }
 }
 
+/** ベンチ（座面＋背もたれ）の箱。実在の障害物なのでボールは突き抜けず、面で跳ね返る。
+ *  ボールは表面(中心±半径)で判定する。両ハーフ対称なので |z| で見る。 */
+function bounceOffBench(b: Ball): void {
+  const r = BALL.radius;
+  const zLo = BENCH.zMid - BENCH.len / 2, zHi = BENCH.zMid + BENCH.len / 2;
+  const az = Math.abs(b.pos.z);
+  if (az < zLo - r || az > zHi + r) return;
+  const x0 = BENCH.x - BENCH.seatD / 2;                       // 座面の前縁(コート側)
+  const x1 = BENCH.x + BENCH.seatD / 2 + BENCH.backT;         // 背もたれの後縁
+  const top = b.pos.y > BENCH.backTop ? 0 : (b.pos.y > BENCH.seatTop ? 1 : 2);
+  // 背もたれより上を通過 → 当たらない
+  if (top === 0) return;
+  if (top === 1) {
+    // 座面の上・背もたれの高さ: 背もたれの板だけが障害物
+    const bx0 = BENCH.x + BENCH.seatD / 2, bx1 = x1;
+    if (b.pos.x + r < bx0 || b.pos.x - r > bx1) return;
+    b.pos.x = b.pos.x < (bx0 + bx1) / 2 ? bx0 - r : bx1 + r;
+    b.vel.x = (b.pos.x < BENCH.x ? -1 : 1) * Math.abs(b.vel.x) * BALL.wallBounce;
+    return;
+  }
+  // 座面より下: 座面の天面に乗せるか、前後の面で弾く
+  if (b.pos.x + r < x0 || b.pos.x - r > x1) return;
+  if (b.pos.y + r > BENCH.seatTop && b.vel.y < 0) {           // 天面へ落ちてきた → 座面で弾む
+    b.pos.y = BENCH.seatTop + r;
+    b.vel.y = Math.abs(b.vel.y) * BALL.bounce;
+    b.vel.x *= BALL.friction;
+    b.vel.z *= BALL.friction;
+    return;
+  }
+  const toFront = b.pos.x - (x0 - r), toBack = (x1 + r) - b.pos.x;   // 近い側の面へ押し出す
+  if (toFront < toBack) { b.pos.x = x0 - r; b.vel.x = -Math.abs(b.vel.x) * BALL.wallBounce; }
+  else { b.pos.x = x1 + r; b.vel.x = Math.abs(b.vel.x) * BALL.wallBounce; }
+}
+
 /** 自由飛行の1ステップ: 重力・積分・床バウンド。reflect でコート境界の反射も行う。 */
 export function stepBallFlight(b: Ball, dt: number, reflect: boolean): void {
   b.vel.y -= BALL.gravity * dt;
@@ -54,6 +88,7 @@ export function stepBallFlight(b: Ball, dt: number, reflect: boolean): void {
   }
   // バックボード反射(reflect に依らず常に有効 — 板は実在の障害物)。表面で判定=めり込まない。
   bounceOffBoard(b);
+  bounceOffBench(b);   // ベンチも同様に実在の障害物
   // 境界で反射させてインプレーに保つ。壁はエプロンの外(OOB_WALL)なので、
   // OOBになってもボールはしばらく軌道のまま外へ飛んでから壁に当たる。
   if (reflect) {

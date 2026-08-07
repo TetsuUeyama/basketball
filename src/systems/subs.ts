@@ -6,8 +6,8 @@ import { STARTERS } from "../roster";
 import { scoringPower } from "../roles";
 import { rate, clamp, dist2DTo, moveToward2D } from "../util";
 import { roleFit, overallOf, refreshChoiceRanks } from "../ai/lineups";
-import { benchSeat } from "../core/bench";
-import { pushApart } from "../core/collision";
+import { benchSeat, benchStandSpot } from "../core/bench";
+import { blockBench, pushApart } from "../core/collision";
 import type { Game } from "../game";
 
 // この選手がどれだけ交代を必要とするか: 疲れた脚、不調(TO過多で結果なし)、
@@ -176,9 +176,10 @@ export function substitute(game: Game, out: Player, sub: Player): void {
   sub.resetFacing();   // コート上の体はヨーを持たない — ベンチでの視線をクリア
   sub.stand();         // ベンチから立ち上がって走り込む
   game.players[i] = sub;
-  const seat = benchSeat(game, out);
+  const stand = benchStandSpot(game, out);
+  sub.pos.x = Math.min(sub.pos.x, benchStandSpot(game, sub).x);   // 立ち上がりはベンチの前へ
   game.subWalkers.push({ p: sub, tx: cx, tz: cz });     // 自席から走って入る
-  game.subWalkers.push({ p: out, tx: seat.x, tz: seat.z }); // 自席へ歩いて退く
+  game.subWalkers.push({ p: out, tx: stand.x, tz: stand.z }); // 自席の手前へ歩いて退く
   game.subsMade++;
   game.subEvents.push({
     inNum: sub.idx + 1, inName: sub.name,
@@ -219,6 +220,7 @@ export function updateSubs(game: Game, dt: number): void {
   const bodies = new Set<Player>(game.players);
   for (const w of game.subWalkers) bodies.add(w.p);
   pushApart([...bodies]);
+  for (const w of game.subWalkers) if (!w.p.seated) blockBench(w.p.pos);   // ベンチを突き抜けない
   for (const w of game.subWalkers) w.p.sync(); // 退場者は `players` を離れた — ここで sync
   // 再開は歩行者が配置に着き、かつ交代フィードが消えてから。timedOut はハード上限。
   if ((done && game.subEvents.length === 0) || timedOut) {
@@ -226,7 +228,12 @@ export function updateSubs(game: Game, dt: number): void {
       w.p.pos.set(w.tx, 0, w.tz);
       // コート上に立つ者はベンチのヨーを持たない — ここで強制
       if (game.onCourt(w.p)) w.p.resetFacing();
-      else w.p.sit();   // ベンチに着いた者は座り直す
+      else {
+        const seat = benchSeat(game, w.p);        // 手前まで歩いてから席へ座る
+        w.p.pos.set(seat.x, 0, seat.z);
+        w.p.faceToward(seat.x - 1, seat.z);
+        w.p.sit();
+      }
       w.p.sync();
     }
     game.subWalkers = [];

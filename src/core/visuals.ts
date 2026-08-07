@@ -48,18 +48,23 @@ export function tickSwish(game: Game, dt: number): void {
 
   // ---- ボールの発光演出 ---------------------------------------------------
   // ボール自体を一瞬光らせて膨らませ、所有が動いた瞬間を目立たせる。描画専用で
-  // 試合ロジックには触れない（tickSwish と同じ扱い）。色の割り当ては下記。
-  //   catch     パスキャッチ            青（両チーム共通）
-  //   secure    リバウンド/ルーズ確保   ホーム=黄 / アウェイ=オレンジ
-  //   intercept インターセプト/はたき   赤（両チーム共通）
-  //   block     ブロック                赤（intercept と同じ）
-  //   score     ゴール                  青。flashScore で得点量ごとに強さを変える
-  //   （演出なしでルーズボール中のときは、白く光らせ続ける）
+  // 試合ロジックには触れない（tickSwish と同じ扱い）。
+  //
+  // 色は**そのプレーをした選手のチーム色**で統一する（ホーム=赤系 / ビジター=青系）。
+  // 種類で変えるのは長さ・膨らみ・殻の大きさだけ。
+  //   dribble   ドリブルが手に戻った    ごく短い明滅
+  //   catch     パスキャッチ            捕った側
+  //   secure    リバウンド/ルーズ確保   確保した側
+  //   tip       ルーズボールのタップ    はたいた側
+  //   intercept インターセプト/はたき   はたいた側
+  //   block     ブロック                ブロックした側
+  //   score     ゴール                  決めた側。flashScore で得点量ごとに強さを変える
+  //   （演出が無い間、ルーズボール中は誰のものでもないので白く光らせ続ける）
 const FX_HOLD = 0.35;        // 最初の35%は最大輝度を保ってから減衰させる
 const HALO_MAX = 5.0;        // 光の殻の最終倍率(ボール径 0.24m → 約1.2m)
 const LOOSE_GLOW = 0.85;     // ルーズボール中の白の強さ
 
-export type BallFxKind = "catch" | "secure" | "intercept" | "block";
+export type BallFxKind = "dribble" | "catch" | "secure" | "tip" | "intercept" | "block";
 
   // 殻はボール本体と同じ色。半透明合成なので 1 で頭打ちにする。
 function syncHalo(game: Game): void {
@@ -67,35 +72,49 @@ function syncHalo(game: Game): void {
     game.ball.haloMat.emissiveColor.set(Math.min(1, c.r), Math.min(1, c.g), Math.min(1, c.b));
 }
 
-export function flashBall(game: Game, kind: BallFxKind, team = -1): void {
+  // チーム色の発光色を作る。TEAM_COLORS を唯一の正とし、成分を二乗して彩度を上げ
+  // （ホームのオレンジを赤へ寄せる）、最大成分が gain になるよう伸ばす。
+  // team が範囲外(-1)なら白 — 誰のものでもないボール。
+function setTeamFx(game: Game, team: number, gain: number): void {
     const c = game.ballFxColor;
+    const t = TEAM_COLORS[team];
+    if (!t) { c.set(gain, gain, gain); return; }
+    const m = Math.max(t.r, t.g, t.b) || 1;
+    const r = t.r / m, g = t.g / m, b = t.b / m;
+    c.set(r * r * gain, g * g * gain, b * b * gain);
+}
+
+export function flashBall(game: Game, kind: BallFxKind, team = -1): void {
+    // ドリブルの小さな明滅は、走っている強い演出へ割り込まない
+    if (kind === "dribble" && game.ballFxT > 0 && game.ballFxKind !== "dribble") return;
     switch (kind) {
+      case "dribble":
+        game.ballFxDur = 0.20; game.ballFxPunch = 0.10; game.ballFxHalo = 1.9; break;
       case "catch":
-        game.ballFxDur = 0.55; game.ballFxPunch = 0.35; c.set(0.35, 0.8, 1.9); break;
+        game.ballFxDur = 0.55; game.ballFxPunch = 0.35; game.ballFxHalo = HALO_MAX; break;
       case "secure":
-        game.ballFxDur = 0.6;  game.ballFxPunch = 0.45;
-        if (team === 0) c.set(1.85, 1.6, 0.35);   // ホーム = 黄
-        else c.set(1.9, 0.85, 0.2);               // アウェイ = オレンジ
-        break;
+        game.ballFxDur = 0.6;  game.ballFxPunch = 0.45; game.ballFxHalo = HALO_MAX; break;
+      case "tip":
+        game.ballFxDur = 0.35; game.ballFxPunch = 0.4;  game.ballFxHalo = 3.2; break;
       case "intercept":
       case "block":
-        game.ballFxDur = 0.85; game.ballFxPunch = 0.7;  c.set(1.95, 0.25, 0.18); break;
+        game.ballFxDur = 0.85; game.ballFxPunch = 0.7;  game.ballFxHalo = HALO_MAX; break;
     }
+    setTeamFx(game, team, kind === "dribble" ? 1.3 : 2.0);
     game.ballFxKind = kind;
-    game.ballFxHalo = HALO_MAX;
     game.ballFxT = game.ballFxDur;
     syncHalo(game);
 }
 
   // ゴールの発光。ボールがネットを抜けた時点で消えるよう、高さで減衰させる（tickBallFx 参照）。
   // 強さは得点量で変える: フリースロー1点 < 2点 < 3点。
-export function flashScore(game: Game, points: number): void {
+export function flashScore(game: Game, points: number, team: number): void {
     const s = points >= 3 ? 1 : points === 2 ? 0.75 : 0.5;
     game.ballFxKind = "score";
     game.ballFxDur = game.ballFxT = 0.6;   // 上限。通常はネット通過で先に切れる
     game.ballFxPunch = 0.25 + 0.5 * s;
     game.ballFxHalo = 2.6 + 3.2 * s;
-    game.ballFxColor.set(0.35 * s, 0.8 * s, 1.9 * s);
+    setTeamFx(game, team, 2.0 * s);
     game.ballFxY0 = Math.max(game.ball.pos.y, NET_BOTTOM_Y + 0.01);
     syncHalo(game);
 }
@@ -153,10 +172,10 @@ export function updateFacing(game: Game, dt: number): void {
     const b = game.ball.pos;
     for (const p of game.players) {
       // パサーは胸をレシーバーへスナップさせて両手パスを出す（足はその場、airborne
-      // スキップの前に行うのでジャンプパスでも胸を正対させる）。
+      // スキップの前に行うので接地からのジャンプパスでも胸を正対させる）。
       if (game.ballMode === "pass" && p === game.passer && game.passTo) {
-        if (game.noLookPass) {
-          // ノールック: ターゲットへ正対せず、胴体をわずかに向けるだけ
+        if (game.noLookPass || p.airborne) {
+          // ノールック / 空中(踏み切り後は向きを変えられない): 正対せず胴体をわずかに向けるだけ
           p.twistToward(game.passTo.pos.x, game.passTo.pos.z, dt, 0.4, 6);
         } else {
           p.faceChestToward(game.passTo.pos.x, game.passTo.pos.z);
@@ -248,6 +267,8 @@ export function updateFacing(game: Game, dt: number): void {
       const quick = rate(p.attr.agility);
       const skill = offense ? rate(p.attr.offense) : rate(p.attr.defense);
       const turnRate = 2.2 + (quick * 0.6 + skill * 0.4) * 6;   // ~2.2（遅い）.. ~8.2（速い）rad/s
+      // ⚠️ 押し込むドリブルの半身（ボールと逆の肩が前）は dribblePower クリップに
+      //    焼き込んである。ここで胸をひねると二重に回るので何もしない。
       p.faceSmooth(lx, lz, turnRate * dt);                       // 下半身（脚／腰）
       p.twistToward(aim.x, aim.z, dt, undefined, turnRate * 1.25); // 上半身（胸）、少し速め
       // 頭は注視対象（ボール、または攻めるリム）を胸の動きに重ねて追う

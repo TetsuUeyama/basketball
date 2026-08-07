@@ -124,7 +124,7 @@ export class FreeThrowSystem {
       this.shooter.stats.ftm++;
       benchCheer(g, this.team, 1.2);   // FTは素早めのポップ
       swishNet(g, this.team);          // メイクでネットが弾ける
-      flashScore(g, 1);                // FTは1点ぶんの控えめな発光
+      flashScore(g, 1, this.team);     // FTは1点ぶんの控えめな発光
     }
     this.remaining -= 1;
     if (!wasLast) { this.beginAttempt(); return; }

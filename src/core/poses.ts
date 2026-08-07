@@ -60,8 +60,9 @@ export function poseHands(game: Game, ): void {
             // キャッチをまとめている間: 両手のキャッチポーズを続ける
             game.handler.holdBallHands(b);
           } else if (game.handler.pickupT > 0) {
-            // 確保/すくい上げ中: 両手をボールに乗せ、降ろされる/引き寄せられるボールを追う
-            game.handler.holdBallHands(b);
+            // 確保/すくい上げ中: 掴んだ手の数のまま、降ろされる/引き寄せられるボールを追う
+            if (game.handler.grabTwoHand) game.handler.holdBallHands(b);
+            else grabPose(game, game.handler, new Vector3(b.x, b.y, b.z), false);
           } else {
             // ドリブル: ボールを運ぶのと同じ側の手でドリブルの高さにかまえる
             const bw = new Vector3(b.x, 0.95, b.z);
@@ -97,11 +98,14 @@ export function poseHands(game: Game, ): void {
         if (game.ft.t < 1.4) game.ft.shooter?.shootArms(b, true);   // FTも利き手フォーム
         break;
       case "pass":
-        // 両手のチェストパス: 両腕を胸の高さでレシーバーへ向けて前に押し出す
+        // レシーバーへ腕を押し出す。高さはリリース点(passFrom)に合わせる — ジャンプパスは
+        // 頭上から出る。片手確保からのパス(passOneHand)は片手のまま振り抜く。
         if (game.passT < game.passDur * 0.4 && game.passer && game.passTo) {
           const pr = game.passer.pos, tp = game.passTo.pos;
           const dx = tp.x - pr.x, dz = tp.z - pr.z, dl = Math.hypot(dx, dz) || 1;
-          game.passer.reach(new Vector3(pr.x + (dx / dl) * 1.2, 1.3, pr.z + (dz / dl) * 1.2), true);
+          const y = game.passFrom.y + 0.2;   // 手はボールが離れた高さに置く
+          game.passer.reach(new Vector3(pr.x + (dx / dl) * 1.2, y, pr.z + (dz / dl) * 1.2),
+            !game.passOneHand);
         } else if (game.passT > game.passDur * 0.45) {
           // キャッチ: レシーバーは両手を出して向かってくるボールを迎える
           game.passTo?.holdBallHands(b);
@@ -149,7 +153,7 @@ export function poseHands(game: Game, ): void {
         if (p === game.passer) continue;   // ジャンプパサーはチェストパスの腕を保つ
         if (p === game.saveBy) continue;   // ライン外へ横っ飛びした者はボールへ手を伸ばす
         if (p.foulReactT > 0) continue;    // AND-1 のフレックスホップは拳を上げたまま
-        p.reach(new Vector3(p.pos.x, 6, p.pos.z), true);   // 真上のターゲット
+        p.handsUp();   // 真上へ両手(頭上の点への reach は届かず片手に落ちる)
       }
     }
 
@@ -241,13 +245,17 @@ function decideHands(game: Game, p: Player, b: Vector3): boolean {
     return true;
   }
 
-/** ボールへ手を出す。片手のときは空いた腕で相手をブロックする。 */
-export function contestBall(game: Game, p: Player, b: Vector3): void {
-    const two = twoHandGrab(game, p, b);
+/** 決めた手の数でボールを掴む形。片手のときは空いた腕で相手をブロックする。 */
+export function grabPose(game: Game, p: Player, b: Vector3, two: boolean): void {
     p.reachBall(b, two);
     if (two) return;
     const rival = rivalFor(game, p, b);
     if (rival) armBar(p, rival, b);   // 空いた腕で相手を抑える
+  }
+
+/** ボールへ手を出す。片手/両手はその場で判定する。 */
+export function contestBall(game: Game, p: Player, b: Vector3): void {
+    grabPose(game, p, b, twoHandGrab(game, p, b));
   }
 
   // 空中にいる選手はボールへ手を上げる（掴む・タップする・ブロックする）。
@@ -310,7 +318,7 @@ export function poseDenyHands(game: Game, h: Player, b: Vector3, posed: Set<Play
 
   // セレブレーションの両手上げバウンド（amp 1 = 全員で沸く、~0.4 = 控えめ）。
 export function festivePose(game: Game, p: Player, dt: number, amp: number): void {
-    p.reach(new Vector3(p.pos.x, 2.7 + amp * 0.5, p.pos.z), true);   // 両腕を上げる
+    p.handsUp(0, 0.10 + amp * 0.10, 0.06);   // 両腕を上げる(頭上の点への reach は片手に落ちる)
     if (!p.airborne && p.landT <= 0 && chance(dt * (1.2 + amp * 1.3))) {
       p.jump(0.1 + amp * rand(0.15, 0.3), rand(0.3, 0.45));
     }

@@ -143,6 +143,10 @@ Player.prototype.sync = function(): void {
     this.shootLoad += (this.shootLoadTarget - this.shootLoad) * 0.25;
     this.shootLoadTarget = 0;
     if (this.shootLoad > 0.003) this.applyShootLoad();
+    // 床のボールをすくい上げる進捗（target は liveball の pickup が毎フレーム設定）。
+    // 姿勢そのものは objcts の "pickup" クリップ（voxel-motion）が持つ。
+    this.scoopLoad += (this.scoopLoadTarget - this.scoopLoad) * 0.25;
+    this.scoopLoadTarget = 0;
     // ⚠️ 溜め・落胆は胴を腰でヒンジさせるオフセット(torsoNode.position / rotation.x)を書く。
     //    どちらも当たらなくなったフレームで戻さないと、上半身が腰からずれたまま残る。
     if (!this.hingePosed) {

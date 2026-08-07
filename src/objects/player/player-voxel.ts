@@ -180,6 +180,9 @@ export interface VoxelBody {
   readonly shoulder: { x: number; y: number; z: number };
   /** 股関節の高さ（着席時に root を下げる量）。 */
   readonly hipY: number;
+  /** 立位の膝・足首の高さ（着席時に脛を倒して足を床へ着ける計算に使う）。 */
+  readonly kneeY: number;
+  readonly ankleY: number;
   /** IK 用の実効長。前腕は手のひらの中心まで（手首ボーンより先に手が出るため）。 */
   readonly upperArm: number;
   readonly foreArm: number;
@@ -415,12 +418,17 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
   // 剛体だと肩・股の継ぎ目で布が割れる（実測: 腕を前へ出すと袖ぐりの布508ボクセルが
   // 胴に取り残された）。焼き込みのウェイトが無い体型ではこれまでどおり剛体で組む。
   let uniform: Mesh[] = [];
+  let kitKey = "";
   const sd = skinData(variant, true);
   const skinned = sd.bones.length > 0 && sd.table.length > 0;
-  const buildUniform = (kit: VoxelKit): void => {
+  // 同じキットなら何もしない（false を返す）。試合前の引き直し/ロール変更で
+  // 26人ぶん作り直すとボタンが固まるため。
+  const buildUniform = (kit: VoxelKit): boolean => {
+    const ck = `${hex2(kit.top)}-${hex2(kit.bottom)}-${hex2(kit.shoes)}`;
+    if (ck === kitKey && uniform.length) return false;
+    kitKey = ck;
     for (const m of uniform) m.dispose();
     uniform = [];
-    const ck = `${hex2(kit.top)}-${hex2(kit.bottom)}-${hex2(kit.shoes)}`;
     const recolor: Recolor = (role) =>
       role === VoxRole.Jersey ? [kit.top.r, kit.top.g, kit.top.b]
         : role === VoxRole.Shorts ? [kit.bottom.r, kit.bottom.g, kit.bottom.b]
@@ -436,7 +444,7 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
         m.numBoneInfluencers = 4;
         uniform.push(m);
       }
-      return;
+      return true;
     }
     for (const part of BODY_PARTS) {
       const s = st[part] ?? zero;
@@ -450,6 +458,7 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
       setRestRot(m, part);
       uniform.push(m);
     }
+    return true;
   };
   buildUniform(o.kit);
 
@@ -524,6 +533,8 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
   const el = rig.restPosition("LeftLowerArm") ?? sh;
   const wr = rig.restPosition("LeftHand") ?? el;
   const hip = rig.restPosition("LeftUpperLeg") ?? new Vector3(0, 0.95, 0);
+  const knee = rig.restPosition("LeftLowerLeg") ?? new Vector3(0, hip.y * 0.5, 0);
+  const ankle = rig.restPosition("LeftFoot") ?? new Vector3(0, 0.12, 0);
 
   // ⚠️ 手首ボーンは前腕の中ほどに立っていて、手のボクセルはそこから外へ 0.14〜0.32m
   //    はみ出す（objcts 側の既知のズレ）。IK が手のひらをボールに乗せられるよう、
@@ -604,6 +615,8 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
     variant, height,
     shoulder: { x: sh.x, y: sh.y, z: sh.z },
     hipY: hip.y,
+    kneeY: knee.y,
+    ankleY: ankle.y,
     upperArm: Vector3.Distance(sh, el),
     foreArm: (fixL.len + fixR.len) / 2,
     setSkinColor: (c) => {
@@ -615,7 +628,7 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
     },
     setHairColor: (c) => { hairMat.unfreeze(); hairMat.diffuseColor = new Color3(c.r, c.g, c.b); hairMat.freeze(); },
     setHairStyle: (s) => { buildHair(s); refreshMeshList(); },
-    setKit: (k) => { buildUniform(k); refreshMeshList(); },
+    setKit: (k) => { if (buildUniform(k)) refreshMeshList(); },
     setJerseyText: drawNumber,
     setNumberVisible: (v) => { numShell.isVisible = v; },
     dispose: () => {
@@ -784,6 +797,26 @@ export function syncVoxelHeadTorso(
   if (head?.rotationQuaternion) {
     Quaternion.RotationAxisToRef(UP, headYaw, tmpB);
     tmpB.multiplyToRef(head.rotationQuaternion, head.rotationQuaternion);
+  }
+}
+
+const _splayQ = new Quaternion();
+const SPLAY_AXIS = new Vector3(0, 0, 1);
+
+/** 腿を左右へ開く（クリップの脚の上に重ねる）。焼き込みのジャンプは両脚が揃いすぎるので、
+ *  滞空・着地で少しだけスタンスを広げる。amount はラジアン、+ で外開き。
+ *  bias(-1..1) は左右の開きの差 — 完全な鏡像だと揃いすぎて見えるので選手ごとにずらす。 */
+export function splayLegs(vb: VoxelBody, amount: number, bias = 0): void {
+  if (Math.abs(amount) < 1e-4) return;
+  // ⚠️ 符号は実測で決めた（逆にすると脚が内側で交差する）。
+  for (const [bone, sign] of [["LeftUpperLeg", -1], ["RightUpperLeg", 1]] as const) {
+    const n = vb.rig.node(bone as StandardBoneName);
+    const q = n?.rotationQuaternion;
+    if (!n || !q) continue;
+    const a = amount * (1 + (sign < 0 ? bias : -bias));
+    Quaternion.RotationAxisToRef(SPLAY_AXIS, a * sign, _splayQ);
+    _splayQ.multiplyToRef(q, q);
+    n.markAsDirty("rotationQuaternion");
   }
 }
 

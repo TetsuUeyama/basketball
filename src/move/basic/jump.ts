@@ -5,6 +5,7 @@ import { Player } from "../../objects/player/player";
 declare module "../../objects/player/player" {
   interface Player {
     jump(height: number, dur: number, leapX?: number, leapZ?: number): void;
+    stretchAir(minRemain: number): void;
     updateJump(dt: number): void;
     reachTopY(): number;
   }
@@ -16,13 +17,25 @@ declare module "../../objects/player/player" {
 Player.prototype.jump = function(height: number, dur: number, leapX = 0, leapZ = 0): void {
     // 前回の着地からまだバランスを立て直している最中——まだ跳べない
     if (this.landT > 0) return;
-    // 空中で、大きいジャンプを小さいジャンプで再始動しない
-    if (this.jumpRemaining > 0 && height <= this.jumpHeight) return;
+    // ⚠️ 空中では踏み切り直さない。jumpRemaining を dur へ戻すと k=0 → jumpY=0 になり、
+    //    体が一瞬床へ落ちてから跳び直して見える（空中リバウンド→プットバックで顕著）。
+    //    滞空を伸ばしたい側は stretchAir を明示的に呼ぶ。
+    if (this.jumpRemaining > 0) return;
     this.jumpHeight = height;
     this.jumpDur = dur;
     this.jumpRemaining = dur;
     this.leapX = leapX;
     this.leapZ = leapZ;
+};
+
+/** 今の弧を切らずに滞空を `minRemain` 秒まで伸ばす。jumpY = sin(k*π)*H
+ *  （k = 1 - remaining/dur）なので remaining と dur を同率で伸ばせば k が変わらず、
+ *  今の高さを保ったまま降下だけが緩やかになる。 */
+Player.prototype.stretchAir = function(minRemain: number): void {
+    if (this.jumpRemaining <= 0 || minRemain <= this.jumpRemaining) return;
+    const s = minRemain / this.jumpRemaining;
+    this.jumpDur *= s;
+    this.jumpRemaining = minRemain;
 };
 
 Player.prototype.updateJump = function(dt: number): void {

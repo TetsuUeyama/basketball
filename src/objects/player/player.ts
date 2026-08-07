@@ -1,5 +1,5 @@
 import { Scene, Vector3, Quaternion, MeshBuilder, StandardMaterial, Color3, Mesh, TransformNode, DynamicTexture, VertexData, } from "@babylonjs/core";
-import { TEAM_COLORS, HUD_OPTS, uniformOf, type RGB } from "../../config";
+import { BENCH, TEAM_COLORS, HUD_OPTS, uniformOf, type RGB } from "../../config";
 import { Attributes, AbilityKey, PlayerDef } from "../../attributes";
 import { roleOffense, computeOffPriority, ROLE_BEHAVIOR, DEF_ROLE_BEHAVIOR, OffAction, offActionOf } from "../../roles";
 import { rate, clamp } from "../../util";
@@ -97,6 +97,10 @@ export class Player {
   // 設定、それ以外は0へ戻り「一気に伸び上がる」。sync が applyShootLoad で姿勢に反映。
   shootLoad = 0;
   shootLoadTarget = 0;
+  // 床のルーズボールをすくい上げる姿勢の深さ(0..1)。liveball の pickup が毎フレーム
+  // 設定し、それ以外は0へ戻る（＝立ち上がる）。sync が applyScoopLoad で姿勢に反映。
+  scoopLoad = 0;
+  scoopLoadTarget = 0;
   // このフレームに胴の腰ヒンジ（溜め・落胆）を当てたか。当てなかったら sync が 0 へ戻す。
   hingePosed = false;
   // スローイン後の前進: 非PMビッグの投げ手はバックコートに残らず、フロントコートへ
@@ -114,6 +118,9 @@ export class Player {
   grabFromX = 0;
   grabFromY = 0;
   grabFromZ = 0;
+  // 確保した手の数(true=両手)。secureLoose が記録し、収めるまでの保持ポーズと
+  // そのまま出すパス(片手確保→片手パス)を確保時の形に揃える。
+  grabTwoHand = true;
   // 背負いポストアップ中(バックダウン): >0 の間は背中をリムへ向けてバックペダルで押し込む。
   // postMove が powerT と同時に張り、tickCooldown で減算。壁で止まったらクリア。
   postT = 0;
@@ -390,9 +397,9 @@ export class Player {
 
   // 脚のジオメトリ/ポーズの定数。
   static readonly HIP_Y = 0.92;      // 股関節の高さのフォールバック（ボクセルが無いとき）
-  static readonly SEAT_HIP = 0.46;   // 着席時、腰はベンチ座面に置く
-  static readonly SIT_HIP = 1.45;    // 腿が~水平（前方）まで振り上がる
-  static readonly SIT_KNEE = -1.55;  // 脛が床へ折れ戻る
+  static readonly SEAT_HIP = BENCH.seatTop + 0.06;   // 着席時の股関節Y(尻を座面の天面に置く)
+  static readonly SIT_HIP = Math.PI / 2;  // 腿を水平（前方）へ畳む
+  static readonly SIT_KNEE = -1.55;  // 脛が床へ折れ戻る(符号の規約。角度は foldSeatedLegs が実寸から解く)
   static readonly WAIST_HINGE = 0.72; // 前傾のヒンジ高さ（腰の切れ目。落胆・シュートの溜め）
 
   backArms = false;   // ヒステリシスで閾値付近でスタイルがちらつかないように

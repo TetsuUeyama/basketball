@@ -1,9 +1,27 @@
 // 選手同士の衝突解決。重なった選手を押し離す物理と、押し合いの重み
 // (holdWeight: ボール保持者やパサーは踏ん張る)。毎フレーム updateLive から呼ぶ。
+import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
-import { BODY_MIN_DIST } from "../config";
+import { BENCH, BODY_MIN_DIST } from "../config";
 import { rate, rand } from "../util";
 import type { Game } from "../game";
+
+// ベンチ(長椅子)の水平の占有範囲。座面の前縁から背もたれの後縁まで。
+const BENCH_X0 = BENCH.x - BENCH.seatD / 2;
+const BENCH_X1 = BENCH.x + BENCH.seatD / 2 + BENCH.backT;
+
+/** 立っている体をベンチの外へ押し出す（座っている選手は対象外）。ベンチは実在の
+ *  障害物なので、歩いて戻る交代選手やライン外へ飛び出した選手が突き抜けない。
+ *  近い側（コート側 / 背面側）へ逃がす。r は体の半径。 */
+export function blockBench(pos: Vector3, r = BODY_MIN_DIST / 2): void {
+  const zLo = BENCH.zMid - BENCH.len / 2, zHi = BENCH.zMid + BENCH.len / 2;
+  const az = Math.abs(pos.z);
+  if (az < zLo - r || az > zHi + r) return;              // 列の外(両ハーフとも対称)
+  if (pos.x < BENCH_X0 - r || pos.x > BENCH_X1 + r) return;
+  // コート側へ出るか背面へ出るか、近い方
+  const toFront = pos.x - (BENCH_X0 - r), toBack = (BENCH_X1 + r) - pos.x;
+  pos.x = toFront < toBack ? BENCH_X0 - r : BENCH_X1 + r;
+}
 
   // 重なった体を等分に押し離す（重みなしの単純版）。d≈0 はランダム方向へずらす。
 export function pushApart(bodies: Player[], min = BODY_MIN_DIST): void {
@@ -52,6 +70,7 @@ export function resolveCollisions(game: Game, ): void {
         }
       }
     }
+    for (const p of game.players) blockBench(p.pos);   // ベンチは実在の障害物
     // 全員をコート内に保つ。ただし subs/pause/finale 中はクランプしない
     // （スローイン・交代・引き上げで選手が正当にコート外へ出る）。
     if (game.ballMode === "subs" || game.ballMode === "pause"

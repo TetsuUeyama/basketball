@@ -102,9 +102,12 @@ export function passToReceiver(
 ): boolean {
   game.passStyle = style;
   game.noLookPass = false;
+  // 片手で確保したボールは、収まる前(pickup中)ならそのまま片手で放る。
+  game.passOneHand = h.pickupT > 0 && !h.grabTwoHand;
   // パスアーク: 両手パスは上半身の前〜横(±90°)からのみ出る。後方の相手へはまずピボット
   // (短いワインドアップ)。ノールック(outside)は例外。強制フィード/ワインドアップ中はスキップ。
-  if (!force && !game.turnReleased && !game.pendingPassTo) {
+  // 空中(リバウンド確保からのアウトレット)はピボットできないのでそのまま振り抜く。
+  if (!force && !game.turnReleased && !game.pendingPassTo && !h.airborne) {
     const rel = h.relativeChestAngle(target.pos.x, target.pos.z);
     if (Math.abs(rel) > Math.PI / 2) {
       if (h.has("outside")) {
@@ -142,8 +145,12 @@ export function passToReceiver(
     return false;
   }
 
-  // リリース高さ: ジャンプパスは守備の頭上
-  game.passFrom.set(h.pos.x, style === "jump" ? 2.0 : 1.1, h.pos.z);
+  // リリース高さ: 通常はチェスト、ジャンプパスは守備の頭上。ただし確保したボールがまだ
+  // 手元へ収まっていない(空中/pickup中)ジャンプパスは、今ボールがある高さから放つ
+  // — 掴んだ位置から上下へワープさせない。
+  let fromY = style === "jump" ? 2.0 : 1.1;
+  if (style === "jump" && (h.airborne || h.pickupT > 0)) fromY = Math.max(1.1, game.ball.pos.y);
+  game.passFrom.set(h.pos.x, fromY, h.pos.z);
   game.passCatch.set(cx, 1.1, cz);   // 固定リード点へ飛ぶ → 一定速
   game.passTo = target;
   game.passer = h;
@@ -256,7 +263,7 @@ export function updatePass(game: Game, dt: number): void {
   if (game.passSteal && k >= game.passSteal.at) {
     const d = game.passSteal.def;
     game.passSteal = null;
-    flashBall(game, "intercept");   // カットされた瞬間は赤（綺麗に奪う/弾くの両方）
+    flashBall(game, "intercept", d.team);   // カットした側の色（綺麗に奪う/弾くの両方）
     const offense = game.possession;
     const catchP = 0.4 + rate(d.attr.reaction) * 0.45 + (d.has("interceptor") ? 0.15 : 0);
     if (chance(clamp(catchP, 0.2, 0.95))) {
@@ -322,7 +329,7 @@ export function updatePass(game: Game, dt: number): void {
       return;
     }
     game.handler = receiver;
-    flashBall(game, "catch");   // パスキャッチは両チーム共通で青
+    flashBall(game, "catch", receiver.team);   // 捕った側の色
     game.passTo = null;
     game.ballMode = "held";
     game.ball.pos.set(receiver.pos.x, 1.0, receiver.pos.z);   // 即受け手へ（held初フレームの取り残し防止）

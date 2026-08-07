@@ -40,6 +40,8 @@ import shoot3Json from "./data/shoot3.json";
 import layupJson from "./data/layup.json";
 import dunkJson from "./data/dunk.json";
 import doubleClutchJson from "./data/doubleClutch.json";
+import pickupJson from "./data/pickup.json";
+import dribblePowerJson from "./data/dribblePower.json";
 
 export interface MotionClip {
   name: string;
@@ -116,6 +118,8 @@ const CLIPS: Record<string, MotionClip> = {
   layup: layupJson as MotionClip,
   dunk: dunkJson as MotionClip,
   doubleClutch: doubleClutchJson as MotionClip,
+  pickup: pickupJson as MotionClip,
+  dribblePower: dribblePowerJson as MotionClip,
 };
 
 /** 使えるクリップ名。 */
