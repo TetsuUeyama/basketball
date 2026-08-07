@@ -1,30 +1,35 @@
-// ズボンの太さと、脚の素体との隙間を実測する。
+// 見えているズボン（シャツの裾より下）と脚の素体の余裕を高さごとに測る。
 import "./stubs";
 import { uniformVoxels, bodyData, uniformData, partStretch, applyStretch, VoxRole, VOX_SIZE,
   DEFAULT_WIDTH_EXPONENT, DEFAULT_HEAD_EXPONENT, variantFor } from "@objcts/player/voxel/voxelBody";
-
 const we = DEFAULT_WIDTH_EXPONENT, he = DEFAULT_HEAD_EXPONENT;
-for (const height of [1.80, 1.95, 2.10]) {
-  const variant = variantFor(50);
-  const cl = uniformData(variant), bd = bodyData(variant);
-  const st = partStretch(variant, height, we, he);
-  console.log(`\n=== 身長 ${height.toFixed(2)}m (${variant}) ===`);
-  for (const part of ["hips", "thighL"]) {
-    const cloth = uniformVoxels(variant, part, height, we);
-    // ショーツ役の布だけを見る
-    const sv = cloth.filter((v) => cl.palette[v[3]][3] === VoxRole.Shorts);
-    if (!sv.length) { console.log(`  ${part}: ショーツの布なし`); continue; }
-    const skin = applyStretch(bd.parts[part]?.voxels ?? [], st[part] ?? { x: 0, y: 0, z: 0 });
-    const ext = (a: number[][], axis: number): [number, number] => {
-      let lo = Infinity, hi = -Infinity;
-      for (const v of a) { if (v[axis] < lo) lo = v[axis]; if (v[axis] > hi) hi = v[axis]; }
-      return [lo, hi];
-    };
-    const [cx0, cx1] = ext(sv, 0), [cz0, cz1] = ext(sv, 2), [cy0, cy1] = ext(sv, 1);
-    const [sx0, sx1] = ext(skin, 0), [sz0, sz1] = ext(skin, 2);
-    const w = (a: number, b: number) => ((b - a + 1) * VOX_SIZE).toFixed(3);
-    console.log(`  ${part}: 布 幅X ${w(cx0, cx1)}m 奥行Z ${w(cz0, cz1)}m 丈Y ${w(cy0, cy1)}m / ${sv.length}ボクセル`);
-    console.log(`         素体 幅X ${w(sx0, sx1)}m 奥行Z ${w(sz0, sz1)}m`);
-    console.log(`         隙間 X片側 ${(((cx1 - sx1) + (sx0 - cx0)) / 2 * VOX_SIZE * 100).toFixed(1)}cm  Z片側 ${(((cz1 - sz1) + (sz0 - cz0)) / 2 * VOX_SIZE * 100).toFixed(1)}cm`);
+const height = 1.95, variant = variantFor(50);
+const cl = uniformData(variant), bd = bodyData(variant);
+const st = partStretch(variant, height, we, he);
+const rows: string[] = [];
+for (const part of ["hips", "thighL"]) {
+  const pd = cl.parts[part], bp = bd.parts[part];
+  if (!pd || !bp) continue;
+  const cloth = uniformVoxels(variant, part, height, we).filter((v) => cl.palette[v[3]][3] === VoxRole.Shorts);
+  const skin = applyStretch(bp.voxels, st[part] ?? { x: 0, y: 0, z: 0 });
+  if (!cloth.length) { rows.push(`  ${part}: ショーツの布なし`); continue; }
+  // 骨ローカルの y 層ごとに、幅Xの半径を比べる
+  const layers = new Map<number, { c: number; s: number }>();
+  for (const v of cloth) { const l = layers.get(v[1]) ?? { c: 0, s: 0 }; l.c = Math.max(l.c, Math.abs(v[0])); layers.set(v[1], l); }
+  for (const v of skin) { const l = layers.get(v[1]); if (l) l.s = Math.max(l.s, Math.abs(v[0])); }
+  const ys = [...layers.keys()].sort((a, b) => b - a);
+  const pick = [ys[0], ys[Math.floor(ys.length * 0.35)], ys[Math.floor(ys.length * 0.7)], ys[ys.length - 1]];
+  rows.push(`  ${part}:`);
+  for (const y of pick) {
+    const l = layers.get(y)!;
+    const gap = (l.c - l.s) * VOX_SIZE * 100;
+    rows.push(`    層y=${String(y).padStart(3)}  布半径 ${(l.c * VOX_SIZE).toFixed(3)}m  素体 ${(l.s * VOX_SIZE).toFixed(3)}m  余裕 ${gap.toFixed(1)}cm`);
   }
+  const ext = (a: number[][], ax: number): number => {
+    let lo = Infinity, hi = -Infinity;
+    for (const v of a) { if (v[ax] < lo) lo = v[ax]; if (v[ax] > hi) hi = v[ax]; }
+    return (hi - lo + 1) * VOX_SIZE;
+  };
+  rows.push(`    全体 幅X ${ext(cloth, 0).toFixed(3)}m 奥行Z ${ext(cloth, 2).toFixed(3)}m / ${cloth.length}ボクセル`);
 }
+console.log(rows.join("\n"));
