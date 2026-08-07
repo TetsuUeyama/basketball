@@ -74,7 +74,8 @@ export class UI {
   iconStamina = new Map<import("../objects/player/player").Player, { bar: HTMLDivElement; fill: HTMLDivElement }>(); // 選手 → アイコンの体力バー
   iconRole = new Map<import("../objects/player/player").Player, HTMLDivElement>();   // 選手 → オフェンス/守備ロールのピル
   staminaBtn: HTMLButtonElement | null = null;   // HUD トグル: ゲージを名前タグ上 ⇄ 顔アイコン
-  namesBtn: HTMLButtonElement | null = null;     // HUD トグル: コート上の名前タグ 表示 ⇄ 非表示
+  namesBtn: HTMLButtonElement | null = null;     // HUD トグル: コート上の名前タグ オンボールのみ ⇄ 全員
+  benchNamesBtn: HTMLButtonElement | null = null; // HUD トグル: ベンチの名前タグ 表示 ⇄ 非表示
   statSnap = new Map<import("../objects/player/player").Player, number[]>();     // 最後に確認した POP_STATS の値
   controls!: HTMLDivElement;      // 速度 / RESTART の行
   menuBtn!: HTMLButtonElement;    // ☰ ハンバーガー — スコアボードが届くまでは上端に乗る
@@ -262,16 +263,25 @@ export class UI {
     };
     controls.appendChild(staminaBtn);
 
-    // コート上の名前タグの表示オン/オフ
+    // コート上の名前タグ: オンボール選手とそのマークだけ ⇄ 全員
     const namesBtn = this.button("");
     this.namesBtn = namesBtn;
     this.refreshNamesBtn();
     namesBtn.onclick = () => {
-      HUD_OPTS.showNames = !HUD_OPTS.showNames;
-      HUD_OPTS.rev++;                 // 全ての名前タグを再描画
+      HUD_OPTS.courtNames = HUD_OPTS.courtNames === "ball" ? "all" : "ball";
       this.refreshNamesBtn();
     };
     controls.appendChild(namesBtn);
+
+    // ベンチの選手の名前タグ 表示 ⇄ 非表示
+    const benchNamesBtn = this.button("");
+    this.benchNamesBtn = benchNamesBtn;
+    this.refreshNamesBtn();
+    benchNamesBtn.onclick = () => {
+      HUD_OPTS.benchNames = !HUD_OPTS.benchNames;
+      this.refreshNamesBtn();
+    };
+    controls.appendChild(benchNamesBtn);
 
     const restart = this.button("RESTART");
     restart.onclick = () => { this.onRestart(); controls.style.display = "none"; };

@@ -7054,3 +7054,28 @@ score 15 / tip 11 / intercept 5 回。色はホーム (2.00, 0.31, 0.04)＝赤�
 ビジター (0.08, 0.52, 2.00)＝青。ドリブルは gain 1.3 の控えめな明滅。
 ⚠️ 見た目は未確認。ドリブルの明滅がうるさければ `flashBall` の "dribble" の
 dur/punch/halo か gain を下げる。
+
+## 550. ネームタグを2系統に分ける（コート上の範囲 / ベンチ）
+
+指摘: ベンチの名前はオンオフ切替（既定オフ）。コート上はオンボール選手とそのマークのみ／
+全員を切替（既定はオンボール+マークのみ）。
+
+- `HUD_OPTS`: `showNames: boolean` を廃し、**`courtNames: "ball" | "all"`（既定 "ball"）**と
+  **`benchNames: boolean`（既定 false）**の2つへ。
+- 表示可否の決定を「タグ再描画時に1回」から**毎フレーム**へ移動。`core/visuals.ts` に
+  `updateNameTags(game)` を新設し `syncAll` から呼ぶ（`drawNameTag` は描くだけになった）。
+  試合前は `update` が走らないので `Game.reset()` の末尾でも一度呼ぶ。
+- オンボール選手 = `ballMode` で決まる主体（held/inbound=handler, charge=chargeShooter,
+  shot=shooter, pass=passTo→passer, freethrow=ft.shooter）。誰でもない局面（ルーズ/
+  ティップオフ/デッドボール）は0人。マーク = `onBallDefender`（同スロットの相手）、
+  取れなければ最寄りの守備者。
+- `Player.nameTagAllowed` を追加。`setNameTagVisible(false)` は即座に隠し（イントロツアー中は
+  syncAll が走らないため）、`true` は許可だけして表示判断は `updateNameTags` に委ねる
+  （ツアー明けに全員の名前が一瞬出るのを防ぐ）。
+- HUD メニューのボタンを2つに: 「選手名: オンボールのみ / 全員」「ベンチ名: 表示 / 非表示」。
+
+実測(headless 3分×2, `headless_sim/probe-nametag.ts`): 既定はドリブル中つねに**2人ちょうど**
+（オンボール+マーク以外が出たフレーム 0）、ベンチ 0人。全員表示ではコート10人+ベンチ16人。
+⚠️ 見た目は未確認。
+⚠️ 旧「選手名: 非表示」（全部隠す）の状態は無くなった。必要なら3状態（なし/オンボール/全員）に
+   できる。

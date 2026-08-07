@@ -190,7 +190,7 @@ Player.prototype.drawNameTag = function(): void {
     ctx.shadowBlur = 0;
 
     this.nameTex.update();
-    this.namePlane.isVisible = HUD_OPTS.showNames;   // コート上のネームタグを切り替える
+    // 表示するかどうかは updateNameTags(core/visuals) が毎フレーム決める
     this.gaugeDrawn = this.fatigue;
     this.gaugeRev = HUD_OPTS.rev;
 };
@@ -203,10 +203,12 @@ Player.prototype.applyUniform = function(): void {
     this.vox?.setKit({ top: u.top, bottom: u.bottom, shoes: u.shoes });
 };
 
-  /** HUDオプションに関わらず浮遊ネームタグを隠す/表示する — 試合前のイントロは
-   *  タグを自身のキャプションボードに置き換える。`true` で復元しても、ユーザーの
-   *  HUD_OPTS.showNames設定は尊重する。 */
+  /** この選手にネームタグを出してよいかどうか（イントロツアー中や審判・プレビュー用の
+   *  選手は常に非表示）。許可した後の実際の表示可否は updateNameTags が HUD 設定から決める。 */
 Player.prototype.setNameTagVisible = function(v: boolean): void {
-    this.namePlane.isVisible = v && HUD_OPTS.showNames;
+    this.nameTagAllowed = v;
+    // 隠すのは即座に（ツアー中は syncAll が走らない）。出す側は updateNameTags に任せる
+    // ＝ツアー明けに全員の名前が一瞬出てしまうのを防ぐ。
+    if (!v) this.namePlane.isVisible = false;
 };
 

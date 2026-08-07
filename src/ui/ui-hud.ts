@@ -54,10 +54,15 @@ UI.prototype.refreshStaminaBtn = function(): void {
       ? "体力: 名前の下" : "体力: アイコンの下";
 };
 
-  // コート上の名前タグのオン/オフ状態をトグルボタンに反映する。
+  // 名前タグ2種（コート上の範囲 / ベンチ）の状態をトグルボタンに反映する。
 UI.prototype.refreshNamesBtn = function(): void {
-    if (!this.namesBtn) return;
-    this.namesBtn.textContent = HUD_OPTS.showNames ? "選手名: 表示" : "選手名: 非表示";
+    if (this.namesBtn) {
+      this.namesBtn.textContent = HUD_OPTS.courtNames === "all"
+        ? "選手名: 全員" : "選手名: オンボールのみ";
+    }
+    if (this.benchNamesBtn) {
+      this.benchNamesBtn.textContent = HUD_OPTS.benchNames ? "ベンチ名: 表示" : "ベンチ名: 非表示";
+    }
 };
 
 

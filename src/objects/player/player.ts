@@ -284,7 +284,8 @@ export class Player {
   // ═════════ ネームタグ・背番号 ═════════
   // 名前が変わると再描画される浮遊ネームタグ
   nameTex!: DynamicTexture;
-  namePlane!: Mesh;   // 浮遊ネームタグ。HUD_OPTS.showNamesがオフのとき非表示
+  namePlane!: Mesh;   // 浮遊ネームタグ。表示可否は updateNameTags が毎フレーム決める
+  nameTagAllowed = true;   // false = 常に非表示（イントロツアー中・審判・プレビュー用の選手）
   jerseyText = "";    // 背番号に描く文字（審判は "R"）。ボクセルのデカールに焼く
   kitOverride: { top: RGB; bottom: RGB; shoes: RGB } | null = null;  // 審判など、チームキットを使わない者
   numberSide = 1;   // 現在どちらのローカルZサイドに番号を表示しているか

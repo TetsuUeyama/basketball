@@ -1,9 +1,10 @@
 // ビジュアル同期。毎フレーム、状態から各選手メッシュの位置・向き（updateFacing）と
 // ネット演出（tickSwish/swishNet）を反映する描画寄り処理。syncAll が全選手の sync を回す。
-import { TEAM_COLORS } from "../config";
+import { TEAM_COLORS, HUD_OPTS } from "../config";
 import { rate, dist2D, dist2DTo } from "../util";
 import { hoopIndex, NET_BOTTOM_Y } from "../objects/court";
 import { poseHands } from "./poses";
+import type { Player } from "../objects/player/player";
 import type { Game } from "../game";
 
   // `team` が今得点したリムで、ネットスウィッシュ＋リム／ボードのフラッシュを開始する。
@@ -276,11 +277,45 @@ export function updateFacing(game: Game, dt: number): void {
     }
   }
 
+  // ---- ネームタグの表示 ---------------------------------------------------
+
+  // いま「ボールを持っている（に向かっている）攻撃側の選手」。誰でもない局面（ルーズ・
+  // ティップオフ・デッドボール）は null。
+function ballFocus(game: Game): Player | null {
+    switch (game.ballMode) {
+      case "held":
+      case "inbound": return game.handler;
+      case "charge": return game.chargeShooter;
+      case "shot": return game.shooter;
+      case "pass": return game.passTo ?? game.passer;
+      case "freethrow": return game.ft.shooter ?? null;
+      default: return null;
+    }
+}
+
+  /** コート上はオンボール選手とそのマークだけ（HUD_OPTS.courtNames="all" なら全員）、
+   *  ベンチは HUD_OPTS.benchNames のとき表示。syncAll から毎フレーム。 */
+export function updateNameTags(game: Game): void {
+    const all = HUD_OPTS.courtNames === "all";
+    const focus = all ? null : ballFocus(game);
+    // マーク = マンツーマンの担当（同スロットの相手）。担当が取れなければ最寄りの守備者。
+    const mark = focus ? (game.onBallDefender(focus) ?? game.nearestDefender(focus)) : null;
+    for (let t = 0; t < 2; t++) {
+      for (const p of game.roster[t]) {
+        const show = game.onCourt(p)
+          ? (all || p === focus || p === mark)
+          : HUD_OPTS.benchNames;
+        p.namePlane.isVisible = show && p.nameTagAllowed;
+      }
+    }
+}
+
 export function syncAll(game: Game, ): void {
     // モーションクリップの選択に使う（ドリブル系 ⇄ 素の歩行/走行）
     const carrying = game.ballMode === "held" || game.ballMode === "charge";
     for (const p of game.players) p.holdingBall = carrying && p === game.handler;
     for (const p of game.players) p.sync();
+    updateNameTags(game);
     game.ball.sync();
     poseHands(game);
     if (game.handler && game.ballMode === "held") {

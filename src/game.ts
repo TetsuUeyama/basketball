@@ -41,7 +41,7 @@ import { updateCharge, updateShot } from "./move/action/shooting";
 import { updateLoose, stepBallFreeFlight } from "./core/looseball";
 import { updateLive } from "./move/action/liveball";
 import { endQuarter, updateFinale } from "./core/gameflow";
-import { syncAll, updateFacing, tickSwish, tickBallFx, flashBall } from "./core/visuals";
+import { syncAll, updateFacing, tickSwish, tickBallFx, flashBall, updateNameTags } from "./core/visuals";
 import { shotClockViolation } from "./core/deadball";
 import { resolveCollisions } from "./core/collision";
 import { benchSeat, seatOnBench, updateBenchCheer } from "./core/bench";
@@ -433,6 +433,7 @@ export class Game {
     refreshChoiceRanks(this, 0);
     refreshChoiceRanks(this, 1);
     this.tipoff.start();
+    updateNameTags(this);   // 試合前(update が走らない)でも設定どおりの表示にしておく
   }
 
   // 背番号は選手の背中、各チームが攻めるバスケットと反対側に付く。
