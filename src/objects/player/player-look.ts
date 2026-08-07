@@ -72,7 +72,7 @@ const HAIR_STYLE_OVERRIDE: Record<string, number> = {
   "ジェラード": 1,
   "ランパード": 1,
   "エトー": 1,
-  "ドログバ": 1,
+  "ドログバ": 0,   // 短髪（3Dは髪型No 32。丸刈りにすると hairNo が 0 に揃えられる）
   "アンリ": 1,
   "シャビ": 1,
   "シルバ": 1,
@@ -110,16 +110,27 @@ const HAIR_COLOR_OVERRIDE: Record<string, string> = {
   "クリスティアーノ・ロナウド": "#0e0e0e",  // 黒髪(金髪ではなく)
 };
 
+// 選手ごとの肌の色オーバーライド(名前 → SKIN_HEX の index)。名前ハッシュ任せだと
+// 実在選手と離れることがあるので、指定のある選手だけ手で固定する。
+const SKIN_OVERRIDE: Record<string, number> = {
+  "ドログバ": 6,   // #8a5a2b ブラウン
+};
+
+// 選手ごとの3D髪型Noのオーバーライド。scripts/assign-hair.mjs の均等配分より優先させたい人。
+const HAIR_NO_OVERRIDE: Record<string, number> = {
+  "ドログバ": 32,
+};
+
 /** 名前ハッシュから見た目の番号4つ組を導く（DB未登録の選手 / playerdb 生成用）。 */
 export function lookIndicesFromName(name: string): LookIdx {
   const h = hashName(name);
-  const skin = h % SKIN_HEX.length;
+  const skin = SKIN_OVERRIDE[name] ?? h % SKIN_HEX.length;
   const ov = HAIR_COLOR_OVERRIDE[name];
   const hairIdx = ov ? HAIR_HEX.indexOf(ov) : (h >>> 3) % HAIR_HEX.length;   // 符号なしシフト
   const hair = hairIdx < 0 ? 0 : hairIdx;
   const style = HAIR_STYLE_OVERRIDE[name] ?? pickWeightedStyle(h);   // 有名選手 → 似合うもの / それ以外 → 重み付きランダム
   // 3Dの髪型No: 1..140 を名前から一様に。丸刈りのアイコンだけは3Dも髪なしに揃える。
-  const hairNo = style === 1 ? 0 : 1 + ((h >>> 13) % 140);
+  const hairNo = HAIR_NO_OVERRIDE[name] ?? (style === 1 ? 0 : 1 + ((h >>> 13) % 140));
   return [skin, hair, style, hairNo];
 }
 

@@ -7,6 +7,8 @@
 //     均等配分する。1種あたり 26〜27人。
 //   - look が既に4要素でも作り直す（何度実行しても同じ結果）。
 // 個別に変えたいときはこのスクリプトを使わず identity.ts の4つ目の数字を直接書き換える。
+// ⚠️ このスクリプトは全員を配分し直すので、手で指定した髪型No は消える。指定のある選手は
+//    player-look.ts の HAIR_NO_OVERRIDE / SKIN_OVERRIDE を見て入れ直すこと。
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 
