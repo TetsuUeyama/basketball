@@ -6608,3 +6608,13 @@ Spine/Hips、ショーツは Hips/UpperLeg と別配合で動くので、静止�
 あわせて #526 の膝の符号を修正。`applyShootLoad` が
 `hip.rotation.x = dip*ns` / `knee.rotation.x = -dip*1.6*ns` と **numberSide を掛けている**のに、
 ファウルの膝曲げは掛けていなかった（向きによって逆に反っていたはず）。同じ規約へ揃えた。
+
+## 532. 肘が広がる修正が効いていなかった（当てる場所が違った）
+
+#531 は `gatherHold`（`ballMode === "charge"` の溜め）だけに `elbowOut` を効かせていたが、
+「シュートモーションに入る前に胸の前で構えている」形は `poses.ts` の `"held"` にある
+`holdBallHands(b)`（キャッチ/ギャザー/確保中）で、`gatherHold` を通らない。
+
+対処: `holdBallHands` 自体で `elbowOut` を 0.20 に絞る（`Math.min` なので 3P の 0.14 は
+そのまま活きる）。**キャッチ・確保・溜め・スローインの保持が全部ここを通る**ので、
+胸の前で抱える形は一律に肘が胴へ寄る。

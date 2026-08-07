@@ -28,8 +28,14 @@ Player.prototype.holdBallHands = function(world: Vector3, sep = 0.13): void {
     if (lx * Math.cos(th) - lz * Math.sin(th) < 0) { lx = -lx; lz = -lz; }
     const tR = new Vector3(world.x + lx * sep, world.y, world.z + lz * sep);
     const tL = new Vector3(world.x - lx * sep, world.y, world.z - lz * sep);
+    // ⚠️ 両手で胸の前に抱える形なので、肘は胴に寄せる。IK の既定の張り出し 0.70
+    //    (≒35°) は「遠くのボールへ手を伸ばす」用で、ここで使うと肘が横へ大きく開く。
+    //    キャッチ・確保・溜め・スローインの保持が全部ここを通る。
+    const keepOut = this.elbowOut;
+    this.elbowOut = Math.min(keepOut, 0.20);
     const okR = this.reachIK(this.armPivotR, this.elbowR, tR);
     const okL = this.reachIK(this.armPivotL, this.elbowL, tL);
+    this.elbowOut = keepOut;
     if (okR && okL) return;
     // 届かない（体から遠い / 近すぎる）→ 方向付け＋抱え込みのFK
     if (!okR) this.aimArm(this.armPivotR, tR);
