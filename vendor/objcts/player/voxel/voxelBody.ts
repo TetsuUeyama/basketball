@@ -842,6 +842,48 @@ export function clothWorldCells(variant: BodyVariant): Set<string> {
   return set;
 }
 
+// 高さ×方位（16分割）ごとの「服が届いている一番外の半径」。体の軸はその高さの服の重心。
+// ⚠️ 6方向の近傍だけで「覆われている」を判定すると、体の側面のように服が1方向にしか
+//    無いセルが取りこぼされる（実測: シャツを長くしたあと腰の地肌が1278頂点残った）。
+const CLOTH_OUTER = new Map<BodyVariant, Map<string, number>>();
+const OUTER_SECT = 16;
+function outerKey(cy: number, sect: number): string { return `${cy},${sect}`; }
+function sectorOf(cx: number, cz: number, ax: number, az: number): { s: number; r: number } | null {
+  const dx = cx - ax, dz = cz - az;
+  const r = Math.hypot(dx, dz);
+  if (r < 1e-6) return null;
+  return { s: Math.floor(((Math.atan2(dz, dx) + Math.PI) / (2 * Math.PI)) * OUTER_SECT) % OUTER_SECT, r };
+}
+function clothOuter(variant: BodyVariant): { outer: Map<string, number>; axis: Map<number, [number, number]> } {
+  const axis = new Map<number, [number, number]>();
+  const acc = new Map<number, [number, number, number]>();
+  const cells: [number, number, number][] = [];
+  for (const k of clothWorldCells(variant)) {
+    const [x, y, z] = k.split(",").map(Number);
+    cells.push([x, y, z]);
+    let a = acc.get(y);
+    if (!a) { a = [0, 0, 0]; acc.set(y, a); }
+    a[0] += x; a[1] += z; a[2]++;
+  }
+  for (const [y, a] of acc) axis.set(y, [a[0] / a[2], a[1] / a[2]]);
+  let outer = CLOTH_OUTER.get(variant);
+  if (!outer) {
+    outer = new Map();
+    for (const [x, y, z] of cells) {
+      const ax = axis.get(y);
+      if (!ax) continue;
+      const o = sectorOf(x, z, ax[0], ax[1]);
+      if (!o) continue;
+      for (const s of [(o.s + OUTER_SECT - 1) % OUTER_SECT, o.s, (o.s + 1) % OUTER_SECT]) {
+        const kk = outerKey(y, s);
+        if (!(outer.get(kk)! >= o.r)) outer.set(kk, o.r);
+      }
+    }
+    CLOTH_OUTER.set(variant, outer);
+  }
+  return { outer, axis };
+}
+
 const DIRS6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const UNCOVERED = new Map<string, number[][]>();
 /** その部位の、服に覆われていないボクセルだけ。 */
@@ -850,12 +892,20 @@ function uncoveredVoxels(variant: BodyVariant, part: string, pd: PartData): numb
   const hit = UNCOVERED.get(key);
   if (hit) return hit;
   const cloth = clothWorldCells(variant);
+  const { outer, axis } = clothOuter(variant);
   const q = pd.restRot ?? [0, 0, 0, 1];
   const out = pd.voxels.filter((v) => {
     const l = qrotArr(q, [(v[0] + 0.5) * VOX_SIZE, (v[1] + 0.5) * VOX_SIZE, (v[2] + 0.5) * VOX_SIZE]);
     const c = [0, 1, 2].map((i) => Math.round((pd.pivot[i] + l[i]) / VOX_SIZE - 0.5));
     // 6方向のうち3方向以上に、5セル以内で服があるものを「覆われている」とみなす。
     // ⚠️ 「服が隣接していたら消す」だと、袖口や襟の縁の地肌まで消えて穴が開く。
+    // 同じ高さ・同じ方位でこのセルより外に服があれば、その地肌は服の中＝見えない
+    const ax = axis.get(c[1]);
+    if (ax) {
+      const o = sectorOf(c[0], c[2], ax[0], ax[1]);
+      const r = o ? outer.get(outerKey(c[1], o.s)) : undefined;
+      if (o && r !== undefined && r > o.r + 0.5) return false;
+    }
     let n = 0;
     for (const d of DIRS6) {
       for (let k = 1; k <= 5; k++) {
