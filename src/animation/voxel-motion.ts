@@ -72,6 +72,9 @@ function pickJump(p: Player): string {
 function pickClip(p: Player): string {
   if (p.seated) return "";
   if (p.airborne) return p.jumpDur > 0 ? pickJump(p) : "";
+  // 着地の立て直し中はジャンプのクリップを続ける。⚠️ 滞空区間の最後で切ると、
+  // 反った空中姿勢のまま着地して見える（クリップの着地フレームが再生されない）。
+  if (p.landT > 0 && p.clipName.startsWith("jump")) return p.clipName;
   // 演出中（ファウル反応・守備成功・落胆）はクリップを当てない
   if (p.foulReactT > 0 || p.defWinT > 0) return "";
   // シュートの溜め: 手続き側が屈んだぶん root を下げているので、クリップで脚を
@@ -114,7 +117,18 @@ export function applyClipPose(vb: VoxelBody, p: Player, dt: number): boolean {
   // 歩調は stridePhase に**同期させる**（別々に進めると腕の振りと脚がずれる）。
   // 1周期 = 2π。速さは locomotion.ts の CADENCE ひとつで決まる。
   const dur = motionDuration(c);
-  const air = p.airborne ? airWindow(c) : null;
+  const win = airWindow(c);
+  const air = p.airborne ? win : null;
+  // 着地の立て直し: 滞空区間の終わり → クリップの最後（着地フレーム）を再生し、
+  // 反った空中姿勢から下半身・脚を進行方向へ伸ばして立て直す形へ戻す。
+  if (!air && win && p.landT > 0 && p.landDur > 0 && name.startsWith("jump")) {
+    const k = Math.min(1, Math.max(0, 1 - p.landT / p.landDur));
+    p.clipT = win[1] + (dur - win[1]) * k;
+    applyMotion(vb.rig, c, p.clipT, { rootMotion: "vertical", leanDeg: 0 });
+    syncVoxelHeadTorso(vb, p.numberSide, p.torsoNode.rotation.y, p.headNode.rotation.y, _spineQ, _headQ);
+    syncVoxelArms(vb, p, null);
+    return true;
+  }
   if (air) {
     // ジャンプ: 高さはゲームが持っている（jumpY）ので、クリップからは**姿勢だけ**もらう。
     // ⚠️ クリップの滞空区間をゲームの滞空へ重ねる（クリップ全体を割り当てると、
