@@ -100,24 +100,48 @@ Player.prototype.reachIK = function(pivot: TransformNode, elbow: TransformNode, 
  * ⚠️ 両手を棒のように伸ばすより片手の方が遠くへ届く（肩の送りぶん）。両手を揃えて
  * 真っ直ぐ突き出す形は、届かない距離ほど不自然に見える。
  */
+// 正対からさらにひねって先行する肩を前へ出す量(rad)
+const LEAD_TWIST = 0.30;
+// 反対の腕: 上腕の前後の振り / 肘の曲げ / 前腕を体の内側へ振る量
+const BACK_ARM_SWING = 0.30;
+const BACK_ARM_BEND = 1.05;
+const BACK_ARM_IN = 0.40;
+
 function stretchOne(p: Player, world: Vector3): void {
   const right = p.dribbleWithRight(world);           // ボールに近い側が先行する
   const lead = right ? p.armPivotR : p.armPivotL;
   const leadElbow = right ? p.elbowR : p.elbowL;
   const back = right ? p.armPivotL : p.armPivotR;
   const backElbow = right ? p.elbowL : p.elbowR;
-  // 上体をひねって肩を送る（可動域でキャップ）。真上のボールは向きが退化するので触らない。
+  // 上体をひねって**先行する肩を前へ送る**（可動域でキャップ）。真上のボールは向きが
+  // 退化するので触らない。
+  // ⚠️ 正対させるだけだと両肩が同じ位置に来る。正対から左右へ EXTRA ずらした2案のうち、
+  //    先行する肩のワールド位置が目標に近い方を採る（左右の符号は numberSide と
+  //    利き腕で変わるので、決め打ちせず実際の肩の位置で選ぶ）。
   const fx = world.x - p.pos.x, fz = world.z - p.pos.z;
   if (Math.abs(fx) + Math.abs(fz) > 0.05) {
-    const twist = clamp(normAngle(p.worldYawTo(world.x, world.z) - p.root.rotation.y),
-      JOINT.chestTwist.min, JOINT.chestTwist.max);
+    const base = normAngle(p.worldYawTo(world.x, world.z) - p.root.rotation.y);
+    const px = lead.position.x, pz = lead.position.z;
+    const shoulderGap = (tw: number): number => {
+      const th = p.root.rotation.y + tw;
+      const c = Math.cos(th), s = Math.sin(th);
+      const sx = p.root.position.x + (c * px + s * pz);
+      const sz = p.root.position.z + (-s * px + c * pz);
+      return Math.hypot(world.x - sx, world.z - sz);
+    };
+    const a = clamp(base + LEAD_TWIST, JOINT.chestTwist.min, JOINT.chestTwist.max);
+    const b = clamp(base - LEAD_TWIST, JOINT.chestTwist.min, JOINT.chestTwist.max);
+    const twist = shoulderGap(a) <= shoulderGap(b) ? a : b;
     p.torsoTwist = twist;
     p.torsoNode.rotation.y = twist;
   }
   p.aimArm(lead, world);
   p.bendElbow(leadElbow, 0);                          // 先行する腕だけ伸ばし切る
-  p.easeArm(back, Quaternion.RotationAxis(new Vector3(1, 0, 0), 0.35));
-  p.bendElbow(backElbow, 0.45);                       // 反対の腕は軽く曲げて引く
+  // 反対の腕: 肘を曲げて体へ寄せ、手のひらを胸の高さまで上げる（真下に垂らさない）
+  p.easeArm(back, Quaternion.RotationAxis(new Vector3(1, 0, 0), BACK_ARM_SWING));
+  p.bendElbow(backElbow, BACK_ARM_BEND);
+  // 前腕を体の内側へ振る。+rot.z は -Y を +X へ振るので、右腕(+X側)は負、左腕は正。
+  backElbow.rotation.z = (right ? 1 : -1) * BACK_ARM_IN;
 }
 
 /** ハイブリッド reach：手先が届く近い目標はIKで正確に乗せ、遠い目標は片手で伸ばし切る。
