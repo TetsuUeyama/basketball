@@ -3,7 +3,8 @@
 // FKは aimArm（腕を目標方向へ向ける＝パスコースなど遠い目標）、IKは手先を目標へ乗せる
 // （近いボール接触）。基本ムーバ(easeArm)経由なので腕の速度規則に従う。
 import { TransformNode, Vector3, Quaternion } from "@babylonjs/core";
-import { MOVE_RATE } from "../basic/joints";
+import { JOINT, MOVE_RATE } from "../basic/joints";
+import { clamp, normAngle } from "../../util";
 import { Player, aimDownTo } from "../../objects/player/player";
 
 declare module "../../objects/player/player" {
@@ -92,23 +93,51 @@ Player.prototype.reachIK = function(pivot: TransformNode, elbow: TransformNode, 
     return true;
 };
 
-/** ハイブリッド reach：手先が届く近い目標はIKで正確に乗せ、遠い目標はFKで方向付け（指す）。
- *  守備の手をボール/パスコース点へ向けるのに使う。 */
+/**
+ * 届かない目標への最大リーチ。**片手を目一杯**伸ばし、上体をひねって先行する肩を送る。
+ * 反対の腕は目標へ向けず、軽く曲げて引く（カウンターウェイト）。
+ *
+ * ⚠️ 両手を棒のように伸ばすより片手の方が遠くへ届く（肩の送りぶん）。両手を揃えて
+ * 真っ直ぐ突き出す形は、届かない距離ほど不自然に見える。
+ */
+function stretchOne(p: Player, world: Vector3): void {
+  const right = p.dribbleWithRight(world);           // ボールに近い側が先行する
+  const lead = right ? p.armPivotR : p.armPivotL;
+  const leadElbow = right ? p.elbowR : p.elbowL;
+  const back = right ? p.armPivotL : p.armPivotR;
+  const backElbow = right ? p.elbowL : p.elbowR;
+  // 上体をひねって肩を送る（可動域でキャップ）。真上のボールは向きが退化するので触らない。
+  const fx = world.x - p.pos.x, fz = world.z - p.pos.z;
+  if (Math.abs(fx) + Math.abs(fz) > 0.05) {
+    const twist = clamp(normAngle(p.worldYawTo(world.x, world.z) - p.root.rotation.y),
+      JOINT.chestTwist.min, JOINT.chestTwist.max);
+    p.torsoTwist = twist;
+    p.torsoNode.rotation.y = twist;
+  }
+  p.aimArm(lead, world);
+  p.bendElbow(leadElbow, 0);                          // 先行する腕だけ伸ばし切る
+  p.easeArm(back, Quaternion.RotationAxis(new Vector3(1, 0, 0), 0.35));
+  p.bendElbow(backElbow, 0.45);                       // 反対の腕は軽く曲げて引く
+}
+
+/** ハイブリッド reach：手先が届く近い目標はIKで正確に乗せ、遠い目標は片手で伸ばし切る。
+ *  守備の手をボール/パスコース点へ向けるのにも使う。 */
 Player.prototype.reachBall = function(world: Vector3, both = false): void {
     this.armRateCap = MOVE_RATE.reach;   // ボールへ素早く手を出す（掴む/弾く）
-    if (!this.reachIK(this.armPivotR, this.elbowR, world)) {
-      // 届かない → FK（腕を目標方向へ真っ直ぐ指す）
-      this.aimArm(this.armPivotR, world);
-      this.bendElbow(this.elbowR, 0);
-    }
     if (both) {
-      if (!this.reachIK(this.armPivotL, this.elbowL, world)) {
-        this.aimArm(this.armPivotL, world);
-        this.bendElbow(this.elbowL, 0);
-      }
-    } else {
-      this.easeArm(this.armPivotL, Quaternion.Identity());
-      this.bendElbow(this.elbowL, 0.28);
+      const okR = this.reachIK(this.armPivotR, this.elbowR, world);
+      const okL = this.reachIK(this.armPivotL, this.elbowL, world);
+      // 片手でも届かないなら両手構えは成り立たない → 片手の最大リーチへ切り替える
+      if (!okR || !okL) stretchOne(this, world);
+      this.armRateCap = 0;
+      return;
     }
+    if (!this.reachIK(this.armPivotR, this.elbowR, world)) {
+      stretchOne(this, world);
+      this.armRateCap = 0;
+      return;
+    }
+    this.easeArm(this.armPivotL, Quaternion.Identity());
+    this.bendElbow(this.elbowL, 0.28);
     this.armRateCap = 0;
 };

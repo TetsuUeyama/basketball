@@ -3,7 +3,7 @@
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
 import { MAX_PASS } from "../config";
-import { rate, dist2D, rand, chance } from "../util";
+import { rate, dist2D, dist2DTo, rand, chance } from "../util";
 import type { Game } from "../game";
 
   // ボールに触れている者の手をボールに当てる。それ以外は全員、腕を脇に下ろして休める。
@@ -113,7 +113,7 @@ export function poseHands(game: Game, ): void {
           for (const p of game.players) {
             if (p.airborne || p.foulReactT > 0) continue;
             if (p === game.shooter && p.coolT > 0) continue;   // フォロースルー中のシューターは除く
-            if (dist2D(p.pos, b) < 2.0) p.reachBall(rb, true);
+            if (dist2D(p.pos, b) < 2.0) p.reachBall(rb, twoHandGrab(game, p, rb));
           }
         }
         // はたき落とされたボールの地面での争奪: 奪う側は手を突き出し、失った者は取り戻そうとする
@@ -128,8 +128,8 @@ export function poseHands(game: Game, ): void {
         }
         break;
       case "tipoff":
-        game.teamPlayers(0)[4].reach(b, true);       // 両センターが両手でタップする
-        game.teamPlayers(1)[4].reach(b, true);
+        game.teamPlayers(0)[4].reach(b, twoHandGrab(game, game.teamPlayers(0)[4], b));   // 競っている間は片手でタップ
+        game.teamPlayers(1)[4].reach(b, twoHandGrab(game, game.teamPlayers(1)[4], b));
         break;
       // "pause": 誰もボールを保持していない — 腕は休めのまま
     }
@@ -172,10 +172,31 @@ export function poseHands(game: Game, ): void {
     }
   }
 
-  // 空中にいる選手は両手をボールへ向けて上げる（掴む・タップする・ブロックする）。
+/**
+ * ボールを取りに行くとき、両手で構えるか片手で伸ばすか。
+ *
+ * 片手 … 届かない（少しでも高く/遠くへ触りに行く）／競る相手の方が高い所へ手が届く
+ *        （両手で構えている余裕はなく、先に触った方が勝つ）
+ * 両手 … 自分の手の届く範囲にあり、競る相手が届かない（＝確保しにいける）
+ */
+export function twoHandGrab(game: Game, p: Player, b: Vector3): boolean {
+    if (b.y > p.reachTopY() - 0.05) return false;                       // 手より高い → 片手
+    if (dist2DTo(p.pos, b.x, b.z) > p.upperArmLen + p.foreArmLen) return false;   // 横に遠い → 片手
+    let rival: Player | null = null, rd = 1.8;
+    for (const o of game.players) {
+      if (o.team === p.team || o === p) continue;
+      const dd = dist2DTo(o.pos, b.x, b.z);
+      if (dd < rd) { rd = dd; rival = o; }
+    }
+    // 競り合う相手が同じ高さまで手を出せる → 両手で構えず片手で先に触る
+    if (rival && rival.reachTopY() >= p.reachTopY() - 0.05) return false;
+    return true;
+  }
+
+  // 空中にいる選手はボールへ手を上げる（掴む・タップする・ブロックする）。
 export function raiseAirborne(game: Game, b: Vector3, except: Player | null): void {
     for (const p of game.players) {
-      if (p !== except && p.airborne) p.reachBall(b, true);   // 近ければIKで手をボールへ、遠ければFKで方向付け
+      if (p !== except && p.airborne) p.reachBall(b, twoHandGrab(game, p, b));
     }
   }
 
