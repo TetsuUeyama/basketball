@@ -79,6 +79,15 @@ export function uniformData(v: BodyVariant): BodyData { return CLOTH[v]; }
 export const SHORTS_WIDTH_SCALE = 0.45;
 
 /**
+ * ショーツの胴回りを詰める層数（1層 = 0.02m を幅・奥行から引く＝片側1cm）。
+ * 元アセットの膝上は素体から片側9cm離れていて、見た目が大きい。
+ * ⚠️ **腰は素体との隙間が片側2cm しかない**（実測: 布0.280m / 素体0.240m）。
+ * 2層以上詰めると腰で服が素体へ食い込む。服に隠れる地肌は削ってあるので、
+ * 食い込むとそこに穴が開く。
+ */
+export const SHORTS_TRIM = 1;
+
+/**
  * 体の「太さ」の倍率（身長と幅指数から解いた値）。
  * ⚠️ スキニングは骨の**長さ**しか伝えないので、スキン付きの服はこれを別途掛けないと
  * 体が太くなったときに服からはみ出す（実測: 身長2.10mで素体の胴 0.400m に対し
@@ -107,15 +116,16 @@ export function uniformStretch(
   if (!out) {
     const cloth = CLOTH[v];
     const wide = role === VoxRole.Shorts ? SHORTS_WIDTH_SCALE : 1;
+    const trim = role === VoxRole.Shorts ? SHORTS_TRIM : 0;   // 胴回りだけ詰める（丈は触らない）
     const { stretch, kh, khead } = solveShape(v, height, widthExponent, DEFAULT_HEAD_EXPONENT);
     out = {};
     for (const part of BODY_PARTS) {
       const e = partExtent(v, part, cloth);
       const k = part === "head" ? khead : kh;
       out[part] = {
-        x: Math.round(e.x * (k - 1) * wide),
+        x: Math.round(e.x * (k - 1) * wide) - trim,
         y: SEGMENTS[part] ? stretch[part].y : Math.round(e.y * (k - 1)),
-        z: Math.round(e.z * (k - 1) * wide),
+        z: Math.round(e.z * (k - 1) * wide) - trim,
       };
     }
     UNIFORM_STRETCH.set(key, out);
