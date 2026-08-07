@@ -58,7 +58,16 @@ Player.prototype.foulReaction = function(kind: FoulKind, pushX = 0, pushZ = 0, s
       const step = knock ? (1.1 + s * 1.3) : (0.55 + s * 0.8);   // 数歩後ろへ
       this.foulStaggerX = this.foulPushX * step;
       this.foulStaggerZ = this.foulPushZ * step;
-    } else { this.foulStaggerX = this.foulStaggerZ = 0; }
+    } else {
+      // よろけない接触でも、足は必ず少し動かす。⚠️ 変位が 0 だと実速度も 0 になり、
+      // updateLegs が脚のサイクルを回さないので**棒立ちで足裏が貼り付いたまま**になる。
+      // 押された向きへ小さく踏み直してバランスを取る形にする。
+      const step = 0.20 + s * 0.28;
+      const dx = this.foulPushX || -this.numberSide * Math.sin(this.root.rotation.y);
+      const dz = this.foulPushZ || -this.numberSide * Math.cos(this.root.rotation.y);
+      this.foulStaggerX = dx * step;
+      this.foulStaggerZ = dz * step;
+    }
 };
 
 /** ファウルリアクションのポーズの1フレーム。runArmsの後に呼ぶ（動いている間は

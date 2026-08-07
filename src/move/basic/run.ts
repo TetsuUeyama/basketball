@@ -96,7 +96,9 @@ Player.prototype.tickCooldown = function(dt: number): void {
     this.foulReactT = Math.max(0, this.foulReactT - dt);
     // よろけ: 押された方向へのバランスを崩したよろめきステップ。リアクションの
     // 最初の部分で費やす（その後で持ち直す）
-    if (this.foulStumble && this.foulReactDur > 0) {
+    // ⚠️ よろけ(foulStumble)のときだけでなく、リアクション中は常に足を運ぶ。
+    //    変位が 0 だと実速度も 0 になり、脚のサイクルが回らず棒立ちになる。
+    if (this.foulReactT > 0 && this.foulReactDur > 0) {
       const remain = this.foulReactT / this.foulReactDur;      // 1 → 0
       const w = clamp((remain - 0.3) / 0.7, 0, 1);             // 最初の~70%で費やす（数歩）
       const r = w * 2.2 * dt;
