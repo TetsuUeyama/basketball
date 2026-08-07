@@ -1,7 +1,7 @@
 // ルーズボール物理。自由球の飛翔・反射、選手の追走、接触判定、確保(secureLoose)を集約。
 import { Player } from "../objects/player/player";
 import { COURT, SHOT_CLOCK, OOB_WALL } from "../config";
-import { rate, clamp, dist2DTo, moveToward2D, rand, nearestOf } from "../util";
+import { rate, clamp, chance, dist2DTo, moveToward2D, rand, nearestOf } from "../util";
 import { twoHandedCatch } from "../move/reaction/rebound";
 import { stepBallFlight } from "../move/basic/ball";
 import { flashBall } from "./visuals";
@@ -10,6 +10,8 @@ import type { Game } from "../game";
 // 空中リバウンド確保をプットバックにするリムまでの距離(m)。ダンク/レイアップが打てる至近のみ。
 // これを超える(距離が離れている)とプットバックせず、アウトレット/キック→着地して通常オフェンス。
 const PUTBACK_RANGE = 2.0;
+// ボールの重力(move/basic/ball.ts の BALL.gravity と同じ)。上げ直しの初速を解くのに使う。
+const BALL_G = 9.0;
 
   // ボール自由飛翔の1フレーム（物理は move/basic/ball.ts のベースに委譲）。
   // ルーズボールと得点後の落下演出で共有する。生きたルーズボール(reflect = false)は
@@ -174,8 +176,23 @@ export function contactLooseBall(game: Game, p: Player, contested: boolean): voi
       return;
     }
     if (game.looseTips >= 3) { secureLoose(game, p); return; }   // ピンボール化させない
-    // タップ: ボールを上へ、外へはじく
     game.looseTips++;
+    // 自分の真上へ上げ直す（タップ・トゥ・セルフ）。競り合いで弾かれ続けて
+    // ボールがすぐ場外へ流れるのを防ぐ。バランスと反応が高いほど成功しやすい。
+    const ctl = 0.20 + rate(p.attr.balance) * 0.40 + rate(p.attr.reaction) * 0.25
+      - (contested ? 0.30 : 0);
+    if (chance(clamp(ctl, 0.05, 0.85))) {
+      const vy = rand(3.6, 4.4);                       // 滞空 ~0.8-1.0秒（次のジャンプに間に合う）
+      const t = vy / BALL_G;                           // 頂点までの時間
+      // 頂点が自分の頭上へ来るように水平成分を決める（少し前へ落として取りやすく）
+      const b = game.ball.pos;
+      game.ball.vel.set((p.pos.x - b.x) / t, vy, (p.pos.z - b.z) / t);
+      p.touchCool = 0.40;                              // 上げた直後に自分で触り直さない
+      p.jump(0.35, 0.4);
+      game.setEvent("TIP", p.team);
+      return;
+    }
+    // 制御できなかった: 従来どおり上へ、外へはじく
     p.touchCool = 0.22;
     const a = rand(0, Math.PI * 2);
     game.ball.vel.set(Math.cos(a) * rand(0.6, 1.9), rand(2.4, 3.8), Math.sin(a) * rand(0.6, 1.9));
