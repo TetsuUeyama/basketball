@@ -59,7 +59,7 @@ Player.prototype.rebuildVoxel = function(): void {
 Player.prototype.syncVoxel = function(): void {
     const vb = this.vox;
     if (!vb) return;
-    if (applyClipPose(vb, this, this.lastDt)) return;
+    if (applyClipPose(vb, this, this.lastDt)) { vb.skel.prepare(); return; }
     syncVoxelPose(vb, {
       numberSide: this.numberSide,
       torsoYaw: this.torsoNode.rotation.y,
@@ -74,6 +74,7 @@ Player.prototype.syncVoxel = function(): void {
       hipL: this.hipL, hipR: this.hipR,
       kneeL: this.kneeL, kneeR: this.kneeR,
     });
+    vb.skel.prepare();   // ノードのリグ → スケルトン（服のスキニング）
 };
 
   /** このスロットを今占有する選手のために、見た目（肌/髪色・髪型）を再適用する。

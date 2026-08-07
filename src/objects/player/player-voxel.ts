@@ -11,12 +11,14 @@
 // 共役変換して左右の腕・脚を入れ替える。
 import {
   Scene, Mesh, TransformNode, Quaternion, Vector3, Color3, DynamicTexture, VertexData, StandardMaterial,
+  Skeleton, Bone, Matrix,
 } from "@babylonjs/core";
 import { buildRig, type RigHandle } from "@objcts/player/rig";
 import type { RestPose } from "@objcts/player/restPose";
 import type { StandardBoneName } from "@objcts/player/standardSkeleton";
 import {
   bodyRestPose, partStretch, buildPartMesh, buildUniformMesh, variantFor, bodyData,
+  uniformVoxels, uniformData, skinData,
   applyStretch, toVertexData, facePaint, hairVoxels, hairStyles, skinBaseColor, partRestRotation,
   PART_BONE, BODY_PARTS, VoxRole, VOX_SIZE,
   DEFAULT_WIDTH_EXPONENT, DEFAULT_HEAD_EXPONENT,
@@ -62,6 +64,95 @@ interface BoneMap {
   post: Quaternion;   // restRot(自分の部位)の逆
 }
 
+// ───────────────────────── スキニング ─────────────────────────
+//
+// 服は部位ごとの剛体ではなく、リグ全体に**スキンで**貼る。肩・股の境目で
+// 2本のボーンが混ざるので、腕を上げても袖ぐりが胴に取り残されない。
+// 姿勢は今までどおり TransformNode のリグが決め、Skeleton は linkTransformNode で
+// それに追従するだけ（アニメ側は一切変えない）。
+
+/** リグのノード階層をなぞる Skeleton。各ボーンはノードへリンクする。 */
+function buildSkeleton(scene: Scene, rig: RigHandle, name: string):
+    { skel: Skeleton; index: Map<string, number> } {
+  const skel = new Skeleton(`skel_${name}`, `skel_${name}`, scene);
+  const index = new Map<string, number>();
+  const made = new Map<string, Bone>();
+  const nodeBone = new Map<TransformNode, string>();
+  for (const b of rig.bones) { const n = rig.node(b); if (n) nodeBone.set(n, b); }
+  // 親ボーン = ノードの祖先をたどって最初に見つかるリグのボーン
+  const parentBoneOf = (b: string): string | null => {
+    let p = rig.node(b as StandardBoneName)?.parent as TransformNode | null;
+    while (p) {
+      const hit = nodeBone.get(p);
+      if (hit) return hit;
+      p = p.parent as TransformNode | null;
+    }
+    return null;
+  };
+  const make = (b: string): Bone | null => {
+    const hit = made.get(b);
+    if (hit) return hit;
+    const n = rig.node(b as StandardBoneName);
+    if (!n) return null;
+    const pb = parentBoneOf(b);
+    // ⚠️ バインド姿勢は「静止時のローカル位置・回転なし」。剛体で付けていたときの
+    //    「ボーンの位置 ＋ 部位の restRot」と同じ空間に合わせるため。
+    const bone = new Bone(b, skel, pb ? make(pb) : null,
+      Matrix.Translation(n.position.x, n.position.y, n.position.z));
+    bone.linkTransformNode(n);
+    made.set(b, bone);
+    index.set(b, bone.getIndex());
+    return bone;
+  };
+  for (const b of rig.bones) make(b);
+  return { skel, index };
+}
+
+/**
+ * 服の全部位を、静止姿勢のワールドへ並べた1枚のメッシュにまとめる。
+ * 部位ごとのボクセルは「骨が -Y」の骨ローカルなので、restRot で元の角度へ戻し、
+ * その骨の**静止位置**へ寄せる（＝剛体で骨に付けていたときと同じ置き方）。
+ */
+function mergeSkinnedCloth(
+  scene: Scene, variant: BodyVariant, height: number, we: number,
+  recolor: Recolor, skin: { table: number[]; remap: number[] }, rig: RigHandle,
+): Mesh | null {
+  const pal = uniformData(variant).palette;
+  const P: number[] = [], N: number[] = [], C: number[] = [], I: number[] = [];
+  const MI: number[] = [], MW: number[] = [];
+  const q = new Quaternion(), v = new Vector3();
+  for (const part of BODY_PARTS) {
+    const vox = uniformVoxels(variant, part, height, we);
+    if (!vox.length) continue;
+    const rest = rig.restPosition(PART_BONE[part] as StandardBoneName);
+    if (!rest) continue;
+    const vd = toVertexData(vox, pal, recolor, undefined, skin);
+    const pos = vd.positions as number[] | null;
+    if (!pos?.length) continue;
+    const nor = vd.normals as number[], col = vd.colors as number[], idx = vd.indices as number[];
+    const r = partRestRotation(part);
+    q.copyFromFloats(r[0], r[1], r[2], r[3]);
+    const base = P.length / 3;
+    for (let i = 0; i < pos.length; i += 3) {
+      v.copyFromFloats(pos[i], pos[i + 1], pos[i + 2]).applyRotationQuaternionInPlace(q);
+      P.push(v.x + rest.x, v.y + rest.y, v.z + rest.z);
+      v.copyFromFloats(nor[i], nor[i + 1], nor[i + 2]).applyRotationQuaternionInPlace(q);
+      N.push(v.x, v.y, v.z);
+    }
+    C.push(...col);
+    for (const n of idx) I.push(base + n);
+    MI.push(...(vd.matricesIndices as number[]));
+    MW.push(...(vd.matricesWeights as number[]));
+  }
+  if (!P.length) return null;
+  const out = new VertexData();
+  out.positions = P; out.normals = N; out.colors = C; out.indices = I;
+  out.matricesIndices = MI; out.matricesWeights = MW;
+  const m = new Mesh("voxClothProto", scene);
+  out.applyToMesh(m, false);
+  return m;
+}
+
 /** 影キャスターの登録先。scene-setup が差し込む（作り直しでも拾えるようにフックで持つ）。 */
 let shadowHook: ((meshes: Mesh[]) => void) | null = null;
 export function setVoxelShadowHook(f: ((meshes: Mesh[]) => void) | null): void { shadowHook = f; }
@@ -70,6 +161,8 @@ export interface VoxelBody {
   /** numberSide のヨーを持つ入れ物。Player.root の子。 */
   readonly root: TransformNode;
   readonly rig: RigHandle;
+  /** 服のスキニング用。ノードのリグに linkTransformNode で追従する。毎フレーム prepare()。 */
+  readonly skel: Skeleton;
   /** 体のメッシュ（素体＋ユニフォーム＋髪）。作り直しで中身が入れ替わる。 */
   readonly meshes: Mesh[];
   /** 影キャスターに登録するぶん。⚠️ 全部入れると4百万三角形をもう一度描くことになるので、
@@ -313,8 +406,17 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
     skin.push(m);
   }
 
+  // --- スケルトン（服のスキニング用。姿勢はノードのリグが決める） ---
+  const { skel, index: boneIndex } = buildSkeleton(scene, rig, o.name);
+
   // --- ユニフォーム（キット色は焼き込み。着替えは作り直し） ---
+  //
+  // 服は部位ごとに骨へ付けず、**静止姿勢のワールドへ並べた1枚のスキンメッシュ**にする。
+  // 剛体だと肩・股の継ぎ目で布が割れる（実測: 腕を前へ出すと袖ぐりの布508ボクセルが
+  // 胴に取り残された）。焼き込みのウェイトが無い体型ではこれまでどおり剛体で組む。
   let uniform: Mesh[] = [];
+  const sd = skinData(variant, true);
+  const skinned = sd.bones.length > 0 && sd.table.length > 0;
   const buildUniform = (kit: VoxelKit): void => {
     for (const m of uniform) m.dispose();
     uniform = [];
@@ -323,6 +425,19 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
       role === VoxRole.Jersey ? [kit.top.r, kit.top.g, kit.top.b]
         : role === VoxRole.Shorts ? [kit.bottom.r, kit.bottom.g, kit.bottom.b]
           : role === VoxRole.Shoes ? [kit.shoes.r, kit.shoes.g, kit.shoes.b] : null;
+    if (skinned) {
+      const remap = sd.bones.map((n) => boneIndex.get(n) ?? 0);
+      const m = instanceOf(scene, `us|${variant}|${Math.round(height * 100)}|${ck}`, `voxu_${o.name}`,
+        () => mergeSkinnedCloth(scene, variant, height, we, recolor, { table: sd.table, remap }, rig));
+      if (m) {
+        m.material = kitMat;
+        m.parent = rig.root;
+        m.skeleton = skel;
+        m.numBoneInfluencers = 4;
+        uniform.push(m);
+      }
+      return;
+    }
     for (const part of BODY_PARTS) {
       const s = st[part] ?? zero;
       const m = instanceOf(scene, `u|${variant}|${part}|${sig(s)}|${ck}`, `voxu_${part}_${o.name}`,
@@ -485,7 +600,7 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
   };
 
   const body: VoxelBody = {
-    root, rig, map, spineRest, hipsRest, meshes, shadowMeshes,
+    root, rig, skel, map, spineRest, hipsRest, meshes, shadowMeshes,
     variant, height,
     shoulder: { x: sh.x, y: sh.y, z: sh.z },
     hipY: hip.y,
@@ -509,6 +624,7 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
       hair?.dispose();
       numShell.dispose();
       numTex.dispose();
+      skel.dispose();
       rig.dispose();
       root.dispose();
     },

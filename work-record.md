@@ -6315,3 +6315,38 @@ Babylon の `Mesh.clone` は**元メッシュのシーン**に作られる。ボ
 実測: esbuild の metafile で依存を数えると **vendor/objcts から46ファイル・リポジトリ外の
 objcts 参照は0**。`npm run build` 成功（dist/assets/index-*.js 9.66MB / gzip 2.23MB）。
 オーサリングは従来どおり `../objcts` 側で行い、`node scripts/sync-objcts.mjs` で取り込む。
+
+## 516. シャツ・ズボンをスキニングで体に沿わせる
+
+服は部位ごとの剛体だったので、肩・股の継ぎ目で布が割れていた（#512 で実測: 腕を前へ出すと
+袖ぐりの布508ボクセルが Spine に取り残される）。元アセットには**per-voxel のウェイトが既にあり**
+（`jersey.weights.json` 191,930ボクセル/14ボーン/最大4本、`shorts.weights.json` 113,264/3ボーン）、
+`buildParts.mjs` が支配ボーン1本に潰していただけだった。
+
+### objcts 側
+- `voxel/tools/buildParts.mjs` … ウェイトを潰さず、ARP名→`arpToSegment`→`SEGMENT_TO_PART`→
+  ランタイムのボーンへ寄せ、3cmセルへの多数決の際に合算 → 上位4本・1/100刻みで正規化。
+  出力に `skinBones` / `skinWeights`（8個ずつ）を足し、ボクセルを `[x,y,z,色,ウェイトindex]` の5要素へ。
+  ⚠️ `VOX_SIZE=0.02` を付けて実行すること（既定は 0.01 で、既存データと別物になる）。
+- `voxel/voxelBody.ts` … `toVertexData` に `skin` を追加。面はグリーディに結合されるので
+  **頂点ごと**にその角へ接する最大8セルのウェイトを平均する（面単位だと1枚の面が肩から腰まで
+  またいで剛体になり、結合を切ると三角形が数倍になる）。`uniformVoxels` / `skinData` を追加。
+
+### basketball-sim 側
+- `player-voxel.ts` … `buildSkeleton` がリグのノード階層をなぞる Skeleton を作り、各ボーンを
+  `linkTransformNode` でノードへ繋ぐ。**アニメ側は一切変更なし**。
+  `mergeSkinnedCloth` が全部位の布を静止姿勢のワールドへ並べて1枚のメッシュにする。
+- `player-visual.ts` … 毎フレーム `skel.prepare()`。
+
+### 実測（身長1.95m・両腕を前へ水平＝チェストパスの形）
+| 帯 | 平均移動 |
+|---|---|
+| 胴の中心 | 0.002m |
+| **袖ぐり** | **0.055m**（剛体では 0.000m＝取り残されていた） |
+| 上腕の袖 | 0.252m |
+| 腰 | 0.000m |
+
+服のメッシュは13枚→**1枚**（39,772頂点 / 19,886三角形はそのまま）。焼き直しの再現性は
+torso 1897ボクセル・パレット96色が旧データと一致することで確認。`npm run build` 成功。
+
+⚠️ ブラウザでの目視は未了。素体（肌）は剛体のままなので、脇の下など服から出る部分の継ぎ目は残る。

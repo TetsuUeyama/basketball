@@ -516,8 +516,13 @@ export function applyStretch(voxels: number[][], s: PartStretch, ref: number[][]
 
 /** 占有(色付き)ボクセル → 露出面だけのメッシュ。同じ色・同じ向きの面を矩形へ結合する。 */
 /** @param groups 省略可。頂点ごとに「その面の色index」を書き出す（スキニングで面の所属を知るため）。 */
+/** スキニングの指定。table は buildParts が焼いた skinWeights（8個ずつ）、
+ *  remap は「焼いたボーンindex → 使う側のボーンindex」。 */
+export interface SkinBind { table: number[]; remap: number[] }
+
 export function toVertexData(
   voxels: number[][], palette: number[][], recolor: Recolor | null, groups?: number[],
+  skin?: SkinBind,
 ): VertexData {
   let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   for (const v of voxels) for (let d = 0; d < 3; d++) {
@@ -538,6 +543,41 @@ export function toVertexData(
     const c = recolor?.(p[3] as VoxRole, p[0] / 255, p[1] / 255, p[2] / 255);
     return c ?? [p[0] / 255, p[1] / 255, p[2] / 255];
   });
+
+  // --- スキニング: ボクセルの5番目 = ウェイト表のindex ---
+  // ⚠️ 面はグリーディに結合されるので、面ではなく**頂点ごと**に、その角に接する
+  //    最大8セルのウェイトを平均する。面単位にすると1枚の大きな面が肩から腰まで
+  //    またいで剛体になり、結合を切ると三角形が数倍に増える。
+  const wcell = skin ? new Int32Array(dims[0] * dims[1] * dims[2]).fill(-1) : null;
+  if (wcell) {
+    for (const v of voxels) {
+      wcell[((v[0] - lo[0]) * dims[1] + (v[1] - lo[1])) * dims[2] + (v[2] - lo[2])] = v[4] ?? -1;
+    }
+  }
+  const wAt = (x: number, y: number, z: number): number =>
+    x < 0 || y < 0 || z < 0 || x >= dims[0] || y >= dims[1] || z >= dims[2]
+      ? -1 : wcell![(x * dims[1] + y) * dims[2] + z];
+  const acc = new Map<number, number>();
+  const mIdx: number[] = [], mWgt: number[] = [];
+  /** 格子の角 (cx,cy,cz)（lo 相対）に接するセルのウェイトを平均して積む。 */
+  const pushWeights = (cx: number, cy: number, cz: number): void => {
+    acc.clear();
+    for (let dx = -1; dx <= 0; dx++) for (let dy = -1; dy <= 0; dy++) for (let dz = -1; dz <= 0; dz++) {
+      const wi = wAt(cx + dx, cy + dy, cz + dz);
+      if (wi < 0) continue;
+      for (let s = 0; s < 4; s++) {
+        const wt = skin!.table[wi * 8 + 4 + s];
+        if (wt > 0) {
+          const b = skin!.remap[skin!.table[wi * 8 + s]] ?? 0;
+          acc.set(b, (acc.get(b) ?? 0) + wt);
+        }
+      }
+    }
+    const top = [...acc].sort((a, b) => b[1] - a[1]).slice(0, 4);
+    const sum = top.reduce((t, e) => t + e[1], 0) || 1;
+    for (let s = 0; s < 4; s++) mIdx.push(top[s]?.[0] ?? 0);
+    for (let s = 0; s < 4; s++) mWgt.push(top[s] ? top[s][1] / sum : 0);
+  };
 
   const positions: number[] = [], normals: number[] = [], colors: number[] = [], indices: number[] = [];
   for (let d = 0; d < 3; d++) {
@@ -581,6 +621,14 @@ export function toVertexData(
             : [pt(Z, Z), pt(du, Z), pt(du, dw), pt(Z, dw)];
           const base = positions.length / 3;
           for (const v of corners) positions.push(v[0], v[1], v[2]);
+          if (skin) {
+            const cn = c > 0
+              ? [[Z, Z], [Z, dw], [du, dw], [du, Z]]
+              : [[Z, Z], [du, Z], [du, dw], [Z, dw]];
+            for (const [a, b] of cn) {
+              pushWeights(x[0] + a[0] + b[0], x[1] + a[1] + b[1], x[2] + a[2] + b[2]);
+            }
+          }
           const nrm = [0, 0, 0];
           nrm[d] = c > 0 ? 1 : -1;
           const col = rgb[Math.abs(c) - 1];
@@ -598,7 +646,33 @@ export function toVertexData(
   }
   const vd = new VertexData();
   vd.positions = positions; vd.normals = normals; vd.colors = colors; vd.indices = indices;
+  if (skin) { vd.matricesIndices = mIdx; vd.matricesWeights = mWgt; }
   return vd;
+}
+
+/**
+ * ユニフォームの部位ボクセル（伸縮を当てたあと）。メッシュにせず配列で返す。
+ * スキニングでは部位ごとにボーンへ付けず、静止姿勢のワールドへ並べて1つのメッシュに
+ * まとめるので、呼び出し側が座標変換する。
+ */
+export function uniformVoxels(
+  variant: BodyVariant, part: string, height: number, widthExponent: number,
+): number[][] {
+  const data = CLOTH[variant];
+  const pd = data.parts[part];
+  if (!pd || !pd.voxels.length) return [];
+  const ref = DATA[variant].parts[part]?.voxels;
+  const shorts: number[][] = [], rest: number[][] = [];
+  for (const v of pd.voxels) (data.palette[v[3]][3] === VoxRole.Shorts ? shorts : rest).push(v);
+  const sr = uniformStretch(variant, height, widthExponent)[part] ?? { x: 0, y: 0, z: 0 };
+  const ss = uniformStretch(variant, height, widthExponent, VoxRole.Shorts)[part] ?? { x: 0, y: 0, z: 0 };
+  return applyStretch(rest, sr, ref).concat(applyStretch(shorts, ss, ref));
+}
+
+/** 焼き込んだスキニングの表（ボーン名とウェイト）。 */
+export function skinData(variant: BodyVariant, cloth = true): { bones: string[]; table: number[] } {
+  const d = (cloth ? CLOTH : DATA)[variant] as unknown as { skinBones?: string[]; skinWeights?: number[] };
+  return { bones: d.skinBones ?? [], table: d.skinWeights ?? [] };
 }
 
 // ───────────────────────── プロトタイプ共有 ─────────────────────────
