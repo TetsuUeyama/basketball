@@ -128,8 +128,11 @@ export function poseHands(game: Game, ): void {
         }
         break;
       case "tipoff":
-        game.teamPlayers(0)[4].reach(b, twoHandGrab(game, game.teamPlayers(0)[4], b));   // 競っている間は片手でタップ
-        game.teamPlayers(1)[4].reach(b, twoHandGrab(game, game.teamPlayers(1)[4], b));
+        // ⚠️ 跳ぶ前に手を上げない。踏み切るまでは腕を下ろして構え（runArms が当てる）、
+        //    跳んでから片手/両手を決める。手は「跳び方」ではなく滞空中の選択。
+        for (const c of [game.teamPlayers(0)[4], game.teamPlayers(1)[4]]) {
+          if (c.airborne) c.reach(b, twoHandGrab(game, c, b));
+        }
         break;
       // "pause": 誰もボールを保持していない — 腕は休めのまま
     }
@@ -179,7 +182,19 @@ export function poseHands(game: Game, ): void {
  *        （両手で構えている余裕はなく、先に触った方が勝つ）
  * 両手 … 自分の手の届く範囲にあり、競る相手が届かない（＝確保しにいける）
  */
+// 空中で選んだ手の数を保持する。毎フレーム測り直すと、競り合う相手との高さ差が
+// 揺れて片手↔両手がちらつく。着地（非空中）で解除し、跳ぶたびに決め直す。
+const GRAB_LATCH = new WeakMap<Player, boolean>();
+
 export function twoHandGrab(game: Game, p: Player, b: Vector3): boolean {
+    if (!p.airborne) { GRAB_LATCH.delete(p); }
+    else if (GRAB_LATCH.get(p)) return true;   // 一度「両手で確保」に入ったら滞空中は保つ
+    const two = decideHands(game, p, b);
+    if (p.airborne && two) GRAB_LATCH.set(p, true);
+    return two;
+  }
+
+function decideHands(game: Game, p: Player, b: Vector3): boolean {
     if (b.y > p.reachTopY() - 0.05) return false;                       // 手より高い → 片手
     if (dist2DTo(p.pos, b.x, b.z) > p.upperArmLen + p.foreArmLen) return false;   // 横に遠い → 片手
     let rival: Player | null = null, rd = 1.8;
