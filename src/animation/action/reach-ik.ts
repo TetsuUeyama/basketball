@@ -11,8 +11,12 @@ declare module "../../objects/player/player" {
   interface Player {
     reachIK(pivot: TransformNode, elbow: TransformNode, world: Vector3): boolean;
     reachBall(world: Vector3, both?: boolean): void;
+    /** IK の肘の張り出し（tan の値。既定 0.70 ≒ 35°）。溜めの構えでは小さくして
+     *  肘を胴に寄せる。使う側は毎フレーム設定し直すこと（既定へは戻らない）。 */
+    elbowOut: number;
   }
 }
+Player.prototype.elbowOut = 0.70;
 
 // ベクトル v をクォータニオン q で回す（v' = q·v·q*）。Vector3/数値のみで実装。
 function rotQ(q: Quaternion, x: number, y: number, z: number): { x: number; y: number; z: number } {
@@ -82,7 +86,7 @@ Player.prototype.reachIK = function(pivot: TransformNode, elbow: TransformNode, 
     if (rz * this.numberSide > 0) tgt = new Vector3(world.x - s * rz, world.y, world.z - c * rz);
     // 肘は外へ張り出す（ローカル +X = armPivotR 側）。tan(35°) ぶん外へ寄せると、
     // 胸の前でボールを持っても肘が胴に入らない。
-    const outward = (pivot === this.armPivotR ? 1 : -1) * 0.70;
+    const outward = (pivot === this.armPivotR ? 1 : -1) * this.elbowOut;
     const r = armIKQuats(sx, sy, sz, th, tgt, this.upperArmLen, this.foreArmLen, outward);
     if (!r) return false;
     this.easeArm(pivot, r.qUp);

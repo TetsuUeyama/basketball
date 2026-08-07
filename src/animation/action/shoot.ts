@@ -5,10 +5,13 @@ import { Vector3 } from "@babylonjs/core";
 import { MOVE_RATE } from "../basic/joints";
 import { Player } from "../../objects/player/player";
 
+// 3P の溜めでボールを構える高さの上げ幅(m)。上腕が少し上がり肘が深く畳まれる。
+const DEEP_LIFT = 0.16;
+
 declare module "../../objects/player/player" {
   interface Player {
     shootArms(world: Vector3, guide: boolean): void;
-    gatherHold(world: Vector3): void;
+    gatherHold(world: Vector3, deep?: boolean): void;
     applyShootLoad(): void;
   }
 }
@@ -16,9 +19,16 @@ declare module "../../objects/player/player" {
 /** ギャザーの構え: おなかの前で両手にボールを抱える（両肘を程よく曲げる）。
  *  holdBallHands が両手をボールの両側に添える。リリースで shootArms が利き手の
  *  シュートフォームへ引き継ぐ。charge 中に毎フレーム呼ぶ。 */
-Player.prototype.gatherHold = function(world: Vector3): void {
+Player.prototype.gatherHold = function(world: Vector3, deep = false): void {
     this.armRateCap = MOVE_RATE.reach;
-    this.holdBallHands(world);   // 両手でボールをおなかの前に抱える（両肘を曲げて包む）
+    // ⚠️ 肘を胴に寄せる。既定の張り出し 0.70(≒35°) はボールへ手を伸ばす用で、
+    //    胸の前で構えると肘が横へ大きく開いてしまう。
+    this.elbowOut = deep ? 0.14 : 0.20;
+    // 3P の溜め: 上腕を少し上げ、肘を深く畳んでボールを高い位置で構える。
+    // 保持点を上げると IK が肩を上げ肘を畳むので、腕の形はここで決まる。
+    const w = deep ? new Vector3(world.x, world.y + DEEP_LIFT, world.z) : world;
+    this.holdBallHands(w, deep ? 0.10 : 0.13);   // 両手をボールの両側へ（deep は手幅も狭く）
+    this.elbowOut = 0.70;                        // 既定へ戻す（他のIK利用へ持ち越さない）
     this.armRateCap = 0;
 };
 

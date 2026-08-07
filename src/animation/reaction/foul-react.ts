@@ -120,10 +120,11 @@ Player.prototype.poseFoulReaction = function(): void {
     //    符号は Player.SIT_HIP(+ = 腿を前へ) / SIT_KNEE(- = 脛を後ろへ折る) に合わせる。
     if (this.foulStyle !== "and1") {
       const bend = (0.18 + this.foulStrength * 0.30) * env;
-      this.hipL.rotation.x += bend * 0.55;
-      this.hipR.rotation.x += bend * 0.55;
-      this.kneeL.rotation.x -= bend;
-      this.kneeR.rotation.x -= bend;
+      const ns = this.numberSide;   // 符号は applyShootLoad と同じ規約
+      this.hipL.rotation.x += bend * 0.55 * ns;
+      this.hipR.rotation.x += bend * 0.55 * ns;
+      this.kneeL.rotation.x -= bend * 1.6 * ns;
+      this.kneeR.rotation.x -= bend * 1.6 * ns;
     }
 
     // 上半身のひねり（下半身は root のまま＝体がねじれる）
