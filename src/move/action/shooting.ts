@@ -398,7 +398,7 @@ export function swatShot(game: Game, shooter: Player, blocker: Player): void {
     // 先に return した)ので、ここで設定する。coolT が立てば poseHands はリリースの形を保つ。
     shooter.coolT = 0.6 + rand(0.3, 0.6) * shooter.recoveryMult();
     // シューターは弾かれて軽くのけぞる（衝撃のみ、歩かない）
-    shooter.foulReaction("hurt", shooter.pos.x - blocker.pos.x, shooter.pos.z - blocker.pos.z, rand(0.3, 0.45));
+    shooter.foulReaction("shoot", shooter.pos.x - blocker.pos.x, shooter.pos.z - blocker.pos.z, rand(0.3, 0.45));
     shooter.foulStumble = false; shooter.foulStaggerX = shooter.foulStaggerZ = 0;
     blocker.defWin("block");                   // 着地したら誇らしげに拳を上げる
     game.goLoose(shooter.team, 2.6, { rebound: true, grabAfter: 0.6 });
@@ -427,7 +427,7 @@ export function tryShootingFoul(game: Game, h: Player, dDef: number, layup: bool
     const fpz = od ? h.pos.z - od.pos.z : 0;
     const fs = od ? clamp(0.3 + rate(od.attr.balance) * 0.4 + rate(od.attr.aggression) * 0.2
       - rate(h.attr.balance) * 0.35, 0.1, 1) : 0.5;
-    h.foulReaction("hurt", fpx, fpz, fs);   // デッドボールの間に接触を演出
+    h.foulReaction("shoot", fpx, fpz, fs);   // デッドボールの間に接触を演出
     game.setEvent("SHOOTING FOUL", h.team, 1.8);
     const count = game.shotPoints;
     // ファウルが伝わるよう間を置いてから、ラインへ

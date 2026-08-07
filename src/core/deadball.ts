@@ -17,7 +17,8 @@ export function defensiveFoul(game: Game, victim: Player, fouler?: Player): void
       strength = clamp(0.3 + rate(fouler.attr.balance) * 0.4 + rate(fouler.attr.aggression) * 0.2
         - rate(victim.attr.balance) * 0.35, 0.1, 1);
     }
-    victim.foulReaction("hurt", px, pz, strength);   // 接触でよろける
+    // 走り込んでいた最中なら、腕が体を横切る「ドライブで当てられた」形にする
+    victim.foulReaction(victim.curSpd > 2.5 ? "drive" : "hurt", px, pz, strength);
     game.setEvent("FOUL", victim.team);
     game.possession = victim.team;
     game.handler = null;
