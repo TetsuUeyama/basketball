@@ -41,7 +41,8 @@ export function armIKQuats(sx: number, sy: number, sz: number, th: number, world
     const wx = world.x - sx, wy = world.y - sy, wz = world.z - sz;
     const rx = c * wx - s * wz, ry = wy, rz = s * wx + c * wz;
     const d = Math.hypot(rx, ry, rz);
-    if (d >= (UP + FORE) * 0.99 || d < 1e-3) return null;
+    // 0.97 = 伸ばし切る手前で止める（1.0 に近づけると肘が一直線になって棒に見える）
+    if (d >= (UP + FORE) * 0.97 || d < 1e-3) return null;
     const ux = rx / d, uy = ry / d, uz = rz / d;
     // 肩角 α（上腕と reach 線の間）
     const alpha = Math.acos(Math.min(1, Math.max(-1, (UP * UP + d * d - FORE * FORE) / (2 * UP * d))));

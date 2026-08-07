@@ -37,10 +37,15 @@ Player.prototype.easeArm = function(pivot: TransformNode, target: Quaternion): v
   // 肘の曲げ: 前方（胸に向かって、-numberSide·Z）へ、腕/脚の規約に合わせる。
   // 前腕(肘)は上腕と同じレート（armRateCap、未指定は MOVE_RATE.arm）で曲げ目標へ
   // イーズする。
+// 肘の最小の曲げ(rad)。伸ばし切りでもこれだけは残す（約6°）。
+const MIN_ELBOW = 0.10;
+
 Player.prototype.bendElbow = function(node: TransformNode, amount: number): void {
     node.rotationQuaternion = null;   // IKで設定されたクォータニオンを解除しFK(rotation)へ戻す
     node.rotation.y = 0; node.rotation.z = 0;   // 前のポーズから残った抱え込み方向のヨーをクリア
-    const target = clampAngle(JOINT.elbow, amount * this.numberSide);   // 肘の可動域に収める
+    // ⚠️ 完全に伸ばし切らない。前腕と上腕が一直線だと棒に見えるので、どんな指定でも
+    //    最低 MIN_ELBOW だけは曲げておく。
+    const target = clampAngle(JOINT.elbow, Math.max(amount, MIN_ELBOW) * this.numberSide);
     const cap = this.armRateCap > 0 ? this.armRateCap : MOVE_RATE.arm;
     node.rotation.x = expEase(node.rotation.x, target, cap, this.lastDt);
 };
