@@ -97,22 +97,33 @@ Player.prototype.poseFoulReaction = function(): void {
       // 撃った直後に叩かれた: 撃った腕はフォロースルーの形のまま高く残り、
       // 反対の腕は外へ流れる。上体は後ろへ大きくのけぞる。
       this.setArmDir(up, sx * 0.35, 1, -0.25 * this.numberSide);
-      this.bendElbow(upElbow, 0.30 + env * 0.35);   // 叩かれて肘が折れる
+      this.bendElbow(upElbow, 0.45 + env * 0.50);   // 叩かれて肘が折れる
       this.setArmDir(low, -sx * 0.9, 0.15, 0.3);
-      this.bendElbow(lowElbow, 0.5);
+      this.bendElbow(lowElbow, 0.70);
     } else if (this.foulStyle === "drive") {
       // 走り込みで当てられた: 前の腕が体を横切り、後ろの腕は背中側へ流れる。
       this.setArmDir(up, sx * 0.5, 0.45, -0.7 * this.numberSide);
       this.bendElbow(upElbow, 0.95);
       this.setArmDir(low, -sx * 0.8, -0.35, 0.55 * this.numberSide);
-      this.bendElbow(lowElbow, 0.25);
+      this.bendElbow(lowElbow, 0.55);
     } else {
       // 一般の接触: 片腕は肘を畳んで庇い、もう片方はバランスを取って外へ。
       // ⚠️ 以前は両腕とも真っ直ぐ低く外へ出していて、どの接触でも同じ形に見えた。
       this.setArmDir(up, sx * 0.55, 0.5, -0.2 * this.numberSide);
       this.bendElbow(upElbow, 1.1);
       this.setArmDir(low, -sx * 1, -0.45, 0.25);
-      this.bendElbow(lowElbow, 0.2);
+      this.bendElbow(lowElbow, 0.50);
+    }
+
+    // 膝を折って衝撃を吸収する。⚠️ `updateLegs` の後に `poseHands` が走るので、
+    //    ここで**足し込む**と歩行サイクルを残したまま沈み込める。
+    //    符号は Player.SIT_HIP(+ = 腿を前へ) / SIT_KNEE(- = 脛を後ろへ折る) に合わせる。
+    if (this.foulStyle !== "and1") {
+      const bend = (0.18 + this.foulStrength * 0.30) * env;
+      this.hipL.rotation.x += bend * 0.55;
+      this.hipR.rotation.x += bend * 0.55;
+      this.kneeL.rotation.x -= bend;
+      this.kneeR.rotation.x -= bend;
     }
 
     // 上半身のひねり（下半身は root のまま＝体がねじれる）
