@@ -154,7 +154,7 @@ engine.runRenderLoop(() => {
     if (g) {
       if (intro!.active()) intro!.abort();   // ツアーの途中で試合前へ戻る: 中止してカメラを解放
       ui.update(g);
-      camera.update(acc, g.ball.pos.x, g.ball.pos.z, g.ball.pos.y, g.camFollowBall);
+      camera.update(acc, g.ball.pos.x, g.ball.pos.z, g.ball.pos.y, g.camFollowBall, g.attackGoalZ);
     }
     if (previewActive && previewScene) previewScene.render();
     else scene.render();
@@ -176,7 +176,7 @@ engine.runRenderLoop(() => {
     if (camTipArmT < 0) { if (g.mode !== "tipoff") camTipArmT = 0; }
     else { camTipArmT += dt; if (camTipArmT >= 1.0) { camera.orientBroadcast(); camTipDone = true; } }
   }
-  camera.update(dt, g.ball.pos.x, g.ball.pos.z, g.ball.pos.y, g.camFollowBall);
+  camera.update(dt, g.ball.pos.x, g.ball.pos.z, g.ball.pos.y, g.camFollowBall, g.attackGoalZ);
   // クラブウィザードのユニフォームプレビューが出ている間は、専用のプレビューシーン
   // (孤立した選手、コートなし)だけをレンダリングする。それ以外はメインシーン。
   if (previewActive && previewScene) previewScene.render();

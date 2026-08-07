@@ -1,5 +1,56 @@
-import { Scene, ArcRotateCamera, Vector3 } from "@babylonjs/core";
-import { lerp } from "./util";
+import { Scene, ArcRotateCamera, Camera, Vector3 } from "@babylonjs/core";
+import { lerp, clamp } from "./util";
+import { COURT } from "./config";
+
+// 攻めている方向への「先取り」。注視点をボールそのものでなく、ボールと攻めるリムの
+// 間の点に置く。残り距離に比例させるので、リムへ寄るほど先取りは自然に小さくなる。
+const LEAD_RATIO = 0.35;   // ボール→攻めるリムの何割まで先を見るか
+const LEAD_MAX = 4.5;      // 先取りの上限(m)。自陣深くからでも行き過ぎない
+const AIM_EDGE = 3.0;      // 注視点をベースラインからこれだけ内側に留める(m)
+
+// 先取りも追従の遅れも、ボールを画面の外へ出してはいけない。ボールを必ずこの割合
+// （画面の半分に対する比）の内側に保つ。1.0 = 画面の縁ちょうど。
+const KEEP_IN = 0.72;
+
+/**
+ * 注視点 t が原因でボールが画角から外れるなら、外れないところまで t をボール側へ戻す。
+ *
+ * ArcRotateCamera はカメラ位置 = 注視点 + radius·dir(alpha,beta) なので、注視点を
+ * 動かすとカメラごと平行移動する ＝ 画面上のボールの位置は「注視点からボールへの
+ * ベクトル」だけで決まる。そこでそのベクトルを k 倍（0..1）に縮め、ボールが
+ * 画角の内側 `keepIn` に入る最大の k を解く。ユーザーのドラッグ/ズーム
+ * (alpha/beta/radius)をそのまま使うので、寄っていても回していても外れない。
+ */
+export function fitTargetToBall(
+  cam: ArcRotateCamera, tx: number, ty: number, tz: number,
+  bx: number, by: number, bz: number, keepIn = KEEP_IN,
+): { x: number; y: number; z: number } {
+  const sb = Math.sin(cam.beta);
+  const aspect = cam.getEngine().getAspectRatio(cam);
+  if (Math.abs(sb) < 1e-3 || !(aspect > 0)) return { x: tx, y: ty, z: tz };
+  // 視線方向 f（注視点 → カメラ の逆）と、それに直交する画面の右/上。
+  // 符号（座標系の左右手）は結果に効かない — 絶対値しか使わないため。
+  const f = { x: -Math.cos(cam.alpha) * sb, y: -Math.cos(cam.beta), z: -Math.sin(cam.alpha) * sb };
+  const r = { x: f.z / sb, z: -f.x / sb };                              // cross((0,1,0), f) を正規化
+  const u = { x: f.y * r.z, y: f.z * r.x - f.x * r.z, z: -f.y * r.x };  // cross(f, r)
+  const th = Math.tan(cam.fov / 2);
+  const vertical = cam.fovMode === Camera.FOVMODE_VERTICAL_FIXED;
+  const halfW = (vertical ? th * aspect : th) * keepIn;
+  const halfH = (vertical ? th : th / aspect) * keepIn;
+  const dx = tx - bx, dy = ty - by, dz = tz - bz;
+  const af = dx * f.x + dy * f.y + dz * f.z;   // 奥行き方向のずれ
+  const ar = dx * r.x + dz * r.z;              // 画面の横方向のずれ
+  const au = dx * u.x + dy * u.y + dz * u.z;   // 画面の縦方向のずれ
+  // |k·a| / ((radius − k·af)·half) ≤ 1 を k について解く
+  const solve = (a: number, half: number): number => {
+    const den = Math.abs(a) + half * af;
+    return den > 1e-6 ? (half * cam.radius) / den : 1;
+  };
+  // ボールがカメラの手前(背面)へ回り込まないこと。上の式は radius − k·af > 0 が前提。
+  const kDepth = af > 1e-6 ? (cam.radius * 0.85) / af : 1;
+  const k = clamp(Math.min(solve(ar, halfW), solve(au, halfH), kDepth), 0, 1);
+  return k >= 1 ? { x: tx, y: ty, z: tz } : { x: bx + dx * k, y: by + dy * k, z: bz + dz * k };
+}
 
 // イントロで1人を撮る被写体（Player が満たす）。
 export type IntroSubject = { pos: { x: number; z: number }; team: number; faceDirWorld(): { x: number; z: number } };
@@ -142,7 +193,9 @@ export class BroadcastCamera {
   /** 自動アングル回転を取り消す(新しい試合の準備など)。 */
   cancelAutoAngle(): void { this.autoAngle = false; }
 
-  update(dt: number, ballX: number, ballZ: number, ballY = 1.2, followBall = false): void {
+  // goalZ = 攻撃側が攻めるリムの Z。注視点をその向きへ少し先取りさせる。
+  update(dt: number, ballX: number, ballZ: number, ballY = 1.2, followBall = false,
+         goalZ = 0): void {
     if (this.introMode) return;        // ツアーがカメラを支配
     if (this.showcase) return;         // ショーケースがカメラを支配
     // ティップオフ後の自動アングル: alpha/beta を目標へ緩やかに寄せ、着いたらユーザー操作へ返す
@@ -162,11 +215,18 @@ export class BroadcastCamera {
       this.targetZ = lerp(this.targetZ, ballZ, e);
       this.targetY = lerp(this.targetY, Math.min(1.2 + ballY * 0.35, 4.0), e);
     } else {
-      // 注視点をボールへ。ワイド維持のため中央寄りにバイアス
-      this.targetX = lerp(this.targetX, ballX * 0.5, Math.min(1, dt * 2));
-      this.targetZ = lerp(this.targetZ, ballZ * 0.85, Math.min(1, dt * 2));
+      // 注視点はボールそのものでなく、攻めている向きへ少し先。速攻ではその先の
+      // スペースが、ハーフコートではリム側が画に入る。
+      const lead = clamp((goalZ - ballZ) * LEAD_RATIO, -LEAD_MAX, LEAD_MAX);
+      const aimZ = clamp(ballZ + lead, -(COURT.halfL - AIM_EDGE), COURT.halfL - AIM_EDGE);
+      this.targetX = lerp(this.targetX, ballX * 0.5, Math.min(1, dt * 2));   // 奥行きは中央寄り
+      this.targetZ = lerp(this.targetZ, aimZ, Math.min(1, dt * 2));
       this.targetY = lerp(this.targetY, 1.2, Math.min(1, dt * 2));
     }
+    // 先取り・中央寄せ・追従の遅れのどれが原因でも、ボールを画面の外へ出さない。
+    // 平滑化した後に掛けるので、この保証は毎フレーム成り立つ。
+    const fit = fitTargetToBall(this.cam, this.targetX, this.targetY, this.targetZ, ballX, ballY, ballZ);
+    this.targetX = fit.x; this.targetY = fit.y; this.targetZ = fit.z;
     this.cam.target.set(this.targetX, this.targetY, this.targetZ);
   }
 }

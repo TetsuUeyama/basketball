@@ -221,6 +221,11 @@ export class Game {
   /** 得点時にスウィッシュできるよう、フープのネット/リムのメッシュを接続する。 */
   attachHoops(hoops: Hoops): void { this.hoops = hoops; }
 
+  /** いまの攻撃側が攻めるリムの Z。カメラが注視点を先取りするのに使う。 */
+  get attackGoalZ(): number {
+    return this.attackSign(this.possession) * RIM.z;
+  }
+
   /** カメラがボール自体を追うべき間 true(遠距離シュートの飛行+着弾後の一拍)。 */
   get camFollowBall(): boolean {
     return (this.ballMode === "shot" && this.longShot) || this.longShotHoldT > 0;
