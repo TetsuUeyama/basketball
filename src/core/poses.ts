@@ -113,7 +113,7 @@ export function poseHands(game: Game, ): void {
           for (const p of game.players) {
             if (p.airborne || p.foulReactT > 0) continue;
             if (p === game.shooter && p.coolT > 0) continue;   // フォロースルー中のシューターは除く
-            if (dist2D(p.pos, b) < 2.0) p.reachBall(rb, twoHandGrab(game, p, rb));
+            if (dist2D(p.pos, b) < 2.0) contestBall(game, p, rb);
           }
         }
         // はたき落とされたボールの地面での争奪: 奪う側は手を突き出し、失った者は取り戻そうとする
@@ -194,24 +194,62 @@ export function twoHandGrab(game: Game, p: Player, b: Vector3): boolean {
     return two;
   }
 
-function decideHands(game: Game, p: Player, b: Vector3): boolean {
-    if (b.y > p.reachTopY() - 0.05) return false;                       // 手より高い → 片手
-    if (dist2DTo(p.pos, b.x, b.z) > p.upperArmLen + p.foreArmLen) return false;   // 横に遠い → 片手
+/** ボールを競っている一番近い相手（1.8m以内）。 */
+export function rivalFor(game: Game, p: Player, b: Vector3): Player | null {
     let rival: Player | null = null, rd = 1.8;
     for (const o of game.players) {
       if (o.team === p.team || o === p) continue;
       const dd = dist2DTo(o.pos, b.x, b.z);
       if (dd < rd) { rd = dd; rival = o; }
     }
-    // 競り合う相手が同じ高さまで手を出せる → 両手で構えず片手で先に触る
-    if (rival && rival.reachTopY() >= p.reachTopY() - 0.05) return false;
+    return rival;
+  }
+
+/**
+ * 空いている腕で相手をブロックする（ボックスアウト）。伸ばす手と反対の腕を
+ * 相手の方向へ張り出し、手を出させない。強さ＝張り出しと伸ばし具合はボディバランス。
+ */
+export function armBar(p: Player, rival: Player, ball: Vector3): void {
+    const right = p.dribbleWithRight(ball);            // 伸ばす手（stretchOne と同じ選び方）
+    const off = right ? p.armPivotL : p.armPivotR;
+    const offElbow = right ? p.elbowL : p.elbowR;
+    const s = 0.45 + rate(p.attr.balance) * 0.55;      // ボディバランスで押しの強さ
+    // 相手の方向を root ローカルへ（reachIK と同じ変換）
+    const th = p.root.rotation.y + p.torsoTwist;
+    const c = Math.cos(th), sn = Math.sin(th);
+    const dx = rival.pos.x - p.pos.x, dz = rival.pos.z - p.pos.z;
+    const l = Math.hypot(dx, dz) || 1;
+    const lx = (c * dx - sn * dz) / l, lz = (sn * dx + c * dz) / l;
+    p.setArmDir(off, lx * s, 0.10 + s * 0.30, lz * s);
+    p.bendElbow(offElbow, 1.05 - s * 0.55);            // 強いほど伸ばして押し返す
+  }
+
+function decideHands(game: Game, p: Player, b: Vector3): boolean {
+    // ⚠️ 以前は「手の届く高さより上なら片手」にしていたが、リバウンドのボールは
+    //    ほぼ常に手より上にあるので**必ず片手**になっていた。明らかに届かない
+    //    ときだけ片手にする。
+    if (b.y > p.reachTopY() + 0.15) return false;                       // 明らかに届かない → 片手
+    if (dist2DTo(p.pos, b.x, b.z) > p.upperArmLen + p.foreArmLen) return false;   // 横に遠い → 片手
+    // 競り合う相手が同じ高さまで手を出せる → 両手で構えず片手で先に触る。
+    // 明らかに勝っている（12cm以上高く手が出る）なら両手で確保しにいく。
+    const rival = rivalFor(game, p, b);
+    if (rival && rival.reachTopY() > p.reachTopY() - 0.12) return false;
     return true;
+  }
+
+/** ボールへ手を出す。片手のときは空いた腕で相手をブロックする。 */
+export function contestBall(game: Game, p: Player, b: Vector3): void {
+    const two = twoHandGrab(game, p, b);
+    p.reachBall(b, two);
+    if (two) return;
+    const rival = rivalFor(game, p, b);
+    if (rival) armBar(p, rival, b);   // 空いた腕で相手を抑える
   }
 
   // 空中にいる選手はボールへ手を上げる（掴む・タップする・ブロックする）。
 export function raiseAirborne(game: Game, b: Vector3, except: Player | null): void {
     for (const p of game.players) {
-      if (p !== except && p.airborne) p.reachBall(b, twoHandGrab(game, p, b));
+      if (p !== except && p.airborne) contestBall(game, p, b);
     }
   }
 
