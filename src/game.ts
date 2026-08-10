@@ -25,9 +25,10 @@ import "./animation/reaction/defwin";
 import "./animation/reaction/dejected";
 import { makeHandlerRing, type Hoops } from "./objects/court";
 import {
-  COURT, RIM, PASS_SPEED, SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS, OOB_OUTSET, teamShort, } from "./config";
+  COURT, RIM, SHOT_CLOCK, SHOT_CLOCK_PARTIAL, QUARTER_TIME, QUARTERS, OOB_OUTSET, teamShort, } from "./config";
+import type { PassStyle } from "./config";
 import { rate, clamp, dist2D, moveToward2D, towardPoint, chance, rand } from "./util";
-import { reactionLag } from "./eval";
+import { reactionLag, passZip } from "./eval";
 import { FreeThrowSystem } from "./systems/freethrow";
 import { TipoffSystem } from "./systems/tipoff";
 import { InboundSystem, BALL_HOLD } from "./systems/inbound";
@@ -113,7 +114,7 @@ export class Game {
   passT = 0;
   passDur = 0;
   // パスの種類: chest=通常 / bounce=バウンドパス / jump=ジャンプパス
-  passStyle: "chest" | "bounce" | "jump" = "chest";
+  passStyle: PassStyle = "chest";
   // 片手で投げるパス(片手で確保したボールをそのまま放る)。ポーズが両手/片手を切り替える。
   passOneHand = false;
   // ジャンプパスのウィンドアップ: 滞空でこの時間だけ保持する
@@ -126,7 +127,8 @@ export class Game {
   // ターンパス完了のリリース中のみ true: 弧チェックはスキップ、安全ゲートはスキップしない。
   turnReleased = false;
   passer: Player | null = null;                         // 現在のパスを放った選手
-  passSteal: { def: Player; at: number } | null = null; // パス時に一度だけ決定
+  // パス時に一度だけ決定。reach = その地点で手がどれだけ届いたか(綺麗に奪えるかに効く)
+  passSteal: { def: Player; at: number; reach: number } | null = null;
   // ライン外へ逸れたパスを追う選手（move/action/save.ts）。この選手だけ clampCourt を
   // 素通しし、コートの外へ出られる。復帰しきる/時間切れで null に戻る。
   saveBy: Player | null = null;
@@ -723,6 +725,7 @@ export class Game {
   // target へのシュートに跳んで挑む。正対なら垂直ジャンプで最大の高さ、
   // 横にずれていれば斜めにランジ(高さを射程と引き換え)。
   contestLeap(d: Player, target: { x: number; z: number }, baseHeight: number, dur: number): void {
+    if (d.shovedT > 0) return;   // 押し込まれていて踏み切れない
     const gx = target.x - d.pos.x, gz = target.z - d.pos.z;
     const gap = Math.hypot(gx, gz);
     if (gap < 0.6) { d.jump(baseHeight, dur); return; }   // 既に正面 → 真上へ
@@ -916,7 +919,7 @@ export class Game {
     this.passer = inb;
     this.passT = 0;
     // P速度 がアウトレットの速さを決める。ロング はフラットで速く放つ
-    const spd = PASS_SPEED * (0.6 + rate(inb.attr.passSpd) * 0.95) * (inb.has("longThrow") ? 1.3 : 1);
+    const spd = passZip(inb) * (inb.has("longThrow") ? 1.3 : 1);
     this.passDur = Math.max(0.3, dist2D(inb.pos, r.pos) / spd);
     this.passSteal = null;                 // スローインはここでは奪われない
     this.ballMode = "pass";

@@ -2,7 +2,7 @@
 // （オンボール保持/ディナイ/コンテスト挙上/勝利セレブレーション）を決める描画寄り処理。
 import { Vector3 } from "@babylonjs/core";
 import { Player } from "../objects/player/player";
-import { MAX_PASS, THREE_DIST } from "../config";
+import { MAX_PASS } from "../config";
 import { rate, dist2D, dist2DTo, rand, chance } from "../util";
 import type { Game } from "../game";
 
@@ -72,11 +72,8 @@ export function poseHands(game: Game, ): void {
         break;
       }
       case "charge":
-        // 3P はより深い溜め（肘を畳み上腕を上げる）。距離でスリーかどうかを見る。
-        if (game.shooter) {
-          const rimF = game.attackFloor(game.shooter.team);
-          game.shooter.gatherHold(b, dist2D(game.shooter.pos, rimF) >= THREE_DIST - 0.3);
-        }
+        // 3P はより深い溜め（肘を畳み上腕を上げる）。判定は setChargeBall の gatherDeep。
+        if (game.shooter) game.shooter.gatherHold(b, game.shooter.gatherDeep);
         raiseAirborne(game, b, game.shooter);         // 早く跳んだ守備者は上がっている
         break;
       case "inbound":

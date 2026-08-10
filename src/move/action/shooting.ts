@@ -74,6 +74,7 @@ export function setChargeBall(game: Game, h: Player): void {
     h.shootLoadTarget = p;
     const rim = game.attackFloor(h.team);
     const fx = rim.x - h.pos.x, fz = rim.z - h.pos.z, fl = Math.hypot(fx, fz) || 1;
+    h.gatherDeep = fl >= THREE_DIST - 0.3;         // 3P の溜め（腕・脚とも深い構え）
     // おなかの少し前で両手に抱える。リリースで releaseShot が頭上へ持ち上げる。
     const front = 0.24;                            // おなかの少し前
     const y = SHOT_GATHER_Y - 0.12 + p * 0.05;     // おなか〜みぞおちの高さ(≈1.08→1.13)

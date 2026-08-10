@@ -35,7 +35,7 @@ Player.prototype.resetPose = function(): void {
   this.flinchPitch = 0; this.flinchRoll = 0;
   this.foulStumble = false; this.foulStaggerX = 0; this.foulStaggerZ = 0;
   // 1対1/ドリブル/クールダウンの一時状態
-  this.beatenT = 0; this.powerT = 0; this.jukeT = 0; this.stalledT = 0;
+  this.beatenT = 0; this.powerT = 0; this.jukeT = 0; this.stalledT = 0; this.shovedT = 0;
   this.plantT = 0; this.rootT = 0; this.reactT = 0; this.coolT = 0; this.gatherT = 0;
   this.pickupT = 0; this.quickT = 0; this.baitT = 0; this.wallT = 0;
   this.reboundGo = false; this.reboundPutback = false; this.grabTwoHand = true;
@@ -44,6 +44,7 @@ Player.prototype.resetPose = function(): void {
   this.cutting = false; this.screening = false; this.benchClapT = 0;
   this.shakeOpenT = 0; this.shakeT = 0;
   this.shootLoad = 0; this.shootLoadTarget = 0;   // シュート溜めの前傾/沈み込み
+  this.gatherDeep = false;
   this.frontRunT = 0;                              // スローイン後の前進
   // アクション3段階
   this.actKind = ""; this.actPhase = ""; this.actT = 0; this.actFired = false;

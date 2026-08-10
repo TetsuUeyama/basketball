@@ -82,6 +82,7 @@ Player.prototype.tickCooldown = function(dt: number): void {
   if (this.gatherT > 0) this.gatherT = Math.max(0, this.gatherT - dt);
   if (this.pickupT > 0) this.pickupT = Math.max(0, this.pickupT - dt);
   if (this.postT > 0) this.postT = Math.max(0, this.postT - dt);
+  if (this.shovedT > 0) this.shovedT = Math.max(0, this.shovedT - dt);
   if (this.plantT > 0) this.plantT = Math.max(0, this.plantT - dt);
   if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
   if (this.rootT > 0) this.rootT = Math.max(0, this.rootT - dt);
@@ -115,6 +116,7 @@ Player.prototype.tickCooldown = function(dt: number): void {
  */
 Player.prototype.accelSpeed = function(dt: number, mult = 1): number {
   if (this.rootT > 0) return 0;   // 完全硬直中（着地/切り返し/急停止の直後）は動けない
+  if (this.shovedT > 0) return 0; // 押し込まれ中は土台が無い（押される方向へ流されるだけ）
   // バランスの回復（パス/シュート後）や着地からまだ落ち着いていない状態では足は
   // ほとんど動けない。動き直しのプラント（激しいカット後）も再プッシュをスロットルする。
   // 着地: 最初の一歩は鈍い(0.35×)が、硬直が抜けるにつれて全速へ徐々に戻る。

@@ -97,6 +97,8 @@ export class Player {
   // 設定、それ以外は0へ戻り「一気に伸び上がる」。sync が applyShootLoad で姿勢に反映。
   shootLoad = 0;
   shootLoadTarget = 0;
+  // 溜めているのが3Pか（setChargeBall が毎フレーム設定）。腕は深く畳み、脚は前へ深く倒す。
+  gatherDeep = false;
   // 床のルーズボールをすくい上げる姿勢の深さ(0..1)。liveball の pickup が毎フレーム
   // 設定し、それ以外は0へ戻る（＝立ち上がる）。sync が applyScoopLoad で姿勢に反映。
   scoopLoad = 0;
@@ -180,6 +182,9 @@ export class Player {
   beatenT = 0;     // オフェンス: (スピードによる)抜き去りバーストの残り時間
   powerT = 0;      // オフェンス: 相手を押し込むパワードライブの残り時間
   stalledT = 0;    // オフェンス: ハンドラーが壁にされて(封じられて)引き戻される時間
+  // 守備: 押し込みドリブルで押されている残り時間。土台を失っているので自分では動けず、
+  // スティールもコンテストもできない(powerShove が張り、tickCooldown が減算)。
+  shovedT = 0;
   jukeT = 0;       // オフェンス: ドリブルムーブ（ステップイン/サイドステップ/ステップバック）実行中
   comboN = 0;      // オフェンス: 現在の揺さぶりコンボで既に仕掛けたシェイクの数
   lastFakeDir = 0; // オフェンス: 直前のフェイクが見せたサイド。コンボが交互になるように

@@ -8,6 +8,12 @@ import { Player } from "../../objects/player/player";
 // 3P の溜めでボールを構える高さの上げ幅(m)。上腕が少し上がり肘が深く畳まれる。
 const DEEP_LIFT = 0.16;
 
+// 溜めの姿勢の角度(rad, shootLoad=1 のとき)。lean=上半身の前傾、thigh=腿を前へ倒す角、
+// shin=脛を後ろへ折り返す角。thigh を深く・lean を浅くするほど腰で「く」の字になる。
+const POSE = { lean: 0.30, thigh: 0.55, shin: 0.33 };
+// 3P: 下半身を前斜めへ深く倒し、上半身はほぼ起こす。
+const POSE_3P = { lean: 0.08, thigh: 0.70, shin: 0.30 };
+
 declare module "../../objects/player/player" {
   interface Player {
     shootArms(world: Vector3, guide: boolean): void;
@@ -33,26 +39,30 @@ Player.prototype.gatherHold = function(world: Vector3, deep = false): void {
 };
 
 /** シュートの溜めの姿勢: 前傾（腰ヒンジ）＋沈み込み（体を下げ足を縮める）を
- *  shootLoad(0..1) の深さで適用する。リリースで shootLoad が0へ戻ると自動で
+ *  shootLoad(0..1) の深さで適用する。3P(gatherDeep) は下半身を前斜めに深く倒し、
+ *  上半身を起こして腰で「く」の字を作る。リリースで shootLoad が0へ戻ると自動で
  *  直立に伸び上がる。sync() から毎フレーム呼ぶ。 */
 Player.prototype.applyShootLoad = function(): void {
     const L = this.shootLoad;
+    const F = this.gatherDeep ? POSE_3P : POSE;
     this.hingePosed = true;   // 胴の腰ヒンジを当てた（sync が戻さないように）
     // 前傾: 胸を腰の切れ目でヒンジさせて前へ倒す（脚・腰は垂直のまま）。dejected と同規約。
-    const Pt = -this.numberSide * 0.30 * L;           // 前傾角（フルで約17°）
+    const Pt = -this.numberSide * F.lean * L;
     const cut = Player.WAIST_HINGE;
     this.torsoNode.rotation.x = Pt;                   // 上半身: 前傾
     this.torsoNode.position.set(0, cut * (1 - Math.cos(Pt)), -cut * Math.sin(Pt));
     // 前傾しても顔はゴール方向（水平）へ。頭のピッチで胴の前傾を打ち消す。
     this.headPitch = -Pt;
-    // 沈み込み: 股関節と膝を曲げて屈む。root は床のアンカーなので、脚が縮んだぶんだけ
-    // 下げないと足が床から浮く（縮み量は腿・脛の投影長から出す）。
-    const dip = L * 0.55;                             // 曲げ角(rad)。フルで約31°
+    // 下半身: 腿を前へ倒し(a)、脛を後ろへ折り返す(b)。腰は root の真上に残るので、
+    // 倒すほど膝と足が前へ出て腰との折れ目が深くなる。
+    const a = F.thigh * L;                            // 腿のワールド前傾角
+    const b = -F.shin * L;                            // 脛のワールド角（負＝後ろへ）
     const ns = this.numberSide;
-    this.hipL.rotation.x = this.hipR.rotation.x = dip * ns;
-    this.kneeL.rotation.x = this.kneeR.rotation.x = -dip * 1.6 * ns;
+    this.hipL.rotation.x = this.hipR.rotation.x = a * ns;
+    this.kneeL.rotation.x = this.kneeR.rotation.x = (b - a) * ns;
+    // root は床のアンカーなので、脚が縮んだぶんだけ下げないと足が床から浮く。
     const leg = (this.vox ? this.vox.hipY : Player.HIP_Y) / 2;   // 腿 ≒ 脛
-    this.root.position.y -= 2 * leg - leg * (Math.cos(dip) + Math.cos(0.6 * dip));
+    this.root.position.y -= 2 * leg - leg * (Math.cos(a) + Math.cos(b));
 };
 
 /** 利き手を `world`（ボール→リム）へ伸ばして放つ。guide=true はギャザー/リリース中で

@@ -162,12 +162,23 @@ export function powerShove(game: Game, h: Player, dt: number): void {
     const dm = game.onBallDefender(h);
     const { ux, uz } = dirTo2D(h.pos.x, h.pos.z, h.driveTarget.x, h.driveTarget.z);
     if (dm && dist2D(h.pos, dm.pos) < 1.15) {
-      const edge = rate(h.attr.balance) - rate(dm.attr.balance) + (h.has("post") ? 0.12 : 0);
-      if (edge > 0) {
-        const push = (0.3 + edge * 2.4) * dt;            // パワー差が大きいほど速く押し戻す
+      // ボディバランス差が押し込み速度を決める。実分布では差が±0.11しかないのでゲインを掛ける
+      // (差なし=拮抗してほぼ動かない / 差0.11=約0.8m/s)。負なら逆に押し返される。
+      const edge = (rate(h.attr.balance) - rate(dm.attr.balance)) * 7.0
+        + (h.has("post") ? 0.25 : 0);
+      const push = clamp(edge, -0.4, 1.2) * dt;
+      if (push > 0) {
         dm.pos.x += ux * push; dm.pos.z += uz * push;
         game.clampCourt(dm.pos);
-        dm.lean = clamp(dm.lean - edge * 0.6 * dt * 6, -1, 1);   // 体勢を起こされる
+        // 押されている側は土台を失う: 反応も踏ん張りもできず、押される方向に流されるだけ。
+        // 崩れている長さも力の差で決まる — 踏ん張れる守備者ほど一瞬で立て直す。
+        dm.shovedT = Math.max(dm.shovedT, clamp(0.10 + edge * 0.35, 0.06, 0.45));
+        dm.leanAxisX = ux; dm.leanAxisZ = uz;
+        dm.lean = clamp(dm.lean + edge * dt * 3, -1, 1);   // 押される方向へ体が反る
+      } else {
+        // 守備が上回る: 守備者は踏ん張り、押し返されるのはハンドラーの方(リムから遠ざかる)。
+        h.pos.x += ux * push; h.pos.z += uz * push;
+        game.clampCourt(h.pos);
       }
     }
     // 空いた手のボールへ、担当以外が寄って突く
@@ -787,8 +798,11 @@ export function driveDecision(game: Game, h: Player): void {
     const helpers = game.defendersWithin(h, 2.4) - 1;
     const powerSafe = helpers <= 0
       || chance(clamp(rate(h.attr.handling) * 1.2 - helpers * 0.4, 0, 0.95));
+    // ゴール下ほど、そして体の強い選手ほど押し込みを選ぶ(押し切ってイージーシュートにする)。
+    const dRim = dist2D(h.pos, game.attackFloor(h.team));
+    const rimPull = clamp((7.0 - dRim) / 5.0, 0, 1) * rate(h.attr.balance);
     const usePower = powerSafe && h.comboN === 0 && chance(clamp(0.62 + (ownPower - ownSpeed) * 0.6
-      + (powerEdge - speedEdge) * 0.5, 0.08, 0.92));   // コンボ途中はドリブルを続ける
+      + (powerEdge - speedEdge) * 0.5 + rimPull * 0.55, 0.08, 0.96));   // コンボ途中はドリブルを続ける
 
     if (usePower) {
       // POWER: 守備者に肩を入れる。力比べに勝てば相手をリムまで押し戻し、

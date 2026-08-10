@@ -2,6 +2,7 @@
 // などを算出する。ゲーム状態を持たず入力は全て引数で受け取る純粋関数。
 import { Player } from "./objects/player/player";
 import { RIM, THREE_DIST, BURST_SPEED } from "./config";
+import type { PassStyle } from "./config";
 import { rate, clamp, rand } from "./util";
 
 // L速度(3P射程)の基準点: 75 → 3Pライン、95 → センターライン（これが上限）。
@@ -55,6 +56,41 @@ export function shootRangeOf(p: Player): number {
   const r = SHOOT_ARC + (p.attr.threeRange - 75)
     * (SHOOT_HALF - SHOOT_ARC) / 20;   // 75→ライン, 95→ハーフ, 線形
   return clamp(r, 4.5, SHOOT_HALF) + (p.has("range") ? 1.0 : 0);
+}
+
+// P速度 → パスの球速(m/s)。10で6.0(山なり)、71(平均)で10.3、100で20.15。
+// 指数カーブなのは、選手データが65..85に密集していて線形では差が出ないため
+// (実在帯で9.1→14.0m/s = 53%差)。全パス経路がこの1関数を通る。
+export function passZip(p: Player): number {
+  return 6 + 14.15 * Math.pow(rate(p.attr.passSpd), 3.5);
+}
+
+// パスのリリース高さ(m)。オーバーヘッドは頭上、ジャンプパスは守備の頭上。
+export function passReleaseY(style: PassStyle): number {
+  return style === "overhead" ? 2.15 : style === "jump" ? 2.0 : 1.1;
+}
+
+// パス軌道の高さ(m)。k=0(リリース)..1(キャッチ)。判定と描画が同じ式を使うための単一ソース。
+export function passHeightAt(style: PassStyle, k: number, fromY: number, endY: number): number {
+  if (style === "bounce") {
+    const kb = 0.58;   // 手元→床(58%)→受け手の手元 のV字
+    return k < kb
+      ? fromY + (0.12 - fromY) * (k / kb)
+      : 0.12 + (clamp(endY, 0.7, 0.95) - 0.12) * ((k - kb) / (1 - kb));
+  }
+  const arc = style === "chest" ? 0.4 : 0.25;   // 高いリリースは山を低くして高さを保つ
+  return fromY + (endY - fromY) * k + Math.sin(k * Math.PI) * arc;
+}
+
+// この守備者がその高さのボールに手を出せるか(0=届かない .. 1=真芯)。
+// 床すれすれ(0.25m未満)と立位リーチ超は触れない。腰から頭までが楽な帯で、
+// その下(かがんで下ろす=バウンズ)と上(伸び上がる=オーバーヘッド)は届きにくい。
+export function reachFactor(d: Player, y: number): number {
+  const lo = 0.25, easyLo = 0.8, easyHi = d.height * 1.05, maxHi = d.height * 1.33;
+  if (y < lo || y > maxHi) return 0;
+  if (y < easyLo) return clamp(0.15 + ((y - lo) / (easyLo - lo)) * 0.45, 0.15, 0.6);
+  if (y <= easyHi) return 1;
+  return clamp(1 - (y - easyHi) / (maxHi - easyHi), 0.15, 1);
 }
 
 // 快適射程を超えた距離から打つのに必要な溜め(秒): shootRangeOf を超えるほど長くなる。

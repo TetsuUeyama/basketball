@@ -1,10 +1,11 @@
 // パス処理（受け手選択・投球・飛行/受球）。Option B: 状態は Game(=GameState)が持ち、
 // ここは game を受け取る関数群。パスのリスク/インターセプト計算は resolution/pass-risk。
 import { Player } from "../../objects/player/player";
-import { COURT, PASS_SPEED, MAX_PASS, SHOT_CLOCK } from "../../config";
+import { COURT, MAX_PASS, SHOT_CLOCK, PASS_STYLE, PASS_ONE_HAND, PASS_AIRBORNE, PASS_ZIP_MIN } from "../../config";
+import type { PassStyle } from "../../config";
 import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../../util";
-import { twWeight, effShootRange, reactionLag, shotThreat } from "../../eval";
-import { laneVetoed, passRisk, evalInterception, longBallRead } from "../reaction/pass-risk";
+import { twWeight, effShootRange, reactionLag, shotThreat, passZip, passReleaseY, passHeightAt } from "../../eval";
+import { laneVetoed, bestPassStyle, passRisk, evalInterception, longBallRead } from "../reaction/pass-risk";
 import { runDefenseDuringDeadish } from "../../ai/defense";
 import { updateOffBallMotion, bestOpenSpot } from "../../ai/offball";
 import { backcourtViolation } from "../../core/deadball";
@@ -98,16 +99,23 @@ export function pass(game: Game, h: Player): boolean {
 // 指定の受け手へ投げる(一般の読みと、より良い得点機会へのスイング判断の双方から使う)。
 export function passToReceiver(
   game: Game, h: Player, target: Player, force = false,
-  style: "chest" | "bounce" | "jump" = "chest",
+  style: PassStyle = "chest",
 ): boolean {
+  const dRaw = dist2D(h.pos, target.pos);
+  // 投げ方の選択(既定のチェスト指定のときだけ): レーン守備の手をどう外すかで選ぶ。
+  // バウンズは手の下、オーバーヘッドは指先の上。バウンズ/ジャンプの明示指定は尊重する。
+  if (style === "chest") style = bestPassStyle(game.oppTeam(h), h, target).style;
   game.passStyle = style;
   game.noLookPass = false;
-  // 片手で確保したボールは、収まる前(pickup中)ならそのまま片手で放る。
-  game.passOneHand = h.pickupT > 0 && !h.grabTwoHand;
+  // 片手投げ: 確保が収まる前(pickup中)、または至近で圧を受けた近距離。体重は乗らないが
+  // ワインドアップが要らないので素早く出せる。
+  game.passOneHand = (h.pickupT > 0 && !h.grabTwoHand)
+    || (dRaw <= 4.5 && game.nearestDefenderDist(h) < 1.2);
   // パスアーク: 両手パスは上半身の前〜横(±90°)からのみ出る。後方の相手へはまずピボット
   // (短いワインドアップ)。ノールック(outside)は例外。強制フィード/ワインドアップ中はスキップ。
   // 空中(リバウンド確保からのアウトレット)はピボットできないのでそのまま振り抜く。
-  if (!force && !game.turnReleased && !game.pendingPassTo && !h.airborne) {
+  // 片手は体を作らずに放れるのでピボット不要。
+  if (!force && !game.turnReleased && !game.pendingPassTo && !h.airborne && !game.passOneHand) {
     const rel = h.relativeChestAngle(target.pos.x, target.pos.z);
     if (Math.abs(rel) > Math.PI / 2) {
       if (h.has("outside")) {
@@ -122,9 +130,12 @@ export function passToReceiver(
     }
   }
   // ボールは受け手へホーミングするので、重要なのはキャッチ点までの距離。走る受け手を
-  // 速度でリード。P速度が球威を決める(0.6×..1.55×)。
-  const zip0 = PASS_SPEED * (0.6 + rate(h.attr.passSpd) * 0.95);
-  const d0 = dist2D(h.pos, target.pos);
+  // 速度でリード。球威は P速度 × 種別 × 片手 × 空中。
+  const sm = PASS_STYLE[style];
+  const zipMul = sm.zip * (game.passOneHand ? PASS_ONE_HAND.zip : 1) * (h.airborne ? PASS_AIRBORNE.zip : 1);
+  const missMul = sm.miss * (game.passOneHand ? PASS_ONE_HAND.miss : 1) * (h.airborne ? PASS_AIRBORNE.miss : 1);
+  const zip0 = Math.max(PASS_ZIP_MIN, passZip(h) * zipMul);
+  const d0 = dRaw;
   const lead = d0 / zip0;                              // 第一次の飛行時間
   // コート外を狙わない: サイドラインを走る受け手はライン沿いにリード
   const cx = clamp(target.pos.x + target.velX * lead, -(COURT.halfW - 0.35), COURT.halfW - 0.35);
@@ -138,7 +149,7 @@ export function passToReceiver(
   // 全パス共通の最終安全ゲート: レーン守備/高リスク/ダブルチームへは投げない(唯一の
   // チョークポイント)。本当のリムカッター(ギブ&ゴー)のみ例外。
   if (!force && game.shotClock > 2
-      && (laneVetoed(game.oppTeam(h), h, target)
+      && (laneVetoed(game.oppTeam(h), h, target, style)
         || passRisk(game.oppTeam(h), h, target) > 0.3
         || (!target.cutting && game.nearestDefenderDist(target) < 1.0)
         || (!target.cutting && (doubleTeamed(game, target) || target.trappedT > 0)))) {
@@ -148,7 +159,7 @@ export function passToReceiver(
   // リリース高さ: 通常はチェスト、ジャンプパスは守備の頭上。ただし確保したボールがまだ
   // 手元へ収まっていない(空中/pickup中)ジャンプパスは、今ボールがある高さから放つ
   // — 掴んだ位置から上下へワープさせない。
-  let fromY = style === "jump" ? 2.0 : 1.1;
+  let fromY = passReleaseY(style);
   if (style === "jump" && (h.airborne || h.pickupT > 0)) fromY = Math.max(1.1, game.ball.pos.y);
   game.passFrom.set(h.pos.x, fromY, h.pos.z);
   game.passCatch.set(cx, 1.1, cz);   // 固定リード点へ飛ぶ → 一定速
@@ -156,14 +167,13 @@ export function passToReceiver(
   game.passer = h;
   game.passT = 0;
   const fade = d > 12 ? clamp(1 - (d - 12) * 0.05, 0.85, 1) : 1;
-  game.passDur = Math.max(0.22, d / (zip0 * fade));
-  if (style === "bounce") game.passDur *= 1.3;   // 床バウンドが勢いを削ぐ
+  game.passDur = Math.max(0.15, d / (zip0 * fade));
   // パス品質: P精度が高いほど胸元へジャスト(常にブレ幅あり)。ロングは収まりにくい。
-  game.passQ = clamp(0.18 + rate(h.attr.passAcc) * 0.72 + rand(-0.28, 0.28)
-    - Math.max(0, d - 9) * 0.03, 0, 1);
+  game.passQ = clamp((0.18 + rate(h.attr.passAcc) * 0.72 + rand(-0.28, 0.28)
+    - Math.max(0, d - 9) * 0.03) / missMul, 0, 1);
   // P精度 = 実際にどこへ落ちるか(メートル)。低精度は明確に散らす(~0.2m..~1.6m)。
   const acc = rate(h.attr.passAcc);
-  game.passMiss = clamp(((1 - acc) * 3.0 + Math.max(0, d - 9) * 0.06) * rand(0.65, 1.2), 0, 3.3);
+  game.passMiss = clamp(((1 - acc) * 3.0 + Math.max(0, d - 9) * 0.06) * rand(0.65, 1.2) * missMul, 0, 3.3);
   const ang = rand(0, Math.PI * 2);
   game.passCatch.set(cx + Math.cos(ang) * game.passMiss, 1.1, cz + Math.sin(ang) * game.passMiss);
   game.passMissY = rand(-1, 1) * game.passMiss * 0.55;   // 高い/低い配球も
@@ -241,31 +251,23 @@ export function updatePass(game: Game, dt: number): void {
   const k = Math.min(1, game.passT / game.passDur);
   const a = game.passFrom, b = game.passCatch;   // 固定リード点 → 一定速
   const endY = 1.0 + game.passMissY;             // オフパスは高い/低いへも
-  if (game.passStyle === "bounce") {
-    // バウンドパス: 手元→床(58%)→受け手の手元(相手の手の下をくぐるV字)
-    const kb = 0.58;
-    const y = k < kb
-      ? a.y + (0.12 - a.y) * (k / kb)
-      : 0.12 + (Math.max(0.7, Math.min(endY, 0.95)) - 0.12) * ((k - kb) / (1 - kb));
-    game.ball.pos.set(a.x + (b.x - a.x) * k, y, a.z + (b.z - a.z) * k);
-  } else {
-    // chest 従来 / jump は高いリリース(a.y=2.0)から胸へ
-    const arc = game.passStyle === "jump" ? 0.25 : 0.4;
-    game.ball.pos.set(
-      a.x + (b.x - a.x) * k,
-      (a.y + (endY - a.y) * k) + Math.sin(k * Math.PI) * arc,
-      a.z + (b.z - a.z) * k,
-    );
-  }
+  // 高さは passHeightAt が単一ソース(カット判定も同じ式を見る)
+  game.ball.pos.set(
+    a.x + (b.x - a.x) * k,
+    passHeightAt(game.passStyle, k, a.y, endY),
+    a.z + (b.z - a.z) * k,
+  );
 
   // インターセプト: パス時に一度決定、ボールが守備者の点に達したら発火。名手は綺麗に、
   // それ以外は指先だけで弾く。
   if (game.passSteal && k >= game.passSteal.at) {
     const d = game.passSteal.def;
+    const reach = game.passSteal.reach;   // 指先でやっと届いた球は綺麗に奪えない
     game.passSteal = null;
     flashBall(game, "intercept", d.team);   // カットした側の色（綺麗に奪う/弾くの両方）
     const offense = game.possession;
-    const catchP = 0.4 + rate(d.attr.reaction) * 0.45 + (d.has("interceptor") ? 0.15 : 0);
+    const catchP = (0.4 + rate(d.attr.reaction) * 0.45 + (d.has("interceptor") ? 0.15 : 0))
+      * (0.5 + 0.5 * reach);
     if (chance(clamp(catchP, 0.2, 0.95))) {
       d.stats.stl++;
       if (game.passer) game.passer.stats.tov++;

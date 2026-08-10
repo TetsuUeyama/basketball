@@ -100,7 +100,7 @@ export function defendOnBall(game: Game, dt: number, d: Player, man: Player, pro
   }
 
   // 早仕掛けのギャンブル: 射程で構えるシューターに攻撃的守備が先に跳ぶ。
-  if (!d.airborne && d.landT <= 0
+  if (!d.airborne && d.landT <= 0 && d.shovedT <= 0
       && man.beatenT <= 0 && man.powerT <= 0 && man.jukeT <= 0
       && dist2D(d.pos, man.pos) < 1.7
       && dist2D(man.pos, protect) <= effShootRange(man) + 0.3) {
@@ -218,7 +218,7 @@ export function runDefense(game: Game, dt: number): void {
         if (gap < reach && !man.airborne) { game.steal(d); return; }
         d.reactT = Math.max(d.reactT, 0.3);   // 空振り: 踏み込んだ分の隙
       }
-      if (gap < reach) {
+      if (gap < reach && d.shovedT <= 0) {           // 押し込まれ中は手を出せない
         const close = 1 - gap / reach;               // 密着1、端0
         const stl = defHands(d);
         const resist = ballSecurity(man);
