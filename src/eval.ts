@@ -58,11 +58,11 @@ export function shootRangeOf(p: Player): number {
   return clamp(r, 4.5, SHOOT_HALF) + (p.has("range") ? 1.0 : 0);
 }
 
-// P速度 → パスの球速(m/s)。10で6.0(山なり)、71(平均)で10.3、100で20.15。
-// 指数カーブなのは、選手データが65..85に密集していて線形では差が出ないため
-// (実在帯で9.1→14.0m/s = 53%差)。全パス経路がこの1関数を通る。
+// P速度 → パスの球速(m/s)。実在帯の両端を基準に取り、65(DB最低)で12.0、95(DB最高)で
+// 20.15。72(中央値)は13.6、10で6.1(山なり)。指数カーブなのは、選手データが65..85に
+// 密集していて線形では差が出ないため。全パス経路がこの1関数を通る。
 export function passZip(p: Player): number {
-  return 6 + 14.15 * Math.pow(rate(p.attr.passSpd), 3.5);
+  return 6 + 15.89 * Math.pow(rate(p.attr.passSpd), 2.26);
 }
 
 // パスのリリース高さ(m)。オーバーヘッドは頭上、ジャンプパスは守備の頭上。

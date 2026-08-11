@@ -61,7 +61,7 @@ export const INBOUNDS_INSET = 1.0; // コート内に収める際のラインか
 // ボールの反射壁／OOB確定の位置（コートラインから外側へ。黒いエプロン(+3m)の外）。
 // OOBになってもこの距離まではボールが軌道のまま外へ飛び、そこで壁/スローインになる。
 export const OOB_WALL = 3.2;
-// パスの球速は P速度から eval.ts passZip() が決める(6..20.15 m/s)。
+// パスの球速は P速度から eval.ts passZip() が決める(実在帯 65..95 で 12.0..20.15 m/s)。
 // 種別と投げ方でそこから増減する。チェスト・両手・地上が基準(1.0)。
 export type PassStyle = "chest" | "overhead" | "bounce" | "jump";
 export const PASS_STYLE: Record<PassStyle, { zip: number; miss: number }> = {
@@ -72,7 +72,7 @@ export const PASS_STYLE: Record<PassStyle, { zip: number; miss: number }> = {
 };
 export const PASS_ONE_HAND = { zip: 0.82, miss: 1.45 };   // 体重が乗らない。代わりにピボット不要
 export const PASS_AIRBORNE = { zip: 0.85, miss: 1.35 };   // 踏ん張れない
-export const PASS_ZIP_MIN = 4.5;   // 倍率を掛け合わせても遅くなりすぎない下限(m/s)
+export const PASS_ZIP_MIN = 6.0;   // 倍率を掛け合わせても遅くなりすぎない下限(m/s)
 export const LANE_W = 1.1;        // 守備がパスレーンを脅かす横方向の距離(m)
 // 手のひら当たり判定モデル: 守備のリーチ半径を(守備−オフェンス)でスケール。false で
 // 旧来の固定距離モデルへ。スティール/コンテスト/ブロックの確率ゲートに使う。

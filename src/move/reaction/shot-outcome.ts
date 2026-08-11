@@ -35,7 +35,9 @@ export function jumpShotMakeProbability(
   // お膳立て: 良いパスからオープンで受けた膳立て
   if (h.setupT > 0) p += h.setupBonus;
   // コンテスト — S威力は接触を突いて打つ。1対1シュート特化は単独守備をほぼ感じない。
-  let contestScale = 1 - rate(h.attr.shotStrength) * 0.78;
+  // 係数0.45: S威力の実分布は68..97(中央74)なので、0.78ではスケールが0.24..0.47まで
+  // 縮んでコンテストがほぼ効かなくなっていた。
+  let contestScale = 1 - rate(h.attr.shotStrength) * 0.45;
   if (h.has("isoShooter") && ctx.helpCount <= 1) contestScale *= 0.6;
   // クローズアウトの質は位置＋体格で決まる（速い外守備は飛んでくる、遅いビッグは遅れる）。
   const cn = ctx.nearestDef;
@@ -47,7 +49,7 @@ export function jumpShotMakeProbability(
   // (今までは水平距離だけでコンテストを測っていた — 跳んだ手のコンテストを make% に反映)
   if (cn && cn.airborne && dDef < cReach + 0.4) {
     const inFace = clamp(1 - dDef / (cReach + 0.4), 0, 1);   // 0(離れ)..1(目の前)
-    p -= inFace * 0.2 * contestScale;
+    p -= inFace * 0.35 * contestScale;
   }
   // 体勢の崩れ（移動しながらの射撃）— S技術がメカニクスを保つ
   if (h.beatenT > 0 || h.curSpd > h.runSpeed * 0.55) {

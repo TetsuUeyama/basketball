@@ -187,8 +187,12 @@ export function releaseShot(game: Game, h: Player, dHoop: number, dDef: number, 
 
     // make% は効果層(resolution/shot-outcome)へ分離。ここでは文脈(最寄り守備者・
     // ヘルプ人数・クラッチ・ブザー・手のひら判定)を渡して確率だけ受け取り、抽選する。
-    const p = jumpShotMakeProbability(h, dHoop, dDef, {
-      nearestDef: game.nearestDefender(h),
+    // コンテストの間合いはリリース時の実距離で測る。引数の dDef は決断時に凍結された
+    // 値なので、溜め中に詰めてきた/跳んだ守備者を取りこぼす。
+    const cn = game.nearestDefender(h);
+    const dDefLive = cn ? dist2D(h.pos, cn.pos) : dDef;
+    const p = jumpShotMakeProbability(h, dHoop, dDefLive, {
+      nearestDef: cn,
       helpCount: game.defendersWithin(h, 2.4),
       clutch: game.clutchFactor(h),
       prepShort, prepExtra,
