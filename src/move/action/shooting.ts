@@ -28,7 +28,7 @@ function jumperType(dHoop: number): ShotType {
 
 // 種別ごとの実行パラメータ。apex(弾道頂点m)/dur(飛翔s)は far(=THREE_DIST からの
 // 超過m、ミドル/リムは0)で可変。
-const SHOT_PARAMS: Record<ShotType, {
+export const SHOT_PARAMS: Record<ShotType, {
   points: number;                                   // 得点
   liveLabel: string | null;                         // 発動時の即時バナー（ジャンパーは null＝着弾時に判定）
   apex: (h: Player, far: number) => number;         // 弾道頂点(m)
@@ -540,7 +540,8 @@ export function resolveShot(game: Game, ): void {
       // AND-1: スコアラーは決めたバスケットの上でポーズを取り、その後ラインへ向かう
       if (andOne) { sh!.foulReaction("and1"); game.pauseThen(1.4, () => game.ft.start(sh!, 1)); }
       else if (game.gameClock <= 0) game.pauseThen(1.4, () => endQuarter(game));
-      else game.pauseThen(1.4, () => withSubs(game, () => game.inbound.start(1 - shooter)));
+      // 決められた側が次に攻める。交代中もその向きで戻り始める
+      else game.pauseThen(1.4, () => withSubs(game, () => game.inbound.start(1 - shooter), null, 1 - shooter));
     } else {
       game.setEvent("MISS", shooter);
       if (game.gameClock <= 0) { game.handler = null; endQuarter(game); }

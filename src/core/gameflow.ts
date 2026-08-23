@@ -52,7 +52,8 @@ export function endQuarter(game: Game, ): void {
         game.applyNumberSides(); // コート入れ替えに番号も従う
         // 開始ティップのルール(NBA): ティップに負けたチームが Q2・Q3、勝ったチームが Q4 を始める
         const team = quarterStartTeam(game, game.quarter);
-        withSubs(game, () => quarterWalkOn(game, team));
+        // ピリオド間は全員がベンチから入場するので、配置移動はしない(null)
+        withSubs(game, () => quarterWalkOn(game, team), null, null);
       });
     }));
   }
@@ -173,6 +174,7 @@ export function quarterWalkOff(game: Game, next: () => void): void {
     game.referees.acquireBall(ballX, ballZ, qx, 0, "auto");
     game.subNext = next;
     game.subT = 0;
+    game.subOffense = null;   // 全員が歩行者 — 配置移動はしない
     game.ballMode = "subs";
   }
 
@@ -197,6 +199,7 @@ export function quarterWalkOn(game: Game, team: number): void {
     }
     game.subNext = () => game.startQuarterInbound(team, true);
     game.subT = 0;
+    game.subOffense = null;   // 全員が歩行者 — 配置移動はしない
     game.ballMode = "subs";
   }
 

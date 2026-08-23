@@ -34,6 +34,8 @@ import dribbleBackJson from "./data/dribbleBack.json";
 import dribbleBackDashJson from "./data/dribbleBackDash.json";
 import dribbleSideJson from "./data/dribbleSide.json";
 import dribbleSideDashJson from "./data/dribbleSideDash.json";
+import fapWalkJson from "./data/fapWalk.json";
+import fapSidestepJson from "./data/fapSidestep.json";
 import shootMidJson from "./data/shootMid.json";
 import shootMidJumpJson from "./data/shootMidJump.json";
 import shoot3Json from "./data/shoot3.json";
@@ -42,6 +44,12 @@ import dunkJson from "./data/dunk.json";
 import doubleClutchJson from "./data/doubleClutch.json";
 import pickupJson from "./data/pickup.json";
 import dribblePowerJson from "./data/dribblePower.json";
+// 抜き技（ペリメーター）。押し込み(dribblePower)とは別系統
+import dribbleJabJson from "./data/dribbleJab.json";
+import dribbleCrossJson from "./data/dribbleCross.json";
+import dribbleInOutJson from "./data/dribbleInOut.json";
+import dribbleHesiJson from "./data/dribbleHesi.json";
+import dribbleSpinJson from "./data/dribbleSpin.json";
 
 export interface MotionClip {
   name: string;
@@ -71,6 +79,13 @@ export interface MotionClip {
   releaseAt?: number;
   /** ボールをどう持つか（パス・シュートのみ）。"both" = 両手で挟む / "right" = 右手。 */
   ballHand?: "both" | "right";
+  /**
+   * クリップの途中で持ち手が左右入れ替わるか（クロスオーバー・スピン）。
+   * ⚠️ true のクリップでは `ballHand` は**始まりの手**しか表さない。
+   *    「ボールを持っていない方の手」を外から決めて上書きしてはいけない
+   *    （持っている手を潰してしまう）。
+   */
+  ballHandSwitches?: boolean;
   /** ボールの位置（肩の中点からの相対・**肩の高さで正規化**）× フレーム数。腕はこれに合わせてIKで解いてある。 */
   ballPos?: number[];
   /**
@@ -112,6 +127,8 @@ const CLIPS: Record<string, MotionClip> = {
   dribbleBackDash: dribbleBackDashJson as MotionClip,
   dribbleSide: dribbleSideJson as MotionClip,
   dribbleSideDash: dribbleSideDashJson as MotionClip,
+  fapWalk: fapWalkJson as MotionClip,
+  fapSidestep: fapSidestepJson as MotionClip,
   shootMid: shootMidJson as MotionClip,
   shootMidJump: shootMidJumpJson as MotionClip,
   shoot3: shoot3Json as MotionClip,
@@ -120,11 +137,29 @@ const CLIPS: Record<string, MotionClip> = {
   doubleClutch: doubleClutchJson as MotionClip,
   pickup: pickupJson as MotionClip,
   dribblePower: dribblePowerJson as MotionClip,
+  dribbleJab: dribbleJabJson as MotionClip,
+  dribbleCross: dribbleCrossJson as MotionClip,
+  dribbleInOut: dribbleInOutJson as MotionClip,
+  dribbleHesi: dribbleHesiJson as MotionClip,
+  dribbleSpin: dribbleSpinJson as MotionClip,
 };
 
-/** 使えるクリップ名。 */
-export const MOTION_NAMES = Object.keys(CLIPS);
+/** 使えるクリップ名。`registerClips` で足したものも含む。 */
+export let MOTION_NAMES = Object.keys(CLIPS);
 export function motionClip(name: string): MotionClip | null { return CLIPS[name] ?? null; }
+
+/**
+ * クリップを後から足す。
+ *
+ * ⚠️ **ゲームで使うクリップは `data/` に置いて上の CLIPS へ静的に import すること。**
+ *    こちらは「ゲームには積みたくないが見たいもの」用（例: 格闘ゲームから変換した
+ *    閲覧用モーション 86 本 / 約 2MB）。`data/` に置くと basketball-sim の
+ *    `sync-objcts.mjs` が丸ごと複製してゲームのバンドルまで太る。
+ */
+export function registerClips(extra: Record<string, MotionClip>): void {
+  for (const [k, v] of Object.entries(extra)) CLIPS[k] = v;
+  MOTION_NAMES = Object.keys(CLIPS);
+}
 /** クリップの長さ（秒）。 */
 export function motionDuration(c: MotionClip): number { return c.frameCount / c.fps; }
 
@@ -341,6 +376,12 @@ export function ballPosition(rig: RigHandle, clip: MotionClip, timeSec: number, 
     bp[f0 * 3 + 2] + (bp[f1 * 3 + 2] - bp[f0 * 3 + 2]) * s);
   // 正規化してあるので肩の高さを掛ける（体格が変わっても比率が保たれる）
   _pl.scaleInPlace(_p.y);
+  // ⚠️ ballPos は**体の向きを基準にした相対位置**（収録時の root は無回転）。
+  //    root の回転を掛けずに世界座標へ足すと、体をどちらへ向けてもボールが
+  //    同じ場所に留まる（実測: 体を 0/90/180/270° 回してもボールは動かず、
+  //    手とのズレが 0.29m → 0.58m まで開いた）。
+  rig.root.computeWorldMatrix(true);
+  Vector3.TransformNormalToRef(_pl, rig.root.getWorldMatrix(), _pl);
   _p.addToRef(_pl, dst);
   return dst;
 }

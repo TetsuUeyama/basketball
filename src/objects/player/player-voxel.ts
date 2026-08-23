@@ -139,10 +139,13 @@ function mergeSkinnedCloth(
       v.copyFromFloats(nor[i], nor[i + 1], nor[i + 2]).applyRotationQuaternionInPlace(q);
       N.push(v.x, v.y, v.z);
     }
-    C.push(...col);
+    // ⚠️ **`push(...配列)` を使わないこと。** 展開した要素が関数の引数の上限を超えると
+    //    `RangeError: Maximum call stack size exceeded` で落ちる。
+    //    ボクセルを 0.02m → 0.01m に細かくしたら 8 倍になって実際に落ちた。
+    for (const n of col) C.push(n);
     for (const n of idx) I.push(base + n);
-    MI.push(...(vd.matricesIndices as number[]));
-    MW.push(...(vd.matricesWeights as number[]));
+    for (const n of vd.matricesIndices as number[]) MI.push(n);
+    for (const n of vd.matricesWeights as number[]) MW.push(n);
   }
   if (!P.length) return null;
   const out = new VertexData();
@@ -245,6 +248,22 @@ function instanceOf(scene: Scene, key: string, name: string, make: () => Mesh | 
   return m;
 }
 
+/**
+ * キャッシュしてあるプロトタイプメッシュを捨てる。**26人を組み終えた直後に呼ぶこと。**
+ * プロトタイプは1回の組み立ての中で使い回すためだけのもので、終わったら不要。
+ * 残すと、ロースターやキットを変えるたびに別キーで増え続けシーンが太る
+ * （実測: 4試合で 319 → 621 個 / 5.6M → 18.8M 頂点）。
+ * clone はジオメトリを参照カウントで共有するので、先に捨てても表示中のメッシュは無事。
+ */
+export function purgeVoxelPrototypes(scene: Scene): number {
+  const store = PROTO.get(scene);
+  if (!store) return 0;
+  let n = 0;
+  for (const p of store.values()) if (p) { p.dispose(); n++; }
+  store.clear();
+  return n;
+}
+
 // bodyRestPose / partStretch は身長から関節位置と伸縮層数を反復で解く。26人ぶん
 // 2回ずつ呼ぶと無視できない時間になるので、体型と身長(1cm刻み)で覚えておく。
 const SHAPE = new Map<string, { rest: RestPose; stretch: Record<string, PartStretch> }>();
@@ -297,7 +316,8 @@ function makeHeadMesh(scene: Scene, variant: BodyVariant, st: PartStretch, hairS
       .map((c) => `${c[0]},${c[1]},${c[2]}`));
     if (hs.size) {
       const kept = vox.filter((v) => !hs.has(`${v[0]},${v[1]},${v[2]}`));
-      if (kept.length) vox.length = 0, vox.push(...kept);
+      // ⚠️ push(...kept) は要素数が多いと RangeError で落ちる（142行目のコメント参照）
+      if (kept.length) { vox.length = 0; for (const c of kept) vox.push(c); }
     }
   }
   const vd = toVertexData(vox, body.palette, null);
@@ -640,6 +660,10 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
       skel.dispose();
       rig.dispose();
       root.dispose();
+      // 選手ごとに作ったマテリアル。kitMat は全選手で共有なので捨てない
+      skinMat.dispose();
+      hairMat.dispose();
+      numMat.dispose();
     },
   };
   body.setSkinColor(o.skin);

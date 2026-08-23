@@ -23,6 +23,7 @@ export const JOINT_RULES = {
   twist:  { axis: "y", min: -1.15, max: 1.15, speed: 10 },   // 胴のひねり
   look:   { axis: "y", min: -0.95, max: 0.95, speed: 11 },   // 首・頭の向き
   elbow:  { axis: "x", min: -2.8, max: 2.8, speed: 14 },
+  wrist:  { axis: "x", min: -0.9, max: 0.9, speed: 20 },   // 手首は少し回る程度（±52°）
   hip:    { axis: "x", min: -1.6, max: 1.6, speed: 12 },
   knee:   { axis: "x", min: -1.7, max: 1.7, speed: 14 },
   ankle:  { axis: "x", min: -0.8, max: 0.8, speed: 22 },
@@ -36,12 +37,100 @@ export const BONE_JOINTS: Partial<Record<StandardBoneName, Hinge>> = {
   Head: JOINT_RULES.look,
   LeftLowerArm: JOINT_RULES.elbow,
   RightLowerArm: JOINT_RULES.elbow,
+  LeftHand: JOINT_RULES.wrist,
+  RightHand: JOINT_RULES.wrist,
   LeftUpperLeg: JOINT_RULES.hip,
   RightUpperLeg: JOINT_RULES.hip,
   LeftLowerLeg: JOINT_RULES.knee,
   RightLowerLeg: JOINT_RULES.knee,
   LeftFoot: JOINT_RULES.ankle,
   RightFoot: JOINT_RULES.ankle,
+};
+
+/**
+ * 関節が「まっすぐ」からどれだけ折れてよいか(rad)。**ラグドール／位置ベースの拘束用**。
+ *
+ * `BONE_JOINTS` は1自由度のヒンジ規則（ひねり・曲げのどれか1軸）なので、脱力して
+ * 3軸に転がる体の限界には使えない。こちらは軸を問わない「親→自分」と「自分→子」の
+ * なす角の上限。値は解剖学の実測ではなく見た目の調整値。
+ */
+export const BONE_MAX_BEND: Partial<Record<StandardBoneName, number>> = {
+  Spine: 0.70, Chest: 0.60, UpperChest: 0.50,
+  Neck: 0.90, Head: 0.50,
+  LeftShoulder: 0.55, RightShoulder: 0.55,
+  LeftUpperArm: 2.30, RightUpperArm: 2.30,     // 肩は大きく回る
+  LeftLowerArm: 2.40, RightLowerArm: 2.40,     // 肘
+  // 手首は「少し回る」程度に留める。指は質点にせず手へ剛体追従させるので、
+  // ここが効くのは Hand → 中指の付け根 を1本の骨として扱ったとき。
+  LeftHand: 0.70, RightHand: 0.70,
+  LeftUpperLeg: 1.90, RightUpperLeg: 1.90,     // 股関節
+  LeftLowerLeg: 2.30, RightLowerLeg: 2.30,     // 膝
+  LeftFoot: 0.80, RightFoot: 0.80,             // 足首
+  LeftToes: 0.70, RightToes: 0.70,
+};
+
+/**
+ * ボーンごとの質量比（全体を 1 とした割合）。ラグドールの質点の重さに使う。
+ *
+ * ⚠️ **全部同じ重さにすると体重感が消える**。胴が軽くなって手足が暴れ、紙のように
+ * 見える。人体は胴だけで約半分、両腕合わせても1割に満たない。
+ *
+ * 出典: Dempster の身体部分質量比（頭頸部 8.1% / 体幹 49.7% / 上腕 2.8% /
+ * 前腕 1.6% / 手 0.6% / 大腿 10.0% / 下腿 4.65% / 足 1.45%、いずれも片側）。
+ * **ボーンへの割り振りは調整値**（体幹の 49.7% を骨盤・腹・胸へ分けた比率など）。
+ */
+export const BONE_MASS: Partial<Record<StandardBoneName, number>> = {
+  Hips: 0.142, Spine: 0.139, Chest: 0.120, UpperChest: 0.096,
+  Neck: 0.020, Head: 0.061,
+  LeftShoulder: 0.010, RightShoulder: 0.010,
+  LeftUpperArm: 0.028, RightUpperArm: 0.028,
+  LeftLowerArm: 0.016, RightLowerArm: 0.016,
+  LeftHand: 0.006, RightHand: 0.006,
+  LeftUpperLeg: 0.100, RightUpperLeg: 0.100,
+  LeftLowerLeg: 0.0465, RightLowerLeg: 0.0465,
+  LeftFoot: 0.0145, RightFoot: 0.0145,
+  LeftToes: 0.002, RightToes: 0.002,
+};
+
+/**
+ * ラグドールの質点に渡す重さ。{@link BONE_MASS} に下限を掛ける。
+ *
+ * ⚠️ 実寸のまま（手 0.006・つま先 0.002）だと軽すぎて破綻する。位置ベースの
+ * ソルバは補正を invMass の比で配るので、軽い質点が補正のほとんどを引き受けて弾かれる。
+ *
+ * ⚠️ **上げ過ぎない**。手足の振られは 0.05 まで上げてもほとんど減らない（1.08→1.03m）
+ * のに、膝が体の前へ **0.061m 逆折れ**し、腰の浮きが 34→46mm に悪化する（実測）。
+ * 手足の重さは `maxSpeed`（相対速度の上限）で作ること。
+ *
+ * これは物理値ではなく**見た目のための下限**。胴（0.096〜0.142）との比は保たれる。
+ */
+export const RAGDOLL_MASS_FLOOR = 0.025;
+
+/** ラグドール用の重さ（下限つき）。骨格の全ボーンぶんまとめて渡す想定。 */
+export function ragdollMass(bone: StandardBoneName): number {
+  return Math.max(RAGDOLL_MASS_FLOOR, BONE_MASS[bone] ?? 0.005);
+}
+
+/**
+ * ボーンごとの当たり半径（**身長に対する比**）。ラグドールの床との接触に使う。
+ *
+ * ⚠️ 質点を「点」のまま床へ当てると、**体が床にめり込んで見える**。頭は直径0.14m
+ * ほどあるので、中心が床面に来ると半分埋まる。部位の太さを持たせて
+ * `床 + 半径` で止める。
+ *
+ * 値は見た目の調整値（身長1.92mなら 頭 0.106m / 胴 0.131m / 上腕 0.048m）。
+ */
+export const BONE_RADIUS: Partial<Record<StandardBoneName, number>> = {
+  Head: 0.055, Neck: 0.035,
+  Hips: 0.068, Spine: 0.068, Chest: 0.068, UpperChest: 0.062,
+  LeftShoulder: 0.042, RightShoulder: 0.042,
+  LeftUpperArm: 0.025, RightUpperArm: 0.025,
+  LeftLowerArm: 0.021, RightLowerArm: 0.021,
+  LeftHand: 0.019, RightHand: 0.019,
+  LeftUpperLeg: 0.042, RightUpperLeg: 0.042,
+  LeftLowerLeg: 0.031, RightLowerLeg: 0.031,
+  LeftFoot: 0.021, RightFoot: 0.021,
+  LeftToes: 0.016, RightToes: 0.016,
 };
 
 /** 瞬間切替（スナップ）は禁止。速度指定が無い呼び出しはこの既定レートでイーズする。

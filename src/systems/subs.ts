@@ -6,6 +6,7 @@ import { STARTERS } from "../roster";
 import { scoringPower } from "../roles";
 import { rate, clamp, dist2DTo, moveToward2D } from "../util";
 import { roleFit, overallOf, refreshChoiceRanks } from "../ai/lineups";
+import { runDefenseDuringDeadish } from "../ai/defense";
 import { benchSeat, benchStandSpot } from "../core/bench";
 import { blockBench, pushApart } from "../core/collision";
 import type { Game } from "../game";
@@ -191,8 +192,9 @@ export function substitute(game: Game, out: Player, sub: Player): void {
   refreshChoiceRanks(game, out.team);
 }
 
-// 入れ替え本体: プレーは凍結、各歩行者が目的地へ移動し、交代チップは画面に残り、
-// 全員が(安全タイムアウト付きで)配置に着いたら保留中の再開が走る。
+// 入れ替え本体: 各歩行者が目的地へ移動し、コートに残る選手は並行して次の配置につく。
+// 交代チップは画面に残り、全員が(安全タイムアウト付きで)配置に着いたら保留中の再開が走る。
+// 時計は止まったまま（game.update 側でデッドボール扱い）。
 export function updateSubs(game: Game, dt: number): void {
   game.subT += dt;
   // 交代チップは通常どおり経過する。プレー再開は全チップが消えてから(下の再開ゲート参照)。
@@ -216,6 +218,21 @@ export function updateSubs(game: Game, dt: number): void {
       w.p.pos.set(w.tx, 0, w.tz);
     }
   }
+  // 交代の歩行と並行して、コートに残る選手も次の配置につく（守備は戻り、攻撃はスポットへ）。
+  // スローイン中とまったく同じ処理を使うので、再開した瞬間に動きが途切れない。
+  if (game.subOffense !== null) {
+    const off = game.teamPlayers(game.subOffense);
+    const spots = game.formationSpots(game.subOffense);
+    for (const p of off) {
+      if (game.subWalkers.some((w) => w.p === p)) continue;   // 入場中の体は上のループが運ぶ
+      const s = spots[p.spotIdx];
+      if (!s) continue;
+      moveToward2D(p.pos, s.x, s.z, p.accelSpeed(dt) * dt);
+      game.clampCourt(p.pos);
+    }
+    runDefenseDuringDeadish(game, dt, game.subOffense);
+  }
+
   // 歩く体同士を押し離し、すり抜けないようにする
   const bodies = new Set<Player>(game.players);
   for (const w of game.subWalkers) bodies.add(w.p);
@@ -237,6 +254,7 @@ export function updateSubs(game: Game, dt: number): void {
       w.p.sync();
     }
     game.subWalkers = [];
+    game.subOffense = null;
     const next = game.subNext;
     game.subNext = null;
     if (next) next();
@@ -246,10 +264,17 @@ export function updateSubs(game: Game, dt: number): void {
 // デッドボール時: 交代が必要な者がいれば "subs" ボールモードでプレーを凍結し
 // 入場/退場の入れ替えを実行。`next`(インバウンド等)は全歩行者が自分の位置に
 // 着いてから初めて走る。交代がなければプレーはそのまま続行。
-export function withSubs(game: Game, next: () => void, exclude: Player | null = null): void {
+// nextOffense は交代後に攻める側。得点後やバイオレーション後は possession がまだ
+// 切り替わっていないので呼び出し側が渡す。null なら交代中の配置移動をしない
+// （ピリオド間など、全員がベンチから入場する場面）。
+export function withSubs(
+  game: Game, next: () => void, exclude: Player | null = null,
+  nextOffense: number | null = game.possession,
+): void {
   if (!planSubs(game, exclude)) { next(); return; }
   game.subNext = next;
   game.subT = 0;
+  game.subOffense = nextOffense;
   game.handler = null;               // 入れ替え中は誰もボールを扱わない
   game.ballMode = "subs";
 }

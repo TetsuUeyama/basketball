@@ -167,11 +167,13 @@ export function tickBallFx(game: Game, dt: number): void {
 }
 
   // コート上の選手はプレイの方を向く: ハンドラーとシューターは攻めるバスケットへ、
-  // それ以外はボールへ。イージングで体が追従する。交代／フィナーレ中はスキップ。
+  // それ以外はボールへ。イージングで体が追従する。フィナーレ中はスキップ。
 export function updateFacing(game: Game, dt: number): void {
-    if (game.ballMode === "subs" || game.ballMode === "finale") return;
+    if (game.ballMode === "finale") return;
     const b = game.ball.pos;
     for (const p of game.players) {
+      // 交代で入場中の選手は updateSubs が走る向きを与えている — 上書きしない
+      if (game.subWalkers.some((w) => w.p === p)) continue;
       // パサーは胸をレシーバーへスナップさせて両手パスを出す（足はその場、airborne
       // スキップの前に行うので接地からのジャンプパスでも胸を正対させる）。
       if (game.ballMode === "pass" && p === game.passer && game.passTo) {

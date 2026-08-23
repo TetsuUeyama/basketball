@@ -139,7 +139,7 @@ export class FreeThrowSystem {
       const conceding = 1 - this.team;
       g.setEvent("GOOD", this.team);
       g.handler = null;
-      g.pauseThen(1.1, () => withSubs(g, () => g.inbound.start(conceding)));
+      g.pauseThen(1.1, () => withSubs(g, () => g.inbound.start(conceding), null, conceding));
     } else {
       g.possession = this.team;       // ミス: ライブリバウンド
       g.setEvent(this.missKind === "air" ? "AIR BALL" : "MISS", this.team);

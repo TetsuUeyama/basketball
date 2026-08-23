@@ -20,12 +20,42 @@ import type { StandardBoneName as SBN } from "../standardSkeleton";
 
 /** 1頂点に効かせる骨の数（Babylon の上限は4）。 */
 const INFLUENCES = 4;
-/** 距離の効き。大きいほど近い骨に強く寄る＝関節の変形が硬くなる。 */
-const FALLOFF = 4;
+/**
+ * 距離の効き。大きいほど近い骨に強く寄る＝関節の変形が硬くなる。
+ *
+ * ⚠️ **小さいと膝の内側に突起が出る**（ユーザー報告）。ウェイトが関節から遠くまで
+ *    広がり（実測: 膝で最大 90mm 先まで両方の骨が混ざる）、曲げたときに大きく振られる。
+ *
+ * 実測（左膝で、スキニング結果と「支配ボーンで剛体に動かした位置」の差／
+ *       隣り合う頂点が rest からどれだけ引き離されるか。walk/run/蹴り/しゃがみの最大）:
+ *      FALLOFF  突起      裂け
+ *         4     300.5mm   280.6mm   ← 以前の値
+ *         8     186.5     166.5
+ *        12     108.7      87.5
+ *        16      74.5      34.9
+ *        20      60.7      24.1   ← 折れ点。ここを採る
+ *        28      60.6      19.5
+ *        40      60.5      24.0   ← これ以上硬くしても突起は減らず、裂けが増える
+ */
+const FALLOFF = 20;
 /** 一番近い骨の何倍の距離までを混ぜるか。 */
 const RANGE = 2.2;
 /** さらに絶対値でも制限する(m)。⚠️ これが無いと左足の服が右足のウェイトを拾う。 */
 const RANGE_ABS = 0.04;
+/**
+ * 関節を剛体で割り当てるか（true = 1頂点を骨1本に 100% で付ける）。
+ *
+ * ⚠️ **リニアブレンドスキニングの破綻は重みの調整では消せない。**
+ *    関節と同じ高さの頂点は親子どちらの骨からも距離が完全に一致するため
+ *    （実測: 膝で 70.3mm / 70.3mm）、必ず 50/50 になる。脚の表面は軸から 7cm
+ *    離れているので、膝を大きく曲げると 2 つの回転の平均が内側へ落ち込み、
+ *    **内側に約 60mm の突起**が出る（ユーザー報告）。FALLOFF をいくつにしても変わらない
+ *    （実測: 4→40 で 300.5mm→60.5mm まで下がるが、そこで頭打ち）。
+ *
+ *    剛体にすると破綻は原理的にゼロ。代わりに曲げた外側に隙間が出る（LEGO の関節）。
+ *    ボクセルの見た目には合う。false にすれば元の滑らかな方式に戻る。
+ */
+const HARD_JOINTS = true;
 // ⚠️ ズボンを股下で左右に切り離してはいけない。元データのショーツは**左右が繋がった
 // 一枚の形**（中央 x=-6..+6cm まで布がある）なので、切ると太もも内側に穴が開く。
 
@@ -248,6 +278,26 @@ function distToSeg(p: Vector3, s: BoneSeg): number {
   return Vector3.Distance(p, _v);
 }
 
+/**
+ * 骨の線分までの距離。ただし**端点で受けた場合はごく小さな penalty を足す**。
+ *
+ * ⚠️ 関節と同じ高さの頂点は、親の骨も子の骨も「関節そのもの」が最寄りになるため
+ *    距離が**完全に一致**する（実測: 膝で 70.3mm / 70.3mm）。そのままだと
+ *    どちらを選ぶかが不定になり、剛体割り当ての切れ目がギザギザになる。
+ *    線分の内側に落ちた方（＝その骨の受け持ち範囲にある方）を優先すれば、
+ *    切れ目が関節の面できれいに揃う。
+ */
+function distToSegBiased(p: Vector3, s: BoneSeg): number {
+  s.b.subtractToRef(s.a, _ab);
+  p.subtractToRef(s.a, _ap);
+  const l2 = _ab.lengthSquared();
+  const raw = l2 > 1e-9 ? Vector3.Dot(_ap, _ab) / l2 : 0;
+  const t = Math.max(0, Math.min(1, raw));
+  s.a.addToRef(_ab.scale(t), _v);
+  const d = Vector3.Distance(p, _v);
+  return raw > 0 && raw < 1 ? d : d + 1e-4;
+}
+
 export interface SkinRig {
   skeleton: Skeleton;
   order: StandardBoneName[];
@@ -331,7 +381,7 @@ function skinMesh(
     // ⚠️ 骨ごとに最短を採る。子が複数ある骨は線分を複数持つので、そのままだとウェイト枠を二重に使う。
     const per = new Map<number, number>();
     for (const s of sk.segs) {
-      const dist = distToSeg(p, s);
+      const dist = HARD_JOINTS ? distToSegBiased(p, s) : distToSeg(p, s);
       if (dist < near) near = dist;
       const bi = sk.index.get(s.name)!;
       const cur = per.get(bi);
@@ -346,11 +396,25 @@ function skinMesh(
     const cand = d.filter((e) => e.w <= cut && !(side && sk.order[e.i].startsWith(side)))
       .map((e) => ({ i: e.i, w: Math.pow(1 / (e.w + 1e-3), FALLOFF) }))
       .sort((a, b) => b.w - a.w).slice(0, INFLUENCES);
-    let sum = 0;
-    for (const e of cand) sum += e.w;
-    for (let k = 0; k < INFLUENCES; k++) {
-      mi.push(cand[k]?.i ?? 0);
-      mw.push(cand[k] ? cand[k].w / sum : 0);
+    // ⚠️ **枠は必ず INFLUENCES(=4) 個ぶん詰めること。** Babylon は 1 頂点あたり
+    //    4 成分の重みを前提にしているので、短くするとバッファがずれて壊れる
+    //    （実測: 2 個にしたら膝の破綻が 60mm → 754mm）。
+    //    硬くしたいときは枠を減らすのではなく、支配ボーンへ重みを寄せる。
+    // ⚠️ **枠は必ず INFLUENCES(=4) 個ぶん詰めること。** Babylon は 1 頂点あたり
+    //    4 成分の重みを前提にしているので、短くするとバッファがずれて壊れる
+    //    （実測: 2 個にしたら膝の破綻が 60mm → 754mm）。
+    if (HARD_JOINTS) {
+      for (let k = 0; k < INFLUENCES; k++) {
+        mi.push(cand[k]?.i ?? 0);
+        mw.push(k === 0 && cand[0] ? 1 : 0);
+      }
+    } else {
+      let sum = 0;
+      for (const e of cand) sum += e.w;
+      for (let k = 0; k < INFLUENCES; k++) {
+        mi.push(cand[k]?.i ?? 0);
+        mw.push(cand[k] ? cand[k].w / sum : 0);
+      }
     }
   }
   vd.matricesIndices = mi;

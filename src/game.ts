@@ -66,6 +66,10 @@ export class Game {
   subWalkers: { p: Player; tx: number; tz: number }[] = [];
   subNext: (() => void) | null = null;
   subT = 0;
+  // 交代が終わったあとに攻める側。交代中はまだ possession が切り替わっていない場面
+  // （得点後・ショットクロック違反など）があるため、withSubs が明示的に受け取る。
+  // null = 配置移動をしない（ピリオド間など、全員がベンチから入場する場面）
+  subOffense: number | null = null;
   // チーム別のベンチ歓声タイマー（正の間、ベンチが立って歓声）
   cheerT: [number, number] = [0, 0];
   cheerAmp: [number, number] = [0.5, 0.5];   // 歓声の強さ(ダンク/スリーで大きく)
@@ -408,6 +412,7 @@ export class Game {
     this.subEvents.length = 0;
     this.subWalkers = [];
     this.subNext = null;
+    this.subOffense = null;
     this.inbound.oobWalker = null;
     this.blockHoldT = 0;
     this.cheerT = [-1, -1];

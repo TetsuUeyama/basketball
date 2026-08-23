@@ -78,7 +78,7 @@ export function shotClockViolation(game: Game): void {
     game.setEvent("SHOT CLOCK VIOLATION", offTeam, 2.8);
     // 喜びを見せてから再開: インバウンドで動き出す前にポーズを長めに取る。
     game.pauseThen(2.8, () => withSubs(game, () => game.inbound.startAt(def, sx, sz,
-      { clock: front ? SHOT_CLOCK_PARTIAL : SHOT_CLOCK })));
+      { clock: front ? SHOT_CLOCK_PARTIAL : SHOT_CLOCK }), null, def));   // 次に攻めるのは守備側
   }
 
   // オーバー&バック(バックコート)違反はオフェンスのバイオレーション。公式ルール通り
@@ -89,7 +89,7 @@ export function backcourtViolation(game: Game, loser: Player): void {
     const sx = loser.pos.x, sz = loser.pos.z;   // 違反地点(キャッチ地点)を今記憶
     game.handler = null;
     game.setEvent("BACKCOURT", loser.team, 2.6);
-    game.pauseThen(1.2, () => withSubs(game, () => game.inbound.startAt(def, sx, sz, { clock: SHOT_CLOCK })));
+    game.pauseThen(1.2, () => withSubs(game, () => game.inbound.startAt(def, sx, sz, { clock: SHOT_CLOCK }), null, def));
   }
 
 export function turnover(game: Game, loser: Player, reason: string): void {

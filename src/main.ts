@@ -10,6 +10,7 @@ import { BroadcastCamera } from "./camera";
 import { Game } from "./game";
 import { optimizeLineups } from "./ai/lineups";
 import { Player } from "./objects/player/player";
+import { purgeVoxelPrototypes } from "./objects/player/player-voxel";
 import { ROSTER } from "./roster";
 import { UI } from "./ui/ui";
 import { IntroTour } from "./intro";
@@ -44,6 +45,19 @@ function buildWorld(): void {
   addShadows(sun, g);   // 影は選手/ボールのメッシュに依存するので game 生成後
   intro = new IntroTour(g, camera);
   game = g;
+  purgeVoxelPrototypes(scene);
+}
+
+// ---- 26人ぶんの着替えは、メインシーンを描く直前まで遅らせる -----------------
+// クラブ選択中はプレビューだけを描いていてコート上の26人は見えない。それでも従来は
+// クラブを押すたびに26人ぶんのユニフォームメッシュを同期で作り直していたため、
+// 2試合目以降(game が生きている)はボタンの反応が数秒止まっていた。
+let uniformsDirty = false;
+function flushUniforms(): void {
+  if (!uniformsDirty || !game) return;
+  uniformsDirty = false;
+  game.applyUniforms();
+  purgeVoxelPrototypes(scene);
 }
 
 const ui = new UI();
@@ -51,8 +65,8 @@ ui.onNeedWorld = () => buildWorld();                     // タイトルを離�
 ui.onRestart = () => game?.reset();                      // 現在の試合を再スタート
 ui.onBack = () => game?.reset();                         // 結果 → きれいな試合前へ戻る
 ui.onSetupLineups = () => optimizeLineups();             // マッチアップ確定時、相手を考慮したデフォルト5人
-ui.onUniformToggle = () => {                             // ホーム ⇄ アウェイのユニフォームを全員へ即時反映
-  game?.applyUniforms();
+ui.onUniformToggle = () => {                             // ホーム ⇄ アウェイのユニフォームを全員へ
+  uniformsDirty = true;                                  // コート上の26人は flushUniforms() で反映
   if (previewPlayers) { previewPlayers[0].applyUniform(); previewPlayers[1].applyUniform(); }
 };
 // クラブ選択中、選んでいるチームの先発5人をコート上で大写しにする（null=通常の広角へ戻す）
@@ -125,6 +139,8 @@ ui.onStart = () => {
   buildWorld();
   if (!game) return;
   game.applyRoster();
+  flushUniforms();         // 持ち越していた着替えをここで確定させる
+  purgeVoxelPrototypes(scene);
   game.reset();            // 選手はティップオフの位置 / ベンチの座席につく
   intro?.begin();
   camera.cancelAutoAngle();
@@ -157,7 +173,7 @@ engine.runRenderLoop(() => {
       camera.update(acc, g.ball.pos.x, g.ball.pos.z, g.ball.pos.y, g.camFollowBall, g.attackGoalZ);
     }
     if (previewActive && previewScene) previewScene.render();
-    else scene.render();
+    else { flushUniforms(); scene.render(); }
     return;
   }
   idleT = 0;
@@ -180,7 +196,7 @@ engine.runRenderLoop(() => {
   // クラブウィザードのユニフォームプレビューが出ている間は、専用のプレビューシーン
   // (孤立した選手、コートなし)だけをレンダリングする。それ以外はメインシーン。
   if (previewActive && previewScene) previewScene.render();
-  else scene.render();
+  else { flushUniforms(); scene.render(); }
 });
 
 window.addEventListener("resize", () => engine.resize());
