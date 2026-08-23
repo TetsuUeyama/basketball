@@ -1,8 +1,9 @@
 // ボール保持(ballMode "held")中のライブプレイ tick。ドリブルのケイデンス前進、
 // オフェンス/守備/はたきの毎フレーム進行、キャリー/ギャザー/ピックアップのボール位置決め。
 import { rate, clamp, dist2D, chance, dirTo2D } from "../../util";
-import { runOffense } from "../../ai/offense";
-import { runDefense, catchStrips, swarmStrips } from "../../ai/defense";
+import { runOffense } from "../../ai/offense/onball";
+import { runDefense } from "../../ai/defense";
+import { catchStrips, swarmStrips } from "../../ai/defense/vs-onball/strip";
 import { passToReceiver } from "./passing";
 import { flashBall } from "../../core/visuals";
 import type { Game } from "../../game";

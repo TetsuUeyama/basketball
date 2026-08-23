@@ -7,10 +7,11 @@ import { rate, clamp, chance, rand, dist2D, dist2DTo, moveToward2D } from "../..
 import { twWeight, effShootRange, reactionLag, shotThreat, passZip, passReleaseY, passHeightAt } from "../../eval";
 import { laneVetoed, bestPassStyle, passRisk, evalInterception, longBallRead } from "../reaction/pass-risk";
 import { runDefenseDuringDeadish } from "../../ai/defense";
-import { updateOffBallMotion, bestOpenSpot } from "../../ai/offball";
+import { updateOffBallMotion } from "../../ai/offense/offball";
+import { bestOpenSpot } from "../../ai/offense/offball/spots";
 import { backcourtViolation } from "../../core/deadball";
 import { flashBall } from "../../core/visuals";
-import { doubleTeamed } from "../../ai/reads";
+import { doubleTeamed } from "../../ai/offense/reads";
 import { wantSave, beginSave, updateSaveChase, saveCatch } from "./save";
 import type { Game } from "../../game";
 

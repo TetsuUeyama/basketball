@@ -4,7 +4,8 @@ import { Vector3 } from "@babylonjs/core";
 import { Player } from "../../objects/player/player";
 import { TACTICS } from "../../attributes";
 import { rate, clamp, rand, moveToward2D } from "../../util";
-import { defEffort, defendOnBall } from "../../ai/defense";
+import { defEffort } from "../../ai/defense/shared";
+import { defendOnBall } from "../../ai/defense/vs-onball";
 import type { Game } from "../../game";
 
 // スクリーンの共有状態。resolveScreenCoverage が書き、runDefense/defendScreen が読む。

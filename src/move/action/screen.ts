@@ -2,7 +2,7 @@
 // 寄せ・ピック成立の検出・ロール/ポップ。守備のカバレッジ反応は move/reaction/screen。
 import { Player } from "../../objects/player/player";
 import { rate, clamp, chance, rand, dist2D, moveToward2D } from "../../util";
-import { bestOpenSpot } from "../../ai/offball";
+import { bestOpenSpot } from "../../ai/offense/offball/spots";
 import { resolveScreenCoverage } from "../reaction/screen";
 import type { Game } from "../../game";
 
