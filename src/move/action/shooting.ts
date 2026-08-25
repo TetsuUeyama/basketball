@@ -544,8 +544,12 @@ export function resolveShot(game: Game, ): void {
       else game.pauseThen(1.4, () => withSubs(game, () => game.inbound.start(1 - shooter), null, 1 - shooter));
     } else {
       game.setEvent("MISS", shooter);
-      if (game.gameClock <= 0) { game.handler = null; endQuarter(game); }
-      else game.startRebound();
+      if (game.gameClock <= 0) {
+        // ブザーで外れた球も、リングに当たって跳ね返ってから落ちる（争奪はしない）。
+        game.handler = null;
+        game.rimBounceOff();
+        endQuarter(game);
+      } else game.startRebound();
     }
     game.pendingAssist = null;
     game.pendingAndOne = null;

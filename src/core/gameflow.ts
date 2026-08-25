@@ -10,12 +10,17 @@ import type { Game } from "../game";
 
 // フィナーレ(勝利/引き分け)演出の総尺(秒)
 const FINALE_DUR = 6.0;
+// ブザー時にボールがまだ飛んでいた場合、落ちて床で弾むのを見せる時間(秒)
+const BALL_SETTLE = 2.8;
 
   // ピリオド終了処理: END バナーを出し、両チーム5人がベンチへ引き上げ、一拍保持し、
   // （交代を済ませた後）次ピリオドのスローイン位置へ歩いて戻る。
 export function endQuarter(game: Game, ): void {
     game.coastT = 0;
-    game.ballFalling = false;
+    // ⚠️ ブザーでボールを止めない。台本の軌道（パス/シュート/保持）を自由飛行へ渡し、
+    //    そのままの勢いで飛んで板やリングに当たり、床で弾ませる。止めるとその場で
+    //    真下へ落ちて不自然に見える。
+    const speed = game.releaseBall();
     const leader = game.score[0] === game.score[1]
       ? game.possession
       : (game.score[0] > game.score[1] ? 0 : 1);
@@ -39,11 +44,12 @@ export function endQuarter(game: Game, ): void {
 
     // 最終ブザーは専用のフィナーレ演出（勝者は沸き、敗者はうなだれる）
     if (ended >= QUARTERS) {
-      game.pauseThen(1.2, () => startFinale(game));
+      game.pauseThen(speed > 1.5 ? BALL_SETTLE : 1.2, () => startFinale(game));
       return;
     }
 
-    game.pauseThen(1.2, () => quarterWalkOff(game, () => {
+    // ボールがまだ飛んでいるなら、弾み終わるまで見せてから引き上げにかかる
+    game.pauseThen(speed > 1.5 ? BALL_SETTLE : 1.2, () => quarterWalkOff(game, () => {
       // ベンチで短いハドル、その後に次のピリオド
       game.pauseThen(1.0, () => {
         game.quarter = ended + 1;

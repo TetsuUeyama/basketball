@@ -40,6 +40,7 @@ import { updatePass } from "./move/action/passing";
 import { updateSaveRecover } from "./move/action/save";
 import { updateCharge, updateShot } from "./move/action/shooting";
 import { updateLoose, stepBallFreeFlight } from "./core/looseball";
+import { BALL } from "./move/basic/ball";
 import { updateLive } from "./move/action/liveball";
 import { endQuarter, updateFinale } from "./core/gameflow";
 import { syncAll, updateFacing, tickSwish, tickBallFx, flashBall, updateNameTags } from "./core/visuals";
@@ -197,6 +198,11 @@ export class Game {
   // 一時停止中にボールが落下+バウンドしている間 true
   ballFalling = false;
   coastT = 0;   // ブザー後の短いプレーオン猶予
+  private coastMode: BallMode = "held";   // 猶予に入った時のボール状態
+  // ボールの実測速度。パスやシュートは台本の軌道で位置を書くので vel を持たない。
+  // ブザーで台本を打ち切って自由飛行へ渡すときに、この観測値を初速として使う。
+  private readonly ballPrev = new Vector3();
+  private readonly ballVelObs = new Vector3();
   hoops: Hoops | null = null;     // 成功時にスウィッシュさせるネット/リムのメッシュ
   netSwish: [number, number] = [0, 0];   // フープ別のスウィッシュタイマー(>0 でアニメ中)
   swishTeam: [number, number] = [0, 0];  // 誰が決めたか(フラッシュ色)
@@ -554,8 +560,16 @@ export class Game {
       if (this.gameClock <= 0 && this.ballMode !== "shot" && this.ballMode !== "charge") {
         // ホーンが鳴っても一拍だけ惰性でライブプレーを続ける。パスは長めのウィンドウを取る。
         if (this.ballMode === "held" || this.ballMode === "loose" || this.ballMode === "pass" || this.ballMode === "inbound") {
-          if (this.coastT <= 0) this.coastT = this.ballMode === "pass" ? 1.4 : 0.8;
+          // パスは飛び終わる（味方が受け止める）まで待つ。安全網として上限を置く。
+          if (this.coastT <= 0) {
+            this.coastT = this.ballMode === "pass" ? 2.5 : 0.8;
+            this.coastMode = this.ballMode;
+          }
           this.coastT -= dt;
+          // 受け止めた／こぼれた時点で猶予は切り上げる（捕ってから攻め続けさせない）
+          if (this.coastMode === "pass" && this.ballMode !== "pass") {
+            this.coastT = Math.min(this.coastT, 0.5);
+          }
           if (this.coastT <= 0) endQuarter(this);
         } else {
           endQuarter(this);
@@ -563,6 +577,7 @@ export class Game {
       }
     }
 
+    this.ballPrev.copyFrom(this.ball.pos);
     // ボール状態機械
     switch (this.ballMode) {
       case "held": updateLive(this, dt); break;
@@ -576,6 +591,12 @@ export class Game {
       case "pause": this.updatePause(dt); break;
       case "subs": updateSubs(this, dt); break;
       case "finale": updateFinale(this, dt); break;
+    }
+
+    // このフレームでボールが実際に動いた量 → 観測速度（台本の軌道でも取れる）
+    if (dt > 1e-6) {
+      this.ballVelObs.set((this.ball.pos.x - this.ballPrev.x) / dt,
+        (this.ball.pos.y - this.ballPrev.y) / dt, (this.ball.pos.z - this.ballPrev.z) / dt);
     }
 
     // 保持中のボールは、この後の衝突解決でハンドラーが押された分だけ一緒にずらす
@@ -742,6 +763,35 @@ export class Game {
 
   // ---- ファウル & フリースロー -------------------------------------------
 
+  /**
+   * 台本の軌道（パス/シュート/保持）を打ち切って、ボールを自由飛行へ渡す。
+   * ブザーでプレーが止まってもボールは止まらない — そのままの勢いで飛び続け、
+   * 板やリングに当たり、床でしばらく弾む。
+   * 戻り値は渡した時点の速さ(m/s)。0 に近ければボールはほぼ止まっている。
+   */
+  releaseBall(): number {
+    // 既に自由飛行へ渡してある（決まった球がネットを抜ける / 外れてリングに当たった）
+    // 場合は、その速度を尊重して上書きしない。
+    if (this.ballFalling) {
+      return Math.hypot(this.ball.vel.x, this.ball.vel.y, this.ball.vel.z);
+    }
+    const v = this.ballVelObs;
+    // 保持中のボールは手から離れるだけ — 持ち主の勢いを少し受けて落ちる
+    if (this.ballMode === "held" && this.handler) {
+      const h = this.handler;
+      this.ball.vel.set(h.velX * 0.5 + rand(-0.6, 0.6), -1.0, h.velZ * 0.5 + rand(-0.6, 0.6));
+    } else {
+      this.ball.vel.set(v.x, v.y, v.z);
+    }
+    const sp = Math.hypot(this.ball.vel.x, this.ball.vel.y, this.ball.vel.z);
+    if (sp > BALL.maxSpeed) {
+      const k = BALL.maxSpeed / sp;
+      this.ball.vel.scaleInPlace(k);
+    }
+    this.ballFalling = true;
+    return Math.min(sp, BALL.maxSpeed);
+  }
+
   // シーンを一瞬凍結(デッドボール)し、次のフェーズを走らせる。
   pauseThen(seconds: number, next: () => void): void {
     this.pauseT = seconds;
@@ -806,6 +856,14 @@ export class Game {
   }
 
   // ミス後、ボールはリムに跳ねてライブになる(updateLoose 参照)。
+  /** 外れた球をリングで跳ね返らせるだけ（争奪には入らない）。ブザーで終わる場面用。 */
+  rimBounceOff(): void {
+    const rim = this.attackRim(this.possession);
+    this.ball.pos.set(rim.x + rand(-0.3, 0.3), RIM.height + 0.1, rim.z + rand(-0.2, 0.2));
+    this.ball.vel.set(rand(-3.4, 3.4), rand(1.2, 3.0), -Math.sign(rim.z || 1) * rand(0.8, 3.6));
+    this.ballFalling = true;
+  }
+
   startRebound(): void {
     const rim = this.attackRim(this.possession);
     this.ball.pos.set(rim.x + rand(-0.3, 0.3), RIM.height + 0.1, rim.z + rand(-0.2, 0.2));
