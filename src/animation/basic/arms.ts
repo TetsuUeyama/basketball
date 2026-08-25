@@ -68,8 +68,11 @@ Player.prototype.easeArm = function(pivot: TransformNode, target: Quaternion): v
   // 肘の曲げ: 前方（胸に向かって、-numberSide·Z）へ、腕/脚の規約に合わせる。
   // 肘は目標へ直接向かわず、まず遅延段（肩と同じ速度で目標を追う中間値）を挟み、
   // その中間値を CHAIN.elbow の速度で追う。これで肩が動き出してから肘が動く。
-// 肘の最小の曲げ(rad)。伸ばし切りでもこれだけは残す（約6°）。
-const MIN_ELBOW = 0.10;
+// 肘の最小の曲げ(rad)。**伸ばし切りでもこれだけは残す（約18°）。**
+// ⚠️ 人の腕は伸ばしても肘で真っ直ぐにはならない。6°では見た目が一本の棒で、肘が
+//    無いように見えた（実測: 腕を広げる/両手を上げるポーズの見た目の肘角が 8.2°）。
+//    リーチの損は小さい: 全長は 2L·cos(θ/2) なので 18° でも 1% 未満（約4mm）。
+const MIN_ELBOW = 0.32;
 
 Player.prototype.bendElbow = function(node: TransformNode, amount: number): void {
     node.rotationQuaternion = null;   // IKで設定されたクォータニオンを解除しFK(rotation)へ戻す
