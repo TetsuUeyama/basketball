@@ -14,8 +14,38 @@ declare module "../../objects/player/player" {
     handsRest(): void;
     aimArm(pivot: TransformNode, world: Vector3): void;
     setArmDir(pivot: TransformNode, dx: number, dy: number, dz: number): void;
+    updateWristTrail(): void;
+    /** 肘の遅延段（肩の進みに相当する中間値）。左右で1つずつ。 */
+    elbowLagL: number;
+    elbowLagR: number;
+    /** 手首の末端遅延: 前腕の向きを遅れて追うクォータニオン（胴ローカル）。 */
+    foreLagL: Quaternion | null;
+    foreLagR: Quaternion | null;
   }
 }
+Player.prototype.elbowLagL = 0;
+Player.prototype.elbowLagR = 0;
+Player.prototype.foreLagL = null;
+Player.prototype.foreLagR = null;
+
+// ---------------------------------------------------------------------------
+// 近位→遠位の連鎖（上腕 → 前腕 → 手首）。
+// 肩は指示された速度でそのまま動き、肘は「肩の進みに相当する中間値」を追い、手首は
+// 前腕の向きを遅れて追う。速度を落とすだけでなく1段挟むので、動き出しが肩→肘→手の
+// 順になる（同じ速度で同時に動かすと腕が一枚板に見える）。
+// ⚠️ IK（reachIK / holdBallHands）は肩と肘を**同時に解いて**手先をボールへ乗せる。
+//    解いた角度に遅延を掛けると接触が外れるので、遅延は肘のFK経路(bendElbow)と
+//    手首だけに掛ける。手首の遅れも IK 中は ikDamp まで薄める。
+// ⚠️ 遅延段を1つ挟むぶん、肘が目標に着くまでの時間は伸びる。ボールを掴む系は
+//    MOVE_RATE.reach(=30) で動いているので、elbow を下げすぎるとキャッチが目に見えて
+//    遅れる。順序の見え方と到達の速さはこの3つで釣り合いを取る。
+const CHAIN = {
+  elbow: 0.75,    // 肘の追従速度（cap への倍率）
+  wrist: 0.40,    // 手首の追従速度（cap への倍率）
+  ikDamp: 0.30,   // IKで手先を乗せている間、手首の遅れをどこまで残すか
+};
+// 手首が前腕から遅れてよい最大角(rad ≈ 26°)。これ以上は手が折れて見える。
+const WRIST_MAX = 0.45;
 
   // 腕クォータニオンの共通書き込み。常にレート制限付きで目標へイーズする
   // （armRateCap > 0 ならその速度、未指定は MOVE_RATE.arm）。初期化時
@@ -35,8 +65,8 @@ Player.prototype.easeArm = function(pivot: TransformNode, target: Quaternion): v
 };
 
   // 肘の曲げ: 前方（胸に向かって、-numberSide·Z）へ、腕/脚の規約に合わせる。
-  // 前腕(肘)は上腕と同じレート（armRateCap、未指定は MOVE_RATE.arm）で曲げ目標へ
-  // イーズする。
+  // 肘は目標へ直接向かわず、まず遅延段（肩と同じ速度で目標を追う中間値）を挟み、
+  // その中間値を CHAIN.elbow の速度で追う。これで肩が動き出してから肘が動く。
 // 肘の最小の曲げ(rad)。伸ばし切りでもこれだけは残す（約6°）。
 const MIN_ELBOW = 0.10;
 
@@ -47,7 +77,53 @@ Player.prototype.bendElbow = function(node: TransformNode, amount: number): void
     //    最低 MIN_ELBOW だけは曲げておく。
     const target = clampAngle(JOINT.elbow, Math.max(amount, MIN_ELBOW) * this.numberSide);
     const cap = this.armRateCap > 0 ? this.armRateCap : MOVE_RATE.arm;
-    node.rotation.x = expEase(node.rotation.x, target, cap, this.lastDt);
+    const left = node === this.elbowL;
+    // 遅延段。IK から FK へ戻った直後は中間値が古いので、実際の曲げから引き継ぐ。
+    let lag = left ? this.elbowLagL : this.elbowLagR;
+    if (Math.abs(lag - node.rotation.x) > 1.2) lag = node.rotation.x;
+    lag = expEase(lag, target, cap, this.lastDt);
+    if (left) this.elbowLagL = lag; else this.elbowLagR = lag;
+    node.rotation.x = expEase(node.rotation.x, lag, cap * CHAIN.elbow, this.lastDt);
+};
+
+const _fore = new Quaternion();
+const _armQ = new Quaternion();
+const _elbQ = new Quaternion();
+const _lead = new Quaternion();
+const _IDENT = Quaternion.Identity();   // 毎フレーム26人ぶん回るので確保しない
+
+// ノードのローカル回転をクォータニオンで取り出す（Euler で持っている場合も拾う）。
+function localQ(n: TransformNode, out: Quaternion): Quaternion {
+  if (n.rotationQuaternion) out.copyFrom(n.rotationQuaternion);
+  else Quaternion.FromEulerAnglesToRef(n.rotation.x, n.rotation.y, n.rotation.z, out);
+  return out;
+}
+
+// 片腕ぶんの手首。前腕の胴ローカル向きを遅れて追い、その「まだ追いつけていない差」を
+// 手首のローカル回転として入れる。腕を振ると手が置いていかれ、止まると戻る。
+function wristTrail(p: Player, arm: TransformNode, elbow: TransformNode,
+                    wrist: TransformNode, left: boolean): void {
+  const fore = localQ(arm, _armQ).multiplyToRef(localQ(elbow, _elbQ), _fore);
+  let lag = left ? p.foreLagL : p.foreLagR;
+  if (!lag) { lag = fore.clone(); if (left) p.foreLagL = lag; else p.foreLagR = lag; }
+  const k = 1 - Math.exp(-MOVE_RATE.arm * CHAIN.wrist * p.lastDt);
+  Quaternion.SlerpToRef(lag, fore, k, lag);
+  // 差分 = 前腕から見た手首のローカル回転
+  _fore.conjugateInPlace();
+  _fore.multiplyToRef(lag, _lead);
+  // 遅れ過ぎは折れて見えるので角度で頭打ち。IK で手先を乗せている間は薄める
+  // （手のひらがボールから外れる）。
+  const damp = (left ? p.ikL : p.ikR) ? CHAIN.ikDamp : 1;
+  const ang = 2 * Math.acos(Math.min(1, Math.abs(_lead.w)));
+  const t = Math.min(1, ang > 1e-4 ? WRIST_MAX / ang : 1) * damp;
+  if (!wrist.rotationQuaternion) wrist.rotationQuaternion = Quaternion.Identity();
+  Quaternion.SlerpToRef(_IDENT, _lead, t, wrist.rotationQuaternion);
+}
+
+/** 手首を前腕へ追従させる（毎フレーム、肩・肘を書き終えたあとに1回）。 */
+Player.prototype.updateWristTrail = function(): void {
+    wristTrail(this, this.armPivotL, this.elbowL, this.wristL, true);
+    wristTrail(this, this.armPivotR, this.elbowR, this.wristR, false);
 };
 
 /** 両腕を脇に垂らし、肘を少し曲げる（既定ポーズ）。 */

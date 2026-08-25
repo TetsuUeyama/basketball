@@ -41,6 +41,7 @@ Player.prototype.ensureVoxel = function(): void {
     this.armPivotL.position.set(v.shoulder.x, v.shoulder.y, -this.numberSide * Math.abs(v.shoulder.z));
     this.armPivotR.position.set(-v.shoulder.x, v.shoulder.y, -this.numberSide * Math.abs(v.shoulder.z));
     this.elbowL.position.y = this.elbowR.position.y = -v.upperArm;
+    this.wristL.position.y = this.wristR.position.y = -v.foreArm;
     this.upperArmLen = v.upperArm;
     this.foreArmLen = v.foreArm;
     if (this.sideApplied) this.setNumberSide(this.numberSide);
@@ -59,6 +60,7 @@ Player.prototype.rebuildVoxel = function(): void {
 Player.prototype.syncVoxel = function(): void {
     const vb = this.vox;
     if (!vb) return;
+    this.updateWristTrail();   // 手首は肩・肘が決まったあとに追従させる
     if (applyClipPose(vb, this, this.lastDt)) { vb.skel.prepare(); return; }
     syncVoxelPose(vb, {
       numberSide: this.numberSide,
@@ -70,6 +72,7 @@ Player.prototype.syncVoxel = function(): void {
       headPitch: this.headPitch,
       armL: this.armPivotL, armR: this.armPivotR,
       elbowL: this.elbowL, elbowR: this.elbowR,
+      wristL: this.wristL, wristR: this.wristR,
       ikL: this.ikL, ikR: this.ikR,
       hipL: this.hipL, hipR: this.hipR,
       kneeL: this.kneeL, kneeR: this.kneeR,

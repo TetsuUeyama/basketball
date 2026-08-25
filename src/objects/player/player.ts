@@ -270,6 +270,9 @@ export class Player {
   readonly armPivotR: TransformNode;
   elbowL!: TransformNode;   // 上腕 ↔ 前腕の関節（静止時は曲げ、伸ばして届かせる）
   elbowR!: TransformNode;
+  // 手首。目標を書くのではなく、前腕の動きに遅れて付いてくる（末端遅延）。
+  wristL!: TransformNode;
+  wristR!: TransformNode;
   // 上半身のキャリア: 胴・頭・腕がこれに乗り、プレー方向へTWISTする
   // (twistToward)。root（脚/足）は進行方向を向く。
   torsoNode!: TransformNode;
@@ -363,6 +366,8 @@ export class Player {
     this.armPivotR = mkNode("arm_R", torsoNode, 0.12, 1.42, 0);
     this.elbowL = mkNode("elbow_L", this.armPivotL, 0, -Player.UPPER_ARM, 0);
     this.elbowR = mkNode("elbow_R", this.armPivotR, 0, -Player.UPPER_ARM, 0);
+    this.wristL = mkNode("wrist_L", this.elbowL, 0, -Player.FOREARM, 0);
+    this.wristR = mkNode("wrist_R", this.elbowR, 0, -Player.FOREARM, 0);
     this.hipL = mkNode("hip_L", this.root, -0.10, 0.97, 0);
     this.hipR = mkNode("hip_R", this.root, 0.10, 0.97, 0);
     this.kneeL = mkNode("knee_L", this.hipL, 0, -0.43, 0);

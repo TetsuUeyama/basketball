@@ -737,6 +737,7 @@ export interface VirtualPose {
   headYaw: number; headPitch: number;
   armL: TransformNode; armR: TransformNode;
   elbowL: TransformNode; elbowR: TransformNode;
+  wristL: TransformNode; wristR: TransformNode;
   ikL: boolean; ikR: boolean;
   hipL: TransformNode; hipR: TransformNode;
   kneeL: TransformNode; kneeR: TransformNode;
@@ -758,10 +759,12 @@ function put(vb: VoxelBody, bone: string, v: Quaternion): void {
 
 const _cancelL = new Quaternion(), _cancelR = new Quaternion();
 
-/** 腕（上腕2本＋前腕2本）を転写する。上腕の外向き補正は前腕で打ち消す。 */
+/** 腕（上腕・前腕・手首）を転写する。上腕の外向き補正は前腕で打ち消す。
+ *  手首は末端遅延（arms.ts の updateWristTrail）が入れた「前腕からの遅れ」。 */
 function putArms(vb: VoxelBody, back: boolean, armL: TransformNode, armR: TransformNode,
                  elbowL: TransformNode, elbowR: TransformNode, ikL = false, ikR = false,
-                 only: "L" | "R" | null = null): void {
+                 only: "L" | "R" | null = null,
+                 wristL: TransformNode | null = null, wristR: TransformNode | null = null): void {
   // ボクセル側の Left は、numberSide が +1（骨組みを180°回している）のとき仮想の R。
   // only を渡すと、その仮想側の腕だけを上書きする（反対はクリップの腕を残す）。
   const doLeftBone = !only || only === (back ? "R" : "L");
@@ -793,14 +796,28 @@ function putArms(vb: VoxelBody, back: boolean, armL: TransformNode, armR: Transf
   _cancelR.multiplyToRef(_q, _q);
   put(vb, "RightLowerArm", _q);
   }
+
+  // 手首。外向き補正は前腕で打ち消し済みなので、ここでは掛けない。
+  if (doLeftBone && wristL && wristR) {
+  localQuat(back ? wristR : wristL, _q);
+  if (back) flipQ(_q);
+  put(vb, "LeftHand", _q);
+  }
+  if (doRightBone && wristL && wristR) {
+  localQuat(back ? wristL : wristR, _q);
+  if (back) flipQ(_q);
+  put(vb, "RightHand", _q);
+  }
 }
 
 /** 腕だけを転写する（クリップで脚・体幹を動かした後に上書きする用）。 */
 export function syncVoxelArms(vb: VoxelBody, p: {
   numberSide: number; armPivotL: TransformNode; armPivotR: TransformNode;
   elbowL: TransformNode; elbowR: TransformNode; ikL: boolean; ikR: boolean;
+  wristL: TransformNode; wristR: TransformNode;
 }, only: "L" | "R" | null = null): void {
-  putArms(vb, p.numberSide > 0, p.armPivotL, p.armPivotR, p.elbowL, p.elbowR, p.ikL, p.ikR, only);
+  putArms(vb, p.numberSide > 0, p.armPivotL, p.armPivotR, p.elbowL, p.elbowR, p.ikL, p.ikR, only,
+    p.wristL, p.wristR);
 }
 
 /** 胸・頭のヨーを、いま入っている回転（クリップのツイスト等）の上に重ねる。 */
@@ -865,7 +882,7 @@ export function syncVoxelPose(vb: VoxelBody, p: VirtualPose): void {
 
   // 腕・脚。numberSide が +1 のときは骨組みを180°回しているので、左右を入れ替えて
   // 回転も Ry(π) で共役変換する。
-  putArms(vb, back, p.armL, p.armR, p.elbowL, p.elbowR, p.ikL, p.ikR);
+  putArms(vb, back, p.armL, p.armR, p.elbowL, p.elbowR, p.ikL, p.ikR, null, p.wristL, p.wristR);
   const legs: [string, TransformNode][] = [
     ["LeftUpperLeg", back ? p.hipR : p.hipL],
     ["RightUpperLeg", back ? p.hipL : p.hipR],
