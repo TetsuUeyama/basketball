@@ -5,7 +5,7 @@
 //   腕      … このプロジェクトの手続きポーズ（ボール・守備の位置に厳密に紐づくため）
 // クリップに無い状態（守備の構え・リーチ・ファウル反応・喜び・着席など）は
 // 全身とも手続きポーズのまま。
-import { Quaternion, Vector3 } from "@babylonjs/core";
+import { Matrix, Quaternion, Vector3 } from "@babylonjs/core";
 import { applyMotion, motionClip, motionDuration, type MotionClip } from "@objcts/player/motion/clip";
 import { Player } from "../objects/player/player";
 import { splayLegs, syncVoxelArms, syncVoxelHeadTorso, type VoxelBody } from "../objects/player/player-voxel";
@@ -63,6 +63,57 @@ function airWindow(c: MotionClip): [number, number] | null {
   }
   AIR.set(c.name, w);
   return w;
+}
+
+// --- クリップの脚とゲーム側の腕振りの位相合わせ ---------------------------------
+// ⚠️ クリップは焼き込みの位相を持っていて、腕の振り（runArms が stridePhase から作る）
+//    とは無関係。stridePhase をそのまま再生時刻にすると**同じ側の手と足が同時に前へ
+//    出る**。run クリップは自分の時間軸の 0.00 周期で左脚が最前になるが、手続きの脚は
+//    0.25 周期。実測の左足↔左手の相関は +0.27（同じ側が同時に前）だった。
+//    クリップ側をずらして手続きの脚に合わせる＝腕とは逆位相になる。
+// 手続きの脚(updateLegs)で左脚が最も前へ出る位相。updateLegs は sin(stridePhase) で
+// 振るので π/2 = 0.25 周期。実測でも 0.25（背中側は 0.75）。
+const PROC_LEG_PEAK = 0.25;
+// ⚠️ クリップの脚は numberSide で左右が入れ替わらない（applyMotion はボーンへ素直に
+//    書く）が、手続きの腕・脚は入れ替わる。背中側のときは半周期ずらして左右を合わせる。
+const BACK_SHIFT = 0.5;
+// 前後の振り(m)がこれ未満のクリップは位相合わせをしない。前後に歩くクリップは
+// 0.58〜1.07m 振れるが、横移動(sidestep 0.07 / dribbleSide 0.11)や押し込み
+// (dribblePower 0.11)はほぼ振れず、測った「最前」が雑音になるため対象外にする。
+const SWING_MIN = 0.15;
+
+/** そのクリップで左脚が最も前へ出る位相(0..1)。振りが小さいクリップは null。
+ *  リグへ実際に当てて測る（クリップ名ごとに一度だけ）。
+ *  ⚠️ 測るのは股関節→**足**。腿(股関節→膝)で測ると、走行中は膝が深く曲がるぶん
+ *     脚全体より約0.3周期早く最前を迎えるので、PROC_LEG_PEAK と揃わない。 */
+const LEG_PHASE = new Map<string, number | null>();
+const _inv = new Matrix();
+function legPhase(vb: VoxelBody, c: MotionClip): number | null {
+  let v = LEG_PHASE.get(c.name);
+  if (v !== undefined) return v;
+  v = null;
+  const hip = vb.rig.node("LeftUpperLeg"), knee = vb.rig.node("LeftFoot");
+  if (hip && knee) {
+    const dur = motionDuration(c);
+    const N = 24;
+    let best = -Infinity, worst = Infinity, bestF = 0;
+    for (let i = 0; i < N; i++) {
+      applyMotion(vb.rig, c, (i / N) * dur, { rootMotion: "vertical", leanDeg: 15 });
+      vb.root.computeWorldMatrix(true);
+      hip.computeWorldMatrix(true);
+      knee.computeWorldMatrix(true);
+      vb.root.getWorldMatrix().invertToRef(_inv);
+      const a = Vector3.TransformCoordinates(Vector3.ZeroReadOnly, hip.getWorldMatrix());
+      const b = Vector3.TransformCoordinates(Vector3.ZeroReadOnly, knee.getWorldMatrix());
+      // 素体ローカルでは前が +Z（vb.root が numberSide のヨーを吸収している）
+      const z = Vector3.TransformNormal(b.subtract(a), _inv).z;
+      if (z > best) { best = z; bestF = i / N; }
+      if (z < worst) worst = z;
+    }
+    if (best - worst > SWING_MIN) v = bestF;
+  }
+  LEG_PHASE.set(c.name, v);
+  return v;
 }
 
 /** ジャンプ: 跳ぶ向き（胸の向き基準）から その場 / 前 / 後 / 左 / 右 を選ぶ。 */
@@ -167,7 +218,15 @@ export function applyClipPose(vb: VoxelBody, p: Player, dt: number): boolean {
   } else if (c.loop) {
     const frac = p.runSpeed > 0 ? Math.min(1, p.curSpd / p.runSpeed) : 0;
     if (frac < MOVE_MIN) p.clipT = (p.clipT + dt) % dur;          // その場のクリップは実時間
-    else p.clipT = (((p.stridePhase / (2 * Math.PI)) % 1) + 1) % 1 * dur;
+    else {
+      // 焼き込みの脚の位相を手続きの脚へ合わせる（＝腕の振りと逆位相にする）。
+      // 再生時刻を shift 進めると、脚が最前になる stridePhase は shift ぶん戻るので
+      // 「クリップ側の位相 − 合わせたい位相」を足す。
+      const lp = legPhase(vb, c);
+      const shift = lp === null ? 0
+        : lp - PROC_LEG_PEAK - (p.numberSide > 0 ? BACK_SHIFT : 0);
+      p.clipT = (((p.stridePhase / (2 * Math.PI) + shift) % 1) + 1) % 1 * dur;
+    }
   } else {
     p.clipT = Math.min(dur, p.clipT + dt);
   }
