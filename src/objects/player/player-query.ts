@@ -30,7 +30,9 @@ Player.prototype.strongSideBias = function(): number { return 0.5 + (1 - this.of
  *  ボールを保持する位置。aimArm/dribbleWithRightと同じヨー+ツイストのフレームなので、
  *  彼が向きを変えると胴に追随する。 */
 Player.prototype.chestFront = function(dist: number): { x: number; z: number } {
-  const th = this.root.rotation.y + this.torsoTwist;
+  // clipChestYaw = 再生中のクリップが焼き込みで回している体の向き（押し込みドリブルの半身）。
+  // これを足さないと、ボールを胸の前に置いたつもりが実際の胸から外れる。
+  const th = this.root.rotation.y + this.torsoTwist + this.clipChestYaw;
   const s = this.numberSide;
   return { x: this.pos.x - s * Math.sin(th) * dist, z: this.pos.z - s * Math.cos(th) * dist };
 };

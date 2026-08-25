@@ -18,11 +18,15 @@ declare module "../objects/player/player" {
     clipT: number;
     /** 直前に再生したクリップ名（切り替わりで位相をリセットする）。 */
     clipName: string;
+    /** 再生中のクリップが焼き込みで体を回している量(rad)。押し込みドリブルの半身など。
+     *  chestFront はこれを足す（足さないとボールを胸の前に置いたつもりが背中側へ出る）。 */
+    clipChestYaw: number;
   }
 }
 Player.prototype.holdingBall = false;
 Player.prototype.clipT = 0;
 Player.prototype.clipName = "";
+Player.prototype.clipChestYaw = 0;
 
 // 走り出す速さの割合。これ未満は idle。
 const MOVE_MIN = 0.06;
@@ -116,6 +120,54 @@ function legPhase(vb: VoxelBody, c: MotionClip): number | null {
   return v;
 }
 
+// --- クリップが焼き込んでいる体の向き -------------------------------------------
+// ⚠️ dribblePower は「半身（ボールと逆の肩が前）」を**クリップの Hips に焼き込んで**いて、
+//    updateFacing はそれを二重に回さないよう胸をひねらない。一方 chestFront は
+//    root ヨー＋torsoTwist しか見ないので、ボールを「胸の前」に置いたつもりが実際の
+//    胸から 70° ずれる。守備者が近いと横 0.30m のオフセットが乗るため、見た目の胸より
+//    約 0.24m 後ろ＝背中側にボールが出ていた。ここで測って chestFront に足す。
+const BODY_YAW = new Map<string, number>();
+let neutralYaw: number | null = null;
+const _iv = new Matrix();
+
+/** そのポーズでの肩線の法線（＝胸の向き, rad）を素体ローカルで測る。 */
+function chestYawNow(vb: VoxelBody): number {
+  const l = vb.rig.node("LeftUpperArm"), r = vb.rig.node("RightUpperArm");
+  if (!l || !r) return 0;
+  vb.root.computeWorldMatrix(true);
+  l.computeWorldMatrix(true);
+  r.computeWorldMatrix(true);
+  vb.root.getWorldMatrix().invertToRef(_iv);
+  const a = Vector3.TransformCoordinates(Vector3.ZeroReadOnly, l.getWorldMatrix());
+  const b = Vector3.TransformCoordinates(Vector3.ZeroReadOnly, r.getWorldMatrix());
+  const s = Vector3.TransformNormal(a.subtract(b), _iv);   // 右肩→左肩
+  return Math.atan2(-s.z, s.x);
+}
+
+/** クリップが焼き込んでいる体のヨー(rad)。中立(idle)との差。クリップ名ごとに一度だけ測る。 */
+function clipBodyYaw(vb: VoxelBody, c: MotionClip): number {
+  let v = BODY_YAW.get(c.name);
+  if (v !== undefined) return v;
+  const dur = motionDuration(c);
+  if (neutralYaw === null) {
+    const idle = clip("idle");
+    if (!idle) return 0;
+    applyMotion(vb.rig, idle, motionDuration(idle) * 0.5, { rootMotion: "vertical", leanDeg: 0 });
+    neutralYaw = chestYawNow(vb);
+  }
+  // 周期の平均（ベクトルで足して巻き戻りを避ける）
+  let vx = 0, vz = 0;
+  for (let i = 0; i < 8; i++) {
+    applyMotion(vb.rig, c, (i / 8) * dur, { rootMotion: "vertical", leanDeg: 0 });
+    const y = chestYawNow(vb) - neutralYaw;
+    vx += Math.sin(y); vz += Math.cos(y);
+  }
+  v = Math.atan2(vx, vz);
+  if (Math.abs(v) < 0.15) v = 0;   // 測定誤差はゼロに丸める
+  BODY_YAW.set(c.name, v);
+  return v;
+}
+
 /** ジャンプ: 跳ぶ向き（胸の向き基準）から その場 / 前 / 後 / 左 / 右 を選ぶ。 */
 function pickJump(p: Player): string {
   const dx = p.leapX, dz = p.leapZ;
@@ -174,10 +226,12 @@ const _aim = new Vector3();
  */
 export function applyClipPose(vb: VoxelBody, p: Player, dt: number): boolean {
   const name = pickClip(p);
-  if (!name) { p.clipName = ""; return false; }
+  if (!name) { p.clipName = ""; p.clipChestYaw = 0; return false; }
   const c = clip(name);
-  if (!c) { p.clipName = ""; return false; }
+  if (!c) { p.clipName = ""; p.clipChestYaw = 0; return false; }
   if (p.clipName !== name) { p.clipName = name; p.clipT = 0; }
+  // 焼き込みで体が回っているぶんを chestFront（ボールのキャリー位置など）へ伝える
+  p.clipChestYaw = clipBodyYaw(vb, c);
 
   // 歩調は stridePhase に**同期させる**（別々に進めると腕の振りと脚がずれる）。
   // 1周期 = 2π。速さは locomotion.ts の CADENCE ひとつで決まる。
