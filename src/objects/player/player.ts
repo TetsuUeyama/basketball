@@ -166,6 +166,9 @@ export class Player {
   // 全アクション共通のライフサイクル。beginAction で発生開始→自動遷移。windup 完了フレームで
   // actFired=true（呼び出し側が効果を実行）。active 後 cooldown で再発動を抑制。tickAction が進める。
   actKind = "";
+  // スティールに手を出している間(秒)。> 0 の間はボールへ片手を伸ばすポーズになる。
+  // 突きの溜めから当てた直後まで続くので、何が起きたか見えるようにする。
+  stealReachT = 0;
   actPhase: "" | "windup" | "active" | "cooldown" = "";
   actT = 0;            // 現段階の残り秒
   actActiveDur = 0;    // active フェーズ長（保持）

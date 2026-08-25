@@ -980,16 +980,39 @@ export class Game {
 
   // ---- ターンオーバー ----------------------------------------------------
 
-  // スティール試行はボールを弾いてルーズにする。巧みな盗り手は自分の方へ弾き大抵確保する。
-  // スティール/ターンオーバーは守備が確保した時に加算(secureLoose)。
+  // スティール試行。手を出した守備者は**つかみ取る**か**はたき出す**かのどちらかで、
+  // どちらになるかは手の技術で決まる。スティール/ターンオーバーは守備が確保した時に
+  // 加算(secureLoose)。
   steal(d: Player): void {
     const h = this.handler;
     if (!h) return;
-    // どれだけきれいに守備者の方へ弾かれるか(0=散らばる、~0.7=ぴったり相手へ)。
-    const grip = clamp(0.2 + rate(d.attr.reaction) * 0.55 - rate(h.attr.handling) * 0.3, 0.05, 0.7);
     const ax = d.pos.x - h.pos.x, az = d.pos.z - h.pos.z;
     const len = Math.hypot(ax, az) || 1;
     const ux = ax / len, uz = az / len;            // ハンドラー→守備者
+    // 手を出した瞬間から当てた直後まで、ボールへ腕を伸ばすポーズを続ける（poses.ts）。
+    // どの経路(突き/密集のはたき/押し込み)から来ても、何をしたかが見えるようにする。
+    d.stealReachT = Math.max(d.stealReachT, 0.35);
+    d.defWin("steal");                             // 争奪が片付いたら祝いのガッツポーズ
+    // つかみ取れるか: 手の速さ・守備の巧さ・ボール扱いの技術。相手のハンドリングが硬いと
+    // 弾くだけになる。掴めれば散らさずそのまま確保、掴めなければ従来どおりはたき出す。
+    const clean = clamp(rate(d.attr.reaction) * 0.3 + rate(d.attr.defense) * 0.28
+      + rate(d.attr.handling) * 0.32 - rate(h.attr.handling) * 0.3 - 0.15, 0.04, 0.7);
+    if (chance(clean)) {
+      // つかみ取り: 手元へ**もぎ取る**。ほぼ止まった球を短い一拍で確保する。
+      // ⚠️ 少し上へ持ち上げる。twoHandedCatch は y < 0.9 を掴めない判定なので、
+      //    重力で落ちると確保に失敗してこぼれる（実測: 確保率 60%）。
+      this.ball.pos.set(d.pos.x - ux * 0.28, 1.05, d.pos.z - uz * 0.28);
+      this.ball.vel.set(rand(-0.4, 0.4), rand(0.6, 1.0), rand(-0.4, 0.4));
+      flashBall(this, "intercept", d.team);
+      this.goLoose(h.team, 1.6, { stealBy: d, victim: h, grabAfter: 0.18 });
+      // ⚠️ goLoose は全員の touchCool を 0 にするので、奪われた側の硬直はその後に入れる。
+      h.touchCool = 0.5;   // バランスを崩された — 即座には掴み返せない
+      d.looseReactT = 0;   // 自分で手を出した本人 — こぼれ球への反応遅れは要らない
+      d.reachBall(new Vector3(this.ball.pos.x, this.ball.pos.y, this.ball.pos.z), true);   // 両手で掴む
+      return;
+    }
+    // はたき出し: どれだけきれいに守備者の方へ弾かれるか(0=散らばる、~0.7=ぴったり相手へ)。
+    const grip = clamp(0.2 + rate(d.attr.reaction) * 0.55 - rate(h.attr.handling) * 0.3, 0.05, 0.7);
     // 下方向かつ外へ弾かれる — 低く始まり床で跳ねる
     const power = rand(2.2, 5.5);   // 軽い引っかけ 〜 強いはたき出し
     this.ball.pos.set(h.pos.x + ux * 0.35, 0.75, h.pos.z + uz * 0.35);
@@ -1001,9 +1024,8 @@ export class Game {
     flashBall(this, "intercept", d.team);          // はたいた側の色
     // 自由な一拍で、確保前にはたき出しの争奪が見えるようにする
     this.goLoose(h.team, 1.6, { stealBy: d, victim: h, grabAfter: 0.55 });
+    h.touchCool = 0.5;   // ⚠️ goLoose の後（goLoose が全員の touchCool を 0 にする）
     d.digReach(new Vector3(this.ball.pos.x, 0.9, this.ball.pos.z));   // ランジ
-    d.defWin("steal");                             // 争奪が片付いたら祝いのガッツポーズ
-    h.touchCool = 0.5;                             // バランスを崩された — 即座には掴めない（のけぞりは goLoose で付与）
   }
 
   // ---- クォーター / 試合終了 ----------------------------------------------

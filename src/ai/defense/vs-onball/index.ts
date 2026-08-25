@@ -145,6 +145,7 @@ export function defendHandler(
         man.beatenT = Math.max(man.beatenT, 0.2 + rate(man.attr.agility) * 0.15);
       } else {
         d.beginAction("steal", 0.12, 0.03, 0.6);   // 踏み込み(0.12s)→突き→回復(0.6s)
+        d.stealReachT = 0.30;                      // 溜めの間から手をボールへ出す（見える突き）
       }
     }
     if (chance(reachInFoulRate(press, close) * dt)) { defensiveFoul(game, man, d); return true; }

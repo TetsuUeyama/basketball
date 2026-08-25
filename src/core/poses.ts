@@ -49,6 +49,15 @@ export function poseHands(game: Game, ): void {
     // 審判へボールを投げ渡す選手: 両腕を審判の手の方へ振る（投げ渡しの演出）
     const thr = game.referees.thrower;
     if (thr && thr !== game.handler) { thr.reach(game.referees.throwAt, true); posed.add(thr); }
+    // スティールに手を出している守備者: ボールへ片手を伸ばし、上体をひねって突く。
+    // 溜め(beginAction)から当てた直後まで続くので「手を出して奪った」ことが見える。
+    // ⚠️ 守備の構え(poseOnBallHands)の**後**に、posed を無視して上書きする。手を出して
+    //    いるのは大抵オンボール守備者本人で、先に posed へ入っているため。
+    for (const p of game.players) {
+      if (p.stealReachT <= 0 || p.airborne) continue;
+      p.digReach(new Vector3(b.x, Math.max(0.35, b.y), b.z));
+      posed.add(p);
+    }
     for (const p of game.players) if (!posed.has(p)) p.runArms();   // 腕振り／休め
     switch (game.ballMode) {
       case "held": {

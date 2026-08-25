@@ -93,6 +93,7 @@ Player.prototype.tickCooldown = function(dt: number): void {
   if (this.openRollT > 0) this.openRollT = Math.max(0, this.openRollT - dt);
   if (this.setupT > 0) this.setupT = Math.max(0, this.setupT - dt);
   if (this.defWinT > 0) this.defWinT = Math.max(0, this.defWinT - dt);
+  if (this.stealReachT > 0) this.stealReachT = Math.max(0, this.stealReachT - dt);
   if (this.foulReactT > 0) {
     this.foulReactT = Math.max(0, this.foulReactT - dt);
     // よろけ: 押された方向へのバランスを崩したよろめきステップ。リアクションの

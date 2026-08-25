@@ -48,6 +48,7 @@ Player.prototype.resetPose = function(): void {
   this.frontRunT = 0;                              // スローイン後の前進
   // アクション3段階
   this.actKind = ""; this.actPhase = ""; this.actT = 0; this.actFired = false;
+  this.stealReachT = 0;
   // 腕を即座に休めへ（イーズを介さず直接セット）
   this.armPivotL.rotationQuaternion = Quaternion.Identity();
   this.armPivotR.rotationQuaternion = Quaternion.Identity();
