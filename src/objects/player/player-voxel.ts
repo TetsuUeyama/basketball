@@ -189,6 +189,10 @@ export interface VoxelBody {
   /** IK 用の実効長。前腕は手のひらの中心まで（手首ボーンより先に手が出るため）。 */
   readonly upperArm: number;
   readonly foreArm: number;
+  /** 手ボーンの静止ローカル位置（手首を軸に回すとき position を戻す基準）。 */
+  readonly handRest: Map<string, Vector3>;
+  /** 手ボーン原点から見た手首（手メッシュの内側の端）。ここを固定して手を回す。 */
+  readonly wristPivot: Map<string, Vector3>;
   setSkinColor(c: RGB): void;
   setHairColor(c: RGB): void;
   setHairStyle(hairNo: number): void;
@@ -618,6 +622,34 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
   const hipsNode = rig.node("Hips");
   const hipsRest = hipsNode ? hipsNode.position.clone() : Vector3.Zero();
 
+  // --- 手首の回転軸（手ボーン原点ではなく、手メッシュの内側の端） ---
+  // ⚠️ 手ボーンは前腕の中ほどに立ち、手のボクセルは原点から 0.14〜0.33m 外に出ている
+  //    （objcts 側の既知のズレ）。原点で回すと手のひらが 0.2m 飛んで腕から分離する。
+  //    手メッシュの内側の端＝手首の位置を求め、そこを固定して回す。
+  const handRest = new Map<string, Vector3>();
+  const wristPivot = new Map<string, Vector3>();
+  for (const [b, part] of [["LeftHand", "handL"], ["RightHand", "handR"]] as const) {
+    const n = rig.node(b as StandardBoneName);
+    if (n) handRest.set(b, n.position.clone());
+    const pd = bodyData(variant).parts[part];
+    if (!pd?.voxels.length) { wristPivot.set(b, Vector3.Zero()); continue; }
+    const q = rr(part);   // メッシュが自分で持つ焼き込み回転＝ノードローカルへの変換
+    const pts = pd.voxels.map((v) =>
+      new Vector3((v[0] + 0.5) * VOX_SIZE, (v[1] + 0.5) * VOX_SIZE, (v[2] + 0.5) * VOX_SIZE)
+        .applyRotationQuaternion(q));
+    const mid = pts.reduce((a, p) => a.add(p), Vector3.Zero()).scale(1 / pts.length);
+    const u = mid.length() > 1e-6 ? mid.normalize() : new Vector3(0, -1, 0);   // 原点→手の向き
+    let near = Infinity;
+    for (const p of pts) near = Math.min(near, Vector3.Dot(p, u));
+    // 内側の端 2cm のスラブの重心＝手首の中心
+    let sx = 0, sy = 0, sz = 0, cnt = 0;
+    for (const p of pts) {
+      if (Vector3.Dot(p, u) > near + 0.02) continue;
+      sx += p.x; sy += p.y; sz += p.z; cnt++;
+    }
+    wristPivot.set(b, cnt ? new Vector3(sx / cnt, sy / cnt, sz / cnt) : mid);
+  }
+
   // 素体＋ユニフォーム＋髪をひとつの配列で持ち、作り直したら中身を入れ替える
   const meshes: Mesh[] = [];
   const shadowMeshes: Mesh[] = [];
@@ -631,7 +663,7 @@ export function buildVoxelBody(scene: Scene, parent: TransformNode, o: VoxelBody
   };
 
   const body: VoxelBody = {
-    root, rig, skel, map, spineRest, hipsRest, meshes, shadowMeshes,
+    root, rig, skel, map, spineRest, hipsRest, handRest, wristPivot, meshes, shadowMeshes,
     variant, height,
     shoulder: { x: sh.x, y: sh.y, z: sh.z },
     hipY: hip.y,
@@ -758,6 +790,43 @@ function put(vb: VoxelBody, bone: string, v: Quaternion): void {
 }
 
 const _cancelL = new Quaternion(), _cancelR = new Quaternion();
+const _hq = new Quaternion(), _hp = new Quaternion(), _hv = new Vector3();
+
+/**
+ * 手ボーンへ「前腕からの遅れ」を入れる。
+ *
+ * ⚠️ **`put()` を通してはいけない。** 手は仮想側に対応するノードが無い前提で組んで
+ *    あり、pre⊗post をそのまま入れると焼き込み向きが二重に効く（実測 62.7° ずれ、
+ *    手のひらが腕から離れて見えた）。静止は Identity のままが正しい。
+ * ⚠️ **回すのは手ボーン原点ではなく手首。** 手ボーンは前腕の中ほどに立っていて手の
+ *    ボクセルは 0.14〜0.33m 先にあるので、原点で回すと手のひらが飛ぶ。手首を固定
+ *    したまま回るよう position を戻す。
+ *
+ * d は仮想フレーム（骨が -Y）の遅れ。前腕の post で共役して手ノードのローカルへ移す。
+ */
+function putHand(vb: VoxelBody, bone: string, foreBone: string, d: Quaternion): void {
+  const n = vb.rig.node(bone as StandardBoneName);
+  const m = vb.map.get(foreBone);
+  const rest = vb.handRest.get(bone);
+  const piv = vb.wristPivot.get(bone);
+  if (!n || !m || !rest || !piv) return;
+  _hp.copyFrom(m.post);
+  _hp.conjugateInPlace();
+  _hp.multiplyToRef(d, _hq);
+  _hq.multiplyToRef(m.post, _hq);
+  if (n.rotationQuaternion) n.rotationQuaternion.copyFrom(_hq);
+  else n.rotationQuaternion = _hq.clone();
+  piv.rotateByQuaternionToRef(_hq, _hv);
+  n.position.set(rest.x + piv.x - _hv.x, rest.y + piv.y - _hv.y, rest.z + piv.z - _hv.z);
+  n.markAsDirty("rotationQuaternion");
+}
+
+/** クリップの腕を残す側の手を、静止（回転なし・元の位置）へ戻す。 */
+function resetHand(vb: VoxelBody, bone: string): void {
+  const n = vb.rig.node(bone as StandardBoneName);
+  const rest = vb.handRest.get(bone);
+  if (n && rest) n.position.copyFrom(rest);
+}
 
 /** 腕（上腕・前腕・手首）を転写する。上腕の外向き補正は前腕で打ち消す。
  *  手首は末端遅延（arms.ts の updateWristTrail）が入れた「前腕からの遅れ」。 */
@@ -798,15 +867,17 @@ function putArms(vb: VoxelBody, back: boolean, armL: TransformNode, armR: Transf
   }
 
   // 手首。外向き補正は前腕で打ち消し済みなので、ここでは掛けない。
-  if (doLeftBone && wristL && wristR) {
-  localQuat(back ? wristR : wristL, _q);
-  if (back) flipQ(_q);
-  put(vb, "LeftHand", _q);
-  }
-  if (doRightBone && wristL && wristR) {
-  localQuat(back ? wristL : wristR, _q);
-  if (back) flipQ(_q);
-  put(vb, "RightHand", _q);
+  if (wristL && wristR) {
+    if (doLeftBone) {
+      localQuat(back ? wristR : wristL, _q);
+      if (back) flipQ(_q);
+      putHand(vb, "LeftHand", "LeftLowerArm", _q);
+    } else resetHand(vb, "LeftHand");
+    if (doRightBone) {
+      localQuat(back ? wristL : wristR, _q);
+      if (back) flipQ(_q);
+      putHand(vb, "RightHand", "RightLowerArm", _q);
+    } else resetHand(vb, "RightHand");
   }
 }
 
